@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-19, version **8.5.1** (live at https://parsun.com/borg/).
+Last updated: 2026-10-19, version **8.6.0** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -42,6 +42,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.4.1 | Veil fix for Safari: self-expiring CSS animation (1.5 s) + removal from the live document; production 8.1.2–8.3.0 likely showed blank chapters on Safari |
 | 8.5.0 | Library search (title/author/publisher/shelf, Persian normalisation); faster open (direction cache, locations pause 8 ms: seek bar 8.9 s → 1.7 s on a 2 MB book) with an opening indicator; sync status chip; WebKit diagnostics (`diag()` with borg-debug stats) | — not deployed (WebKit tap checks failed)
 | 8.5.1 | Safari: veil no longer waits for the <link> load event that WebKit never fires (polls `link.sheet`, ≤600 ms); WebKit tap checks report without gating (synthetic touches never reached the iframe in Playwright WebKit; real-device check pending) |
+| 8.6.0 | Mobile polish. Library: hero only when the library is empty, compact toolbar, one-row scrolling chips, stats card below the grid on phones, cleaner cards, SVG theme icon, offline-only connectivity pill, bottom-sheet dialogs. Reader: icon back button, title + chapter line in the toolbar, page-nav row hidden on phones, compact bottom bar with icon bookmark, centred block images, settings/search sheets with title/close/green focus, safe areas, reader themes colour the chrome |
 
 ## Open items (not started unless the owner says so)
 0. Text cleanup shipped in 8.3.0. Limits: a phrase split across formatting tags is not matched; the

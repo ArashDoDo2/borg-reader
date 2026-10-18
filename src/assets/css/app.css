@@ -633,6 +633,7 @@ body.dark .import-button,body.dark .import-button:hover{color:#132019}
  #viewMine>.section-heading{flex-direction:column;align-items:stretch;gap:12px}
  #viewMine .library-controls{flex-wrap:wrap}
  #viewMine .lib-search{flex:1 1 240px;min-width:0}
+}
 /* v8.6 mobile: reader */
 /* All widths: toolbar heading (title + chapter line), icon back button, bookmark star, sheet head, focus, safe areas. */
 .reader-heading{flex:0 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;line-height:1.4}
