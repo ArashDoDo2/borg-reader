@@ -1492,6 +1492,124 @@ async def run(url):
                 return c.width>0&&c.left>=s.left&&c.right<=s.right&&document.documentElement.scrollWidth<=innerWidth}"""), str(t))
         check("v8.5 search: no JS errors, no external requests", len(errs21) == 0 and len(ext21) == 0, str(errs21[:3] + ext21[:3]))
         await ctx21.close(); _sh21.rmtree(tmp21, ignore_errors=True)
+
+        # 20. v8.5 speed + sync status: opening indicator, cached direction and locations, sync chip
+        import tempfile, time, zipfile
+        def make_big_epub(path, chapters=40, paras=30):
+            """A larger book without page-progression-direction and with a wrong lang tag (forces text detection)."""
+            with zipfile.ZipFile(path, "w") as z:
+                z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+                D = zipfile.ZIP_DEFLATED
+                z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>', D)
+                man = "".join(f'<item id="c{i}" href="c{i}.xhtml" media-type="application/xhtml+xml"/>' for i in range(chapters))
+                z.writestr("OEBPS/content.opf", f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">big-20</dc:identifier><dc:title>کتاب بزرگ ۲۰</dc:title><dc:creator>آزمون</dc:creator><dc:language>en</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>{man}</manifest><spine>{"".join(f"<itemref idref=\"c{i}\"/>" for i in range(chapters))}</spine></package>', D)
+                z.writestr("OEBPS/nav.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>فهرست</title></head><body><nav epub:type="toc"><ol>' + "".join(f'<li><a href="c{i}.xhtml">فصل {i+1}</a></li>' for i in range(chapters)) + '</ol></nav></body></html>', D)
+                for i in range(chapters):
+                    p = "".join(f"<p>این پاراگراف شماره {k} از فصل {i+1} است و متن آن برای آزمودن سرعت باز شدن کتاب‌های بزرگ کمی بلند نوشته شده است تا صفحه‌ها پر شوند.</p>" for k in range(paras))
+                    z.writestr(f"OEBPS/c{i}.xhtml", f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>فصل {i+1}</title></head><body><h1>فصل {i+1}</h1>{p}</body></html>', D)
+            return str(path)
+        big20 = make_big_epub(Path(tempfile.mkdtemp(prefix="borg-e2e-big-")) / "big-20.epub")
+        # The admin exists after section 10; create it when this section runs on its own (no-op otherwise).
+        ctxS, S = await new_ctx(b, url, [], [])
+        await S.request.post(url + "api/?r=setup", data={"setup_key": SETUP_KEY, "name": "مدیر بُرگ", "email": "admin@example.com", "password": "password1"})
+        await ctxS.close()
+        extQ, errsQ = [], []
+        ctxQ, Q = await new_ctx(b, url, extQ, errsQ)
+        await ctxQ.add_init_script("try{localStorage.setItem('borg-debug','{\"stats\":1}')}catch(e){}")
+        await Q.goto(url); await Q.wait_for_timeout(800)
+        await Q.set_input_files("#epubInput", big20)
+        await poll(lambda: _count_gt(Q, "#bookGrid .book-card", 0), 20000); await Q.wait_for_timeout(800)
+        WATCH_OPEN_JS = """() => { window.__open = []; const el = document.getElementById('openingIndicator');
+          const rec = () => { const r = el.getBoundingClientRect(), f = document.querySelector('#viewer iframe');
+            window.__open.push({ hidden: el.hidden, vis: !el.hidden && r.width > 0 && r.height > 0, text: el.textContent,
+              role: el.getAttribute('role'), frame: !!f }); };
+          new MutationObserver(rec).observe(el, { attributes: true, attributeFilter: ['hidden'] }); }"""
+        TEXT_SHOWN_JS = "() => { const f = document.querySelector('#viewer iframe'); return !!f && !!f.contentDocument.body && !f.contentDocument.getElementById('borg-veil'); }"
+        async def open_big():
+            await Q.evaluate(WATCH_OPEN_JS)
+            t0 = time.perf_counter()
+            await Q.click("#bookGrid .book-card")
+            async def shown(): return bool(await visible_text(Q)) and await Q.evaluate(TEXT_SHOWN_JS)
+            await poll(shown, 15000, 50)
+            dt = time.perf_counter() - t0
+            await poll(lambda: Q.is_hidden("#openingIndicator"), 4000, 50)
+            await poll(lambda: Q.is_enabled("#bookSeek"), 20000)
+            return dt
+        t1 = await open_big()
+        rec = await Q.evaluate("() => window.__open")
+        check("v8.5 open: «در حال باز کردن کتاب…» shown (visible, role=status) while the book opens",
+              any(r["vis"] and "در حال باز کردن کتاب" in r["text"] and r["role"] == "status" for r in rec), str(rec)[:300])
+        check("v8.5 open: indicator hidden once the first page's text is visible",
+              await Q.is_hidden("#openingIndicator") and bool(await visible_text(Q)) and rec and rec[-1]["hidden"] and rec[-1]["frame"], str(rec)[:300])
+        stats = await Q.evaluate("() => ({ d: document.documentElement.dataset.borgDetect, l: document.documentElement.dataset.borgLocGen })")
+        rec20 = next((x for x in await Q.evaluate(IDB_JS, ["books"]) if x["title"] == "کتاب بزرگ ۲۰"), {})
+        dc = rec20.get("dirCache") or {}
+        check("v8.5 open: detected direction cached on the book record (per file + detector version)",
+              dc.get("dir") == "rtl" and dc.get("v") == 1 and dc.get("key") == rec20.get("contentHash") and stats == {"d": "1", "l": "1"}, f"{dc} {stats}")
+        await Q.click("#closeReader"); await Q.wait_for_timeout(600)
+        t2 = await open_big()
+        stats2 = await Q.evaluate("() => ({ d: document.documentElement.dataset.borgDetect, l: document.documentElement.dataset.borgLocGen })")
+        check("v8.5 open: second open skips direction detection and locations generation, and is not slower",
+              stats2 == {"d": "1", "l": "1"} and t2 <= max(t1 * 1.3, t1 + 0.3) and await Q.is_enabled("#bookSeek")
+              and await Q.evaluate("() => getComputedStyle(document.querySelector('#viewer iframe').contentDocument.body).direction") == "rtl",
+              f"first {t1:.2f}s, second {t2:.2f}s, {stats2}")
+        await Q.click("#closeReader"); await Q.wait_for_timeout(500)
+        # Sync chip: hidden while logged out
+        check("v8.5 sync chip: hidden when not logged in", await Q.is_hidden("#syncStatus") and await Q.is_hidden("#readerSync"))
+        WATCH_CHIP_JS = """() => { window.__chip = []; const el = document.getElementById('syncStatus');
+          const rec = () => { const s = el.dataset.state; if (window.__chip[window.__chip.length - 1] !== s) window.__chip.push(s); };
+          new MutationObserver(rec).observe(el, { attributes: true, childList: true, characterData: true, subtree: true }); }"""
+        await Q.evaluate(WATCH_CHIP_JS)
+        await auth(Q, "login", email="admin@example.com", password="password1")
+        async def chip_is(state, text):
+            return await Q.get_attribute("#syncStatus", "data-state") == state and text in await Q.inner_text("#syncStatus") and await Q.is_visible("#syncStatus")
+        try: await poll(lambda: chip_is("synced", "همگام شد"), 30000); ok20 = True
+        except Exception: ok20 = False
+        seq = await Q.evaluate("() => window.__chip")
+        box = await Q.locator("#syncStatus").bounding_box()
+        live = await Q.evaluate("() => { const w = document.getElementById('syncStatus').closest('[role=status]'); return w && w.getAttribute('aria-live'); }")
+        check("v8.5 sync chip: logged in shows «در حال همگام‌سازی…» then «همگام شد» with a relative time",
+              ok20 and "syncing" in seq and seq.index("syncing") < len(seq) - 1 and seq[-1] == "synced"
+              and "همین حالا" in await Q.inner_text("#syncStatus") and box and box["height"] > 10 and live == "polite",
+              f"{seq} {await Q.inner_text('#syncStatus')} {live}")
+        # Offline with a pending change (reading position) → «در انتظار اتصال», in the library and in the reader
+        await ctxQ.set_offline(True); await Q.wait_for_timeout(300)
+        await Q.click("#bookGrid .book-card")
+        await poll(lambda: Q.is_enabled("#bookSeek"), 20000)
+        await Q.click("#nextPage"); await Q.wait_for_timeout(700)
+        try: await poll(lambda: Q.evaluate("() => document.getElementById('readerSync').dataset.state === 'offline'"), 5000); r_off = True
+        except Exception: r_off = False
+        await Q.set_viewport_size({"width": 390, "height": 844}); await Q.wait_for_timeout(500)
+        tb = await Q.locator(".reader-toolbar").bounding_box(); rb = await Q.locator("#readerSync").bounding_box()
+        check("v8.5 sync chip: reader toolbar shows it offline, still one row at 390px",
+              r_off and rb and tb["height"] <= 72 and rb["x"] >= 0 and rb["x"] + rb["width"] <= 391 and rb["y"] >= tb["y"] - 1 and rb["y"] + rb["height"] <= tb["y"] + tb["height"] + 1
+              and "در انتظار اتصال" in (await Q.get_attribute("#readerSync", "aria-label") or ""), f"{tb} {rb}")
+        await Q.set_viewport_size({"width": 1280, "height": 800}); await Q.wait_for_timeout(300)
+        await Q.click("#closeReader"); await Q.wait_for_timeout(500)
+        try: await poll(lambda: chip_is("offline", "در انتظار اتصال"), 5000); off_ok = True
+        except Exception: off_ok = False
+        check("v8.5 sync chip: offline with a pending change shows «در انتظار اتصال»", off_ok, await Q.inner_text("#syncStatus"))
+        await Q.evaluate(WATCH_CHIP_JS)
+        await ctxQ.set_offline(False)
+        try: await poll(lambda: chip_is("synced", "همگام شد"), 20000); on_ok = True
+        except Exception: on_ok = False
+        check("v8.5 sync chip: back online it syncs and returns to «همگام شد»", on_ok and "syncing" in await Q.evaluate("() => window.__chip"),
+              f"{await Q.inner_text('#syncStatus')} {await Q.evaluate('() => window.__chip')}")
+        # A failed sync shows «خطای همگام‌سازی»; tapping the chip retries
+        async def fail_library(route):
+            await route.fulfill(status=500, content_type="application/json", body='{"error":"server","message":"x"}')
+        await Q.route("**/api/?r=library", fail_library)
+        await Q.click("#syncStatus")
+        try: await poll(lambda: chip_is("error", "خطای همگام‌سازی"), 10000); err_ok = True
+        except Exception: err_ok = False
+        await Q.unroute("**/api/?r=library", fail_library)
+        await Q.click("#syncStatus")
+        try: await poll(lambda: chip_is("synced", "همگام شد"), 15000); retry_ok = True
+        except Exception: retry_ok = False
+        check("v8.5 sync chip: failed sync shows «خطای همگام‌سازی», tapping it retries", err_ok and retry_ok, await Q.inner_text("#syncStatus"))
+        unexpected = [e for e in errsQ if "500" not in e and "ERR_INTERNET_DISCONNECTED" not in e]
+        check("v8.5 speed + sync: no JS errors, no external requests", not unexpected and not extQ, str(unexpected[:3] + extQ[:3]))
+        await ctxQ.close()
         await b.close()
 
 def main():

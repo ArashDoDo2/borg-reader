@@ -466,3 +466,25 @@ body.dark .clean-broad{background:#3d3220;color:#f0d9a8}
 .lib-search-empty p{margin:0 0 12px;font-size:15px}
 .book-meta mark{background:#f0d9a8;color:#3b2a06;border-radius:3px;padding:0 1px}
 @media(max-width:700px){.library-controls{flex-wrap:wrap}.lib-search{order:-1;flex:1 1 100%}}
+
+/* v8.5 speed + sync status */
+.opening-indicator{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;gap:10px;pointer-events:none;color:var(--muted);font-size:13px;font-weight:600}
+.opening-indicator[hidden]{display:none}
+.opening-spinner{width:18px;height:18px;border-radius:50%;border:2px solid var(--line);border-top-color:var(--green2);animation:borg-spin .8s linear infinite}
+@keyframes borg-spin{to{transform:rotate(360deg)}}
+.sync-wrap{margin-right:auto;display:inline-flex;align-items:center;min-width:0}
+.sync-chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-height:28px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;background:var(--paper);color:var(--muted);font:inherit;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.sync-chip[hidden]{display:none}
+.sync-chip::before{content:"";flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:#4b9874}
+.sync-chip[data-state=syncing]::before{width:6px;height:6px;background:transparent;border:2px solid var(--line);border-top-color:var(--green2);animation:borg-spin .8s linear infinite}
+.sync-chip[data-state=offline]::before{background:#c9a24a}
+.sync-chip[data-state=error]{color:#b4553a;border-color:#e3b3a2}
+.sync-chip[data-state=error]::before{background:#c67b5c}
+.sync-chip:focus-visible{outline:2px solid var(--green2);outline-offset:2px}
+.reader-sync-wrap{margin:0;flex:0 0 auto}
+@media(max-width:700px){
+ .reader-sync{width:28px;min-height:28px;padding:0;justify-content:center;font-size:0;gap:0}
+ .reader-sync::before{width:9px;height:9px}
+ .reader-sync[data-state=syncing]::before{width:7px;height:7px}
+}
+@media(prefers-reduced-motion:reduce){.opening-spinner,.sync-chip[data-state=syncing]::before{animation:none}}

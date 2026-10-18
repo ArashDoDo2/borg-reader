@@ -51,7 +51,7 @@
         <button type="button" role="tab" data-view="mine" aria-selected="true">کتابخانهٔ من</button>
         <button type="button" role="tab" data-view="catalog" aria-selected="false" hidden>کتابخانهٔ عمومی</button>
         <button type="button" role="tab" data-view="admin" aria-selected="false" hidden>مدیریت</button>
-        <span id="syncStatus" class="sync-status" aria-live="polite"></span>
+        <span class="sync-wrap" role="status" aria-live="polite"><button id="syncStatus" class="sync-chip" type="button" data-state="" hidden></button></span>
       </nav>
       <div id="viewMine" class="view">
       <div class="section-heading">
@@ -160,6 +160,7 @@
       <button id="closeReader" class="secondary-button" type="button">← بازگشت به کتابخانه</button>
       <button id="tocToggle" class="icon-button toc-toggle" type="button" aria-label="فهرست کتاب" aria-expanded="false" aria-controls="tocPanel"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
       <div id="readerTitle" class="reader-title" dir="auto">کتاب</div>
+      <span class="sync-wrap reader-sync-wrap" role="status" aria-live="polite"><button id="readerSync" class="sync-chip reader-sync" type="button" data-state="" hidden></button></span>
       <div class="reader-tools">
         <button id="ttsToggle" class="icon-button" type="button" aria-label="خواندن با صدا" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18.3 6.3a8 8 0 0 1 0 11.4"/></svg></button>
         <button id="searchToggle" class="icon-button" type="button" aria-label="جست‌وجو در کتاب" aria-expanded="false" aria-controls="searchPanel"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></svg></button>
@@ -241,6 +242,7 @@
           <button id="nextPage" class="nav-button" type="button">بعدی ←</button>
         </div>
         <div id="viewer" class="viewer"></div>
+        <div id="openingIndicator" class="opening-indicator" role="status" aria-live="polite" hidden><span class="opening-spinner" aria-hidden="true"></span><span>در حال باز کردن کتاب…</span></div>
         <div id="ttsBar" class="tts-bar" role="toolbar" aria-label="خواندن با صدا" hidden>
           <button id="ttsPlay" type="button" aria-label="مکث">⏸</button>
           <button id="ttsStop" type="button" aria-label="توقف">■</button>
