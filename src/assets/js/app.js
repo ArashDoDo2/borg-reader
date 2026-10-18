@@ -491,6 +491,7 @@
   async function findDuplicate(size, hash) {
     const books = await getAllBooks();
     for (const b of books) {
+      if (b.sourceHash && b.sourceHash === hash) return b; // v8.3: same original file, stored cleaned
       if (b.size !== size) continue;
       let h = b.contentHash;
       if (!h && fileOf(b)) {
@@ -548,10 +549,12 @@
           ? "فضای ذخیره‌سازی مرورگر کافی نیست."
           : "ذخیره کتاب در مرورگر انجام نشد.");
       }
+      // v8.3: saved cleanup rules apply to new books before they are uploaded.
+      const cleaned = await autoCleanImported(record.id);
       renderLibrary();
       requestPersistentStorage();
       sync();
-      showToast("کتاب به کتابخانه همین دستگاه اضافه شد.");
+      showToast(cleaned ? `کتاب به کتابخانه اضافه شد؛ ${faNum(cleaned)} مورد حذف شد` : "کتاب به کتابخانه همین دستگاه اضافه شد.");
     } catch (err) {
       // Expected outcomes (duplicate, broken file, …) are UserErrors and are not logged as app errors.
       if (!(err instanceof UserError)) console.error(err);
@@ -2063,11 +2066,20 @@
       for (const b of local) {
         if (b.serverId && !byId.has(b.serverId)) { await remove("books", b.id); await remove("progress", b.id); }
       }
+      // v8.3: books cleaned while offline (or whose replace failed) — upload the new file, then book-replace.
+      const replacedOld = new Set();
+      for (const b of await getAllBooks()) {
+        if (!b.cleanPending || !b.serverId) continue;
+        replacedOld.add(b.serverId); // never re-download the old server copy
+        try { const nb = await replaceOnServer(b); if (nb) { bySha.set(nb.sha256, nb); byId.set(nb.id, nb); } }
+        catch (err) { console.warn("Book replace failed:", b.title, err); }
+      }
       local = await getAllBooks();
       const localSha = new Set();
       let done = 0;
       const toUpload = [];
       for (let b of local) {
+        if (b.cleanPending) continue; // still waiting for book-replace
         b = await ensureHash(b);
         if (b.contentHash) localSha.add(b.contentHash);
         const sb = b.contentHash && bySha.get(b.contentHash);
@@ -2099,7 +2111,7 @@
         try { const sb = await uploadBook(b); await put("books", { ...b, serverId: sb.id }); byId.set(sb.id, sb); }
         catch (err) { console.warn("Upload failed:", b.title, err); }
       }
-      const missing = server.filter(sb => !localSha.has(sb.sha256));
+      const missing = server.filter(sb => !localSha.has(sb.sha256) && !replacedOld.has(sb.id));
       done = 0;
       for (const sb of missing) {
         setSyncStatus(`در حال دریافت «${sb.title}» (${(++done).toLocaleString("fa-IR")} از ${missing.length.toLocaleString("fa-IR")})…`);
@@ -2175,7 +2187,8 @@
   function annSinceKey() { return `borg-ann-since-${account?.user?.id || 0}${STORAGE_SUFFIX}`; }
   async function syncAnnotations() {
     const books = await getAllBooks();
-    const localToServer = new Map(books.filter(b => b.serverId).map(b => [b.id, b.serverId]));
+    // Annotations of a book waiting for book-replace are pushed after it (the server re-stamps moved ones).
+    const localToServer = new Map(books.filter(b => b.serverId && !b.cleanPending).map(b => [b.id, b.serverId]));
     const serverToLocal = new Map(books.filter(b => b.serverId).map(b => [b.serverId, b.id]));
     // Push local changes.
     const dirty = (await getAllAnnotations()).filter(a => a.dirty && localToServer.has(a.bookId));
@@ -2689,6 +2702,377 @@
       loadAdmin();
     } catch (err) { showToast(apiMessage(err)); }
   });
+
+  // ======================= v8.3 text cleanup («پاک‌سازی متن») =======================
+  // Rules remove only the matched phrase from the EPUB file itself (no original is kept). They apply to every
+  // book: on demand (search → preview → apply) and automatically to newly imported books.
+  const CLEAN_KEY = "borg-clean-rules" + STORAGE_SUFFIX;
+  const CLEAN_MIN_LEN = 4, CLEAN_MAX_HITS = 300, CLEAN_MAX_SHARE = 0.02, CLEAN_SNIPPETS = 5;
+  const TG_LABEL = "لینک‌های تلگرام";
+  // t.me / telegram.me / telegram.dog URLs (with or without scheme) and @handles of 5–32 [A-Za-z0-9_] characters.
+  const TG_SOURCE = String.raw`(?:(?<![A-Za-z0-9_.\-@])https?:\/\/(?:www\.)?|(?<![A-Za-z0-9_.\-\/@:])(?:www\.)?)(?:t\.me|telegram\.me|telegram\.dog)\/[A-Za-z0-9_\-+\/?=&%.#~]*[A-Za-z0-9_\-\/]|(?<![A-Za-z0-9_.@\/])@[A-Za-z0-9_]{5,32}(?![A-Za-z0-9_])`;
+  function loadCleanRules() {
+    try { const r = JSON.parse(localStorage.getItem(CLEAN_KEY) || "[]"); return Array.isArray(r) ? r.filter(x => x && (x.type === "telegram" || (x.type === "phrase" && typeof x.text === "string"))) : []; }
+    catch (_) { return []; }
+  }
+  function saveCleanRules(rules) { try { localStorage.setItem(CLEAN_KEY, JSON.stringify(rules)); } catch (_) {} }
+  const ruleLabel = r => r.type === "telegram" ? TG_LABEL : `«${r.text}»`;
+  function ruleRegex(r) {
+    return r.type === "telegram" ? new RegExp(TG_SOURCE, "g") : new RegExp(r.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+  }
+  const XHTML_TYPES = ["application/xhtml+xml", "text/html"];
+  function zipResolve(base, href) {
+    const parts = (base + href.split("#")[0]).split("/"), out = [];
+    for (const p of parts) { if (p === "..") out.pop(); else if (p && p !== ".") out.push(p); }
+    return out.join("/");
+  }
+  /** Content documents of an EPUB as [{path, type}] from the OPF manifest (fallback: every .xhtml/.html file). */
+  async function epubContentFiles(zip) {
+    try {
+      const container = new DOMParser().parseFromString(await zip.file("META-INF/container.xml").async("string"), "application/xml");
+      const opfPath = container.getElementsByTagNameNS("*", "rootfile")[0].getAttribute("full-path");
+      const opf = new DOMParser().parseFromString(await zip.file(opfPath).async("string"), "application/xml");
+      const base = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/") + 1) : "";
+      const out = [];
+      for (const it of opf.getElementsByTagNameNS("*", "item")) {
+        const type = it.getAttribute("media-type") || "", href = it.getAttribute("href");
+        if (!href || !XHTML_TYPES.includes(type)) continue;
+        let path; try { path = zipResolve(base, decodeURIComponent(href)); } catch (_) { path = zipResolve(base, href); }
+        if (zip.file(path)) out.push({ path, type });
+      }
+      if (out.length) return out;
+    } catch (_) { /* no usable OPF: fall through */ }
+    return Object.keys(zip.files).filter(n => /\.x?html?$/i.test(n) && !zip.files[n].dir).map(n => ({ path: n, type: /\.xhtml$/i.test(n) ? "application/xhtml+xml" : "text/html" }));
+  }
+  /** Remove rule matches from one content document. Updates stats; returns {chars, output|null}. */
+  function cleanDocument(src, type, rules, stats) {
+    const xml = type === "application/xhtml+xml";
+    let doc = new DOMParser().parseFromString(src, xml ? "application/xhtml+xml" : "text/html"), viaHtml = false;
+    if (xml && doc.getElementsByTagName("parsererror").length) { doc = new DOMParser().parseFromString(src, "text/html"); viaHtml = true; }
+    const root = doc.body || doc.documentElement;
+    if (!root) return { chars: 0, output: null };
+    const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const touched = new Set(); let chars = 0, changed = false;
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const parentName = (n.parentNode && n.parentNode.localName || "").toLowerCase();
+      if (parentName === "script" || parentName === "style") continue;
+      let v = n.nodeValue; chars += v.length;
+      const orig = v;
+      for (const r of rules) {
+        const s = stats[r.id];
+        v = v.replace(ruleRegex(r), (m, ...rest) => {
+          const off = rest[rest.length - 2], str = rest[rest.length - 1];
+          s.count++; s.chars += m.length;
+          if (s.snippets.length < CLEAN_SNIPPETS) s.snippets.push({ before: str.slice(Math.max(0, off - 32), off), match: m, after: str.slice(off + m.length, off + m.length + 32) });
+          return "";
+        });
+      }
+      if (v !== orig) {
+        n.nodeValue = v; changed = true;
+        for (let p = n.parentNode; p && p !== root; p = p.parentNode) if ((p.localName || "").toLowerCase() === "a") { touched.add(p); break; }
+      }
+    }
+    if (!changed) return { chars, output: null };
+    // A link whose text became empty (e.g. <a href="https://t.me/x">https://t.me/x</a>) is removed with it.
+    for (const a of touched) {
+      if (!a.textContent.trim() && !a.querySelector("img,svg,image,video,audio,object")) a.parentNode && a.parentNode.removeChild(a);
+    }
+    let output;
+    if (xml) {
+      const decl = (/^\s*<\?xml[^?]*\?>/.exec(src) || [""])[0];
+      const doctype = viaHtml ? ((/<!DOCTYPE[^>]*>/i.exec(src) || [""])[0]) : "";
+      // Some engines emit their own XML declaration; keep exactly one (the original's).
+      const body = new XMLSerializer().serializeToString(viaHtml ? doc.documentElement : doc).replace(/^\s*<\?xml[^?]*\?>\s*/, "");
+      output = (decl ? decl + "\n" : "") + (doctype ? doctype + "\n" : "") + body;
+    } else {
+      output = (doc.doctype ? "<!DOCTYPE html>\n" : "") + doc.documentElement.outerHTML;
+    }
+    return { chars, output };
+  }
+  /**
+   * Run rules over every content document of an EPUB (ArrayBuffer). Stats per rule id: {count, chars, snippets}.
+   * With write: also returns the rebuilt EPUB as a Blob (mimetype first and STORED, the rest DEFLATE).
+   */
+  async function cleanEpub(buf, rules, write) {
+    const zip = await JSZip.loadAsync(buf);
+    const stats = {}; rules.forEach(r => { stats[r.id] = { count: 0, chars: 0, snippets: [] }; });
+    let totalChars = 0; const changed = new Map();
+    for (const { path, type } of await epubContentFiles(zip)) {
+      let src; try { src = await zip.file(path).async("string"); } catch (_) { continue; }
+      const res = cleanDocument(src, type, rules, stats);
+      totalChars += res.chars;
+      if (res.output !== null) changed.set(path, res.output);
+    }
+    const total = Object.values(stats).reduce((n, s) => n + s.count, 0);
+    if (!write || !changed.size) return { stats, totalChars, total, blob: null };
+    const out = new JSZip(), mt = zip.file("mimetype");
+    out.file("mimetype", mt ? (await mt.async("string")).trim() || "application/epub+zip" : "application/epub+zip", { compression: "STORE" });
+    for (const name of Object.keys(zip.files)) {
+      const e = zip.files[name];
+      if (e.dir || name === "mimetype") continue;
+      out.file(name, changed.has(name) ? changed.get(name) : await e.async("uint8array"), { date: e.date });
+    }
+    const blob = await out.generateAsync({ type: "blob", mimeType: "application/epub+zip", compression: "DEFLATE", compressionOptions: { level: 6 } });
+    return { stats, totalChars, total, blob };
+  }
+  const isTooBroad = (s, totalChars) => s.count > CLEAN_MAX_HITS || (totalChars > 0 && s.chars > totalChars * CLEAN_MAX_SHARE);
+
+  // ---- Re-anchoring annotations by their quote ----
+  // Display-time changes (RLM→ZWNJ, Persian digits, ي/ك) are folded char-for-char so offsets stay aligned.
+  const FOLD = { "‏": "‌", "ي": "ی", "ى": "ی", "ك": "ک" };
+  function foldChar(c) {
+    if (FOLD[c]) return FOLD[c];
+    const d = c.charCodeAt(0);
+    if (d >= 48 && d <= 57) return String.fromCharCode(0x06F0 + d - 48);
+    if (d >= 0x0660 && d <= 0x0669) return String.fromCharCode(0x06F0 + d - 0x0660);
+    return c;
+  }
+  function docTextNodes(doc) {
+    const root = doc.body || doc.getElementsByTagName("body")[0] || doc.documentElement, nodes = [];
+    const w = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = w.nextNode(); n; n = w.nextNode()) nodes.push(n);
+    return nodes;
+  }
+  function textOffsetOf(doc, node, offset) {
+    let pos = 0;
+    for (const n of docTextNodes(doc)) { if (n === node) return pos + offset; pos += n.nodeValue.length; }
+    return -1;
+  }
+  /** A Range over `quote` in doc (whitespace-insensitive); the occurrence nearest to `hint` (raw text offset) wins. */
+  function findQuoteRange(doc, quote, hint) {
+    const nodes = docTextNodes(doc), map = [], starts = [];
+    let norm = "", pos = 0;
+    nodes.forEach((n, k) => {
+      starts.push(pos); const v = n.nodeValue;
+      for (let j = 0; j < v.length; j++) {
+        if (/\s/.test(v[j])) { if (norm && norm[norm.length - 1] !== " ") { norm += " "; map.push([k, j]); } }
+        else { norm += foldChar(v[j]); map.push([k, j]); }
+      }
+      pos += v.length;
+    });
+    const q = [...String(quote).replace(/\s+/g, " ").trim()].map(foldChar).join("");
+    if (!q) return null;
+    let best = -1, bestDist = Infinity;
+    for (let i = norm.indexOf(q); i >= 0; i = norm.indexOf(q, i + 1)) {
+      const [k, j] = map[i], dist = hint >= 0 ? Math.abs(starts[k] + j - hint) : 0;
+      if (dist < bestDist) { best = i; bestDist = dist; }
+      if (hint < 0) break;
+    }
+    if (best < 0) return null;
+    const [k1, j1] = map[best], [k2, j2] = map[best + q.length - 1];
+    const range = doc.createRange();
+    range.setStart(nodes[k1], j1); range.setEnd(nodes[k2], j2 + 1);
+    return range;
+  }
+  /** New CFIs for the book's annotations, found by quote in the same spine item of the cleaned file. */
+  async function reanchorAnnotations(bookId, oldBuf, newBuf) {
+    const anns = (await getAnnotations(bookId)).filter(a => a.cfi && a.quote && String(a.quote).trim());
+    if (!anns.length) return [];
+    const oldB = ePub(oldBuf), newB = ePub(newBuf), updated = [], loaded = [];
+    try {
+      await Promise.all([oldB.opened, newB.opened]);
+      const load = async (book, sec) => { if (!sec) return null; if (!sec.document) { await sec.load(book.load.bind(book)); loaded.push(sec); } return sec.document; };
+      for (const a of anns) {
+        try {
+          const sec = newB.spine.get(a.cfi);
+          const doc = await load(newB, sec);
+          if (!doc) continue;
+          let hint = -1;
+          try {
+            const od = await load(oldB, oldB.spine.get(a.cfi));
+            const r = od && new ePub.CFI(a.cfi).toRange(od);
+            if (r) hint = textOffsetOf(od, r.startContainer, r.startOffset);
+          } catch (_) {}
+          const range = findQuoteRange(doc, a.quote, hint);
+          if (!range) continue; // quote not found (e.g. it contained the removed phrase): keep the old CFI
+          if (a.type === "bookmark") range.collapse(true);
+          const cfi = sec.cfiFromRange(range);
+          if (cfi && cfi !== a.cfi) updated.push({ ...a, cfi });
+        } catch (err) { console.warn("Re-anchoring failed:", err); }
+      }
+    } finally {
+      loaded.forEach(s => { try { s.unload(); } catch (_) {} });
+      try { oldB.destroy(); } catch (_) {}
+      try { newB.destroy(); } catch (_) {}
+    }
+    return updated;
+  }
+
+  // ---- Applying to a stored book ----
+  /** Clean one stored book with `rules`. Returns the number of removed matches (0 = file untouched). */
+  async function applyCleanToBook(bookId, rules) {
+    const rec = await getBook(bookId);
+    const file = fileOf(rec);
+    if (!rec || !file || !rules.length) return 0;
+    const oldBuf = await file.arrayBuffer();
+    const res = await cleanEpub(oldBuf, rules, true);
+    if (!res.blob || !res.total) return 0;
+    const newBuf = await res.blob.arrayBuffer();
+    const hash = await sha256(newBuf);
+    const anns = await reanchorAnnotations(bookId, oldBuf, newBuf);
+    const latest = (await getBook(bookId)) || rec;
+    const name = (file.name || latest.fileName || "book.epub");
+    const upd = { ...latest, file: new File([res.blob], name, { type: "application/epub+zip" }), size: res.blob.size, contentHash: hash,
+                  sourceHash: latest.sourceHash || latest.contentHash || null, cleanedAt: Date.now() };
+    delete upd.fileBuffer; delete upd.fileName; delete upd.locations;
+    if (upd.serverId) { upd.cleanPending = true; upd.cleanAnns = [...new Set([...(latest.cleanAnns || []), ...anns.map(a => a.uid)])]; }
+    await put("books", upd);
+    for (const a of anns) await saveAnnotation(a);
+    if (currentBook && currentBook.id === bookId && rendition) reopenCurrentBook();
+    if (upd.serverId && account && navigator.onLine) {
+      try { await replaceOnServer(await getBook(bookId)); } catch (err) { console.warn("Book replace failed (will retry on sync):", err); }
+    }
+    return res.total;
+  }
+  /**
+   * Synced book whose file was cleaned: upload the new file, then `book-replace` moves progress, annotations,
+   * shelves (and, for an admin, the catalog entry) to it. Annotations re-anchored locally are pushed afterwards
+   * with fresh timestamps (the server bumps the moved ones to "now").
+   */
+  async function replaceOnServer(b) {
+    if (!b || !b.cleanPending || !b.serverId || !account) return null;
+    const sb = await uploadBook(b);
+    let book = sb;
+    if (sb.id !== b.serverId) {
+      const r = await api("book-replace", { method: "POST", body: { old_book_id: b.serverId, new_book_id: sb.id } });
+      book = (r && r.book) || sb;
+    }
+    const cur = (await getBook(b.id)) || b;
+    const upd = { ...cur, serverId: book.id, cleanPending: false, cleanAnns: [] };
+    if (book.catalog_status !== undefined) upd.catalogStatus = book.catalog_status || null;
+    await put("books", upd);
+    for (const uid of cur.cleanAnns || []) { const a = await getAnnotation(uid); if (a && !a.deleted) await saveAnnotation({ ...a }); }
+    scheduleAnnotationPush();
+    return book;
+  }
+  /** After an import: apply the saved rules, skipping rules that look too broad for this book. */
+  async function autoCleanImported(bookId) {
+    const rules = loadCleanRules();
+    if (!rules.length) return 0;
+    try {
+      const rec = await getBook(bookId), file = fileOf(rec);
+      if (!file) return 0;
+      const dry = await cleanEpub(await file.arrayBuffer(), rules, false);
+      const ok = rules.filter(r => dry.stats[r.id].count && !isTooBroad(dry.stats[r.id], dry.totalChars));
+      return ok.length ? await applyCleanToBook(bookId, ok) : 0;
+    } catch (err) { console.warn("Auto cleanup failed:", err); return 0; }
+  }
+
+  // ---- Dialog ----
+  let cleanScan = null, cleanBusy = false; // cleanScan: { rules, books: [{id, title, stats, totalChars}], broad: Set(ruleId) }
+  function renderCleanRules() {
+    const rules = loadCleanRules();
+    $("cleanRules").innerHTML = rules.length
+      ? rules.map(r => `<li><span dir="auto">${esc(ruleLabel(r))}</span><button type="button" class="text-button" data-clean-del="${esc(r.id)}" aria-label="حذف قاعدهٔ ${esc(ruleLabel(r))}">حذف</button></li>`).join("")
+      : '<li class="muted">هنوز قاعده‌ای نیست.</li>';
+    $("cleanPresetTelegram").disabled = rules.some(r => r.type === "telegram");
+    $("cleanSearch").disabled = !rules.length || cleanBusy;
+  }
+  function resetCleanResults(status) {
+    cleanScan = null; $("cleanResults").innerHTML = ""; $("cleanApplyRow").hidden = true;
+    $("cleanStatus").textContent = status || "";
+  }
+  function setCleanProgress(done, total, text) {
+    $("cleanProgressWrap").hidden = total === null;
+    if (total === null) return;
+    $("cleanProgress").max = Math.max(1, total); $("cleanProgress").value = done;
+    $("cleanProgressText").textContent = text;
+  }
+  function cleanIncluded(ruleId) {
+    if (!cleanScan || !cleanScan.broad.has(ruleId)) return true;
+    const box = $("cleanResults").querySelector(`[data-clean-broad="${CSS.escape(ruleId)}"]`);
+    return !!(box && box.checked);
+  }
+  function renderCleanResults() {
+    if (!cleanScan) return;
+    const { rules, books, broad } = cleanScan;
+    const warn = rules.filter(r => broad.has(r.id)).map(r => {
+      const top = books.reduce((m, b) => (b.stats[r.id].count > (m ? m.stats[r.id].count : -1) ? b : m), null);
+      return `<label class="clean-broad"><input type="checkbox" data-clean-broad="${esc(r.id)}"> <span><b dir="auto">${esc(ruleLabel(r))}</b> احتمالاً بیش از حد کلی است`
+        + (top ? ` (${faNum(top.stats[r.id].count)} مورد در «${esc(top.title)}»)` : "") + `؛ با این حال حذف شود</span></label>`;
+    }).join("");
+    const list = books.map(b => {
+      const live = rules.filter(r => !broad.has(r.id) || cleanIncluded(r.id));
+      const count = live.reduce((n, r) => n + b.stats[r.id].count, 0);
+      if (!count) return "";
+      const snips = live.flatMap(r => b.stats[r.id].snippets).slice(0, CLEAN_SNIPPETS)
+        .map(s => `<li dir="auto">…${esc(s.before)}<mark>${esc(s.match)}</mark>${esc(s.after)}…</li>`).join("");
+      return `<div class="clean-book" data-clean-id="${esc(b.id)}"><label class="clean-book-head"><input type="checkbox" data-clean-book="${esc(b.id)}" checked>`
+        + ` <b dir="auto">${esc(b.title)}</b> <span class="clean-count">${faNum(count)} مورد</span></label><ul class="clean-snips">${snips}</ul></div>`;
+    }).filter(Boolean);
+    const keep = new Map([...$("cleanResults").querySelectorAll("[data-clean-broad]")].map(x => [x.dataset.cleanBroad, x.checked]));
+    const keepBooks = new Map([...$("cleanResults").querySelectorAll("[data-clean-book]")].map(x => [x.dataset.cleanBook, x.checked]));
+    $("cleanResults").innerHTML = warn + (list.length ? list.join("") : '<p class="muted">موردی پیدا نشد.</p>');
+    $("cleanResults").querySelectorAll("[data-clean-broad]").forEach(x => { if (keep.has(x.dataset.cleanBroad)) x.checked = keep.get(x.dataset.cleanBroad); });
+    $("cleanResults").querySelectorAll("[data-clean-book]").forEach(x => { if (keepBooks.has(x.dataset.cleanBook)) x.checked = keepBooks.get(x.dataset.cleanBook); });
+    $("cleanApplyRow").hidden = !list.length;
+  }
+  async function runCleanSearch() {
+    const rules = loadCleanRules();
+    if (!rules.length || cleanBusy || !db) return;
+    if (!librariesReady()) { showToast("کتاب‌خوان کامل بارگذاری نشده است. صفحه را تازه‌سازی کن."); return; }
+    cleanBusy = true; renderCleanRules(); resetCleanResults("");
+    try {
+      const all = (await getAllBooks()).filter(b => fileOf(b));
+      const books = [], broad = new Set();
+      for (let i = 0; i < all.length; i++) {
+        setCleanProgress(i, all.length, `در حال بررسی ${faNum(i + 1)} از ${faNum(all.length)}: «${all[i].title}»`);
+        await sleep(0); // keep the page responsive between books
+        try {
+          const r = await cleanEpub(await fileOf(all[i]).arrayBuffer(), rules, false);
+          rules.forEach(rule => { if (isTooBroad(r.stats[rule.id], r.totalChars)) broad.add(rule.id); });
+          if (r.total) books.push({ id: all[i].id, title: all[i].title || "بدون عنوان", stats: r.stats, totalChars: r.totalChars });
+        } catch (err) { console.warn("Cleanup scan failed:", all[i].title, err); }
+      }
+      cleanScan = { rules, books, broad };
+      renderCleanResults();
+      $("cleanStatus").textContent = all.length ? `${faNum(all.length)} کتاب بررسی شد.` : "کتابی در کتابخانه نیست.";
+    } finally { cleanBusy = false; setCleanProgress(0, null); renderCleanRules(); }
+  }
+  async function runCleanApply() {
+    if (!cleanScan || cleanBusy) return;
+    const rules = cleanScan.rules.filter(r => cleanIncluded(r.id));
+    const ids = [...$("cleanResults").querySelectorAll("[data-clean-book]:checked")].map(x => x.dataset.cleanBook);
+    if (!rules.length || !ids.length) { showToast("کتابی انتخاب نشده است."); return; }
+    cleanBusy = true; renderCleanRules(); $("cleanApply").disabled = true;
+    let removed = 0, booksDone = 0;
+    try {
+      for (let i = 0; i < ids.length; i++) {
+        const b = cleanScan.books.find(x => x.id === ids[i]);
+        setCleanProgress(i, ids.length, `در حال پاک‌سازی ${faNum(i + 1)} از ${faNum(ids.length)}: «${b ? b.title : ""}»`);
+        await sleep(0);
+        try { const n = await applyCleanToBook(ids[i], rules); removed += n; if (n) booksDone++; }
+        catch (err) { console.error("Cleanup failed:", err); showToast(err && err.name === "QuotaExceededError" ? "فضای ذخیره‌سازی مرورگر کافی نیست." : "پاک‌سازی یکی از کتاب‌ها انجام نشد."); }
+      }
+    } finally { cleanBusy = false; $("cleanApply").disabled = false; setCleanProgress(0, null); renderCleanRules(); }
+    resetCleanResults(`${faNum(removed)} مورد از ${faNum(booksDone)} کتاب حذف شد.`);
+    showToast(`${faNum(removed)} مورد حذف شد`);
+    renderLibrary();
+  }
+  $("cleanOpen").addEventListener("click", () => { renderCleanRules(); $("cleanError").textContent = ""; $("cleanDialog").showModal(); $("cleanPhrase").focus(); });
+  $("cleanClose").addEventListener("click", () => $("cleanDialog").close());
+  $("cleanForm").addEventListener("submit", e => {
+    e.preventDefault();
+    const text = $("cleanPhrase").value.trim(), rules = loadCleanRules();
+    if ([...text].length < CLEAN_MIN_LEN) { $("cleanError").textContent = `عبارت باید دست‌کم ${faNum(CLEAN_MIN_LEN)} نویسه باشد؛ عبارت‌های کوتاه بخش‌های درست متن را هم پاک می‌کنند.`; return; }
+    if (rules.some(r => r.type === "phrase" && r.text === text)) { $("cleanError").textContent = "این عبارت قبلاً اضافه شده است."; return; }
+    rules.push({ id: newUid(), type: "phrase", text: text.slice(0, 200) });
+    saveCleanRules(rules); $("cleanPhrase").value = ""; $("cleanError").textContent = "";
+    resetCleanResults(""); renderCleanRules();
+  });
+  $("cleanPresetTelegram").addEventListener("click", () => {
+    const rules = loadCleanRules();
+    if (!rules.some(r => r.type === "telegram")) { rules.push({ id: newUid(), type: "telegram" }); saveCleanRules(rules); }
+    $("cleanError").textContent = ""; resetCleanResults(""); renderCleanRules();
+  });
+  $("cleanRules").addEventListener("click", e => {
+    const id = e.target.closest("[data-clean-del]")?.dataset.cleanDel;
+    if (!id || cleanBusy) return;
+    saveCleanRules(loadCleanRules().filter(r => r.id !== id)); resetCleanResults(""); renderCleanRules();
+  });
+  $("cleanResults").addEventListener("change", e => { if (e.target.matches("[data-clean-broad]")) renderCleanResults(); });
+  $("cleanSearch").addEventListener("click", () => { runCleanSearch().catch(err => { console.error(err); showToast("جستجو انجام نشد."); }); });
+  $("cleanApply").addEventListener("click", () => { runCleanApply().catch(err => { console.error(err); showToast("پاک‌سازی انجام نشد."); }); });
 
   // ---------- Start ----------
   // ---- Repair titles/authors/covers of books imported by old versions that could not read metadata ----
