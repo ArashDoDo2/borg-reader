@@ -1406,6 +1406,92 @@ async def run(url):
         check("v8.4 errors: clear all empties the list", await Y.locator("#errorsList .err-item").count() == 0 and await Y.is_visible("#errorsList"))
         check("v8.4 errors admin: no unexpected JS errors, no external requests", len(extY) == 0 and all("borg-e2e" in e for e in errsY), str(errsY[:3] + extY[:3]))
         await ctxY.close()
+        # 21. v8.5 library search: title/author/publisher/shelf, Persian normalisation, count, empty state, clear, "/" and mobile
+        import tempfile as _tf21, shutil as _sh21
+        tmp21 = Path(_tf21.mkdtemp(prefix="borg-e2e-search-"))
+        bk21 = [make_epub(tmp21 / "s1.epub", "سفر به ستاره‌ها", "search-21-a", "مریم کیانی", publisher="نشر چشمه"),
+                make_epub(tmp21 / "s2.epub", "باغ انار", "search-21-b", "علی یکتا", publisher="نشر ثالث"),
+                make_epub(tmp21 / "s3.epub", "Harbor Lights", "search-21-c", "John Mercer", publisher="Penguin Books", direction="ltr", lang="en")]
+        ext21, errs21 = [], []
+        ctx21, S = await new_ctx(b, url, ext21, errs21)
+        await S.goto(url); await S.wait_for_timeout(800)
+        for i, f in enumerate(bk21, 1):
+            await S.set_input_files("#epubInput", f)
+            await poll(lambda i=i: _count_gt(S, "#bookGrid .book-card", i - 1), 10000)
+        async def titles21(): return await S.locator("#bookGrid .book-card h3").all_inner_texts()
+        async def search21(q, n):
+            await S.fill("#searchInput", q)
+            try: await poll(lambda: S.evaluate("(n)=>document.querySelectorAll('#bookGrid .book-card').length===n && !!document.querySelector('#bookGrid .book-card, #bookGrid .lib-search-empty')", n) if n else S.locator("#bookGrid .lib-search-empty").is_visible(), 4000)
+            except TimeoutError: pass
+            await S.wait_for_timeout(250)  # past the debounce: no later render changes it
+            return await titles21()
+        check("v8.5 search: placeholder and field in the library toolbar",
+              await S.get_attribute("#searchInput", "placeholder") == "جستجو در عنوان، نویسنده، ناشر…" and await S.is_visible("#searchInput")
+              and await S.locator("#bookGrid .book-card").count() == 3 and not await S.is_visible("#librarySearchCount"))
+        t = await search21("ستاره", 1)
+        check("v8.5 search: part of the title finds one book, count «۱ کتاب پیدا شد»", t == ["سفر به ستاره‌ها"]
+              and await S.is_visible("#librarySearchCount") and (await S.inner_text("#librarySearchCount")).strip() == "۱ کتاب پیدا شد", str(t))
+        check("v8.5 search: matched part highlighted in the title", (await S.locator("#bookGrid .book-card h3 mark").all_inner_texts()) == ["ستاره"]
+              and await S.is_visible("#librarySearchClear"))
+        t = await search21("ستارهها", 1)
+        check("v8.5 search: half-space (ZWNJ) in the title is ignored", t == ["سفر به ستاره‌ها"], str(t))
+        t = await search21("كياني", 1)
+        check("v8.5 search: author typed with Arabic ك/ي matches Persian ک/ی", t == ["سفر به ستاره‌ها"], str(t))
+        t = await search21("يكتا", 1)
+        check("v8.5 search: second author with Arabic letters", t == ["باغ انار"], str(t))
+        t = await search21("ثالث", 1)
+        check("v8.5 search: publisher", t == ["باغ انار"], str(t))
+        t = await search21("نشر", 2)
+        check("v8.5 search: two matches, count «۲ کتاب پیدا شد»", sorted(t) == sorted(["سفر به ستاره‌ها", "باغ انار"])
+              and (await S.inner_text("#librarySearchCount")).strip() == "۲ کتاب پیدا شد", str(t))
+        t = await search21("PENGUIN", 1)
+        check("v8.5 search: Latin publisher is case-insensitive", t == ["Harbor Lights"], str(t))
+        await S.fill("#searchInput", ""); await poll(lambda: S.evaluate("()=>document.querySelectorAll('#bookGrid .book-card').length===3"), 4000)
+        await S.click('#bookGrid .book-card:has-text("باغ انار") [data-options]'); await S.wait_for_timeout(300)
+        await S.fill("#newShelfName", "کلاسیک"); await S.click("#addShelf"); await S.wait_for_timeout(400)
+        await S.click("#bookOptionsClose"); await S.wait_for_timeout(400)
+        t = await search21("كلاسيك", 1)
+        check("v8.5 search: shelf name", t == ["باغ انار"], str(t))
+        t = await search21("نشر", 2)
+        await S.click('#libraryFilters button:has-text("کلاسیک")'); await S.wait_for_timeout(400)
+        check("v8.5 search: combines with the shelf filter", await titles21() == ["باغ انار"]
+              and (await S.inner_text("#librarySearchCount")).strip() == "۱ کتاب پیدا شد", str(await titles21()))
+        await S.click('[data-filter="all"]'); await S.wait_for_timeout(300)
+        await search21("کتاب ناموجود ۱۲۳", 0)
+        check("v8.5 search: empty state «کتابی با این عبارت پیدا نشد» with a clear button, no count",
+              await S.is_visible("#bookGrid .lib-search-empty") and "کتابی با این عبارت پیدا نشد" in await S.inner_text("#bookGrid")
+              and await S.is_visible("#bookGrid [data-search-clear]") and not await S.is_visible("#librarySearchCount"))
+        await S.click("#bookGrid [data-search-clear]"); await S.wait_for_timeout(300)
+        check("v8.5 search: clear restores all books", await S.locator("#bookGrid .book-card").count() == 3
+              and await S.input_value("#searchInput") == "" and not await S.is_visible("#librarySearchClear") and not await S.is_visible("#librarySearchCount"))
+        await search21("باغ", 1); await S.click("#librarySearchClear"); await S.wait_for_timeout(300)
+        check("v8.5 search: × button clears", await S.locator("#bookGrid .book-card").count() == 3 and await S.input_value("#searchInput") == "")
+        await search21("باغ", 1); await S.press("#searchInput", "Escape"); await S.wait_for_timeout(300)
+        check("v8.5 search: Escape in the field clears it", await S.locator("#bookGrid .book-card").count() == 3 and await S.input_value("#searchInput") == "")
+        await search21("باغ", 1); await S.reload(); await S.wait_for_timeout(1200)
+        check("v8.5 search: query kept in sessionStorage across a reload, not in localStorage",
+              await S.input_value("#searchInput") == "باغ" and await titles21() == ["باغ انار"]
+              and await S.evaluate("()=>sessionStorage.getItem('borg-library-search')==='باغ' && !JSON.stringify(localStorage).includes('باغ')"))
+        await S.fill("#searchInput", ""); await S.wait_for_timeout(400)
+        await S.evaluate("()=>document.activeElement && document.activeElement.blur()")
+        await S.keyboard.press("/"); await S.wait_for_timeout(150)
+        check("v8.5 search: «/» focuses the field (and types nothing)",
+              await S.evaluate("()=>document.activeElement && document.activeElement.id==='searchInput'") and await S.input_value("#searchInput") == "")
+        await S.click('#bookGrid .book-card:has-text("Harbor Lights")'); await S.wait_for_timeout(2000)
+        await S.evaluate("()=>document.activeElement && document.activeElement.blur()")
+        await S.keyboard.press("/"); await S.wait_for_timeout(150)
+        check("v8.5 search: «/» does nothing while the reader is open",
+              await S.evaluate("()=>document.activeElement && document.activeElement.id!=='searchInput'"))
+        await S.click("#closeReader"); await S.wait_for_timeout(600)
+        await S.set_viewport_size({"width": 390, "height": 844}); await S.wait_for_timeout(400)
+        box = await S.locator("#searchInput").bounding_box()
+        check("v8.5 search mobile: field visible and wide enough at 390px", box and box["width"] >= 200 and box["x"] >= 0 and box["x"] + box["width"] <= 390, str(box))
+        t = await search21("mercer", 1)
+        check("v8.5 search mobile: typing filters, clear button inside the box, no horizontal overflow", t == ["Harbor Lights"]
+              and await S.evaluate("""()=>{const c=document.querySelector('#librarySearchClear').getBoundingClientRect(),s=document.querySelector('#librarySearchBox').getBoundingClientRect();
+                return c.width>0&&c.left>=s.left&&c.right<=s.right&&document.documentElement.scrollWidth<=innerWidth}"""), str(t))
+        check("v8.5 search: no JS errors, no external requests", len(errs21) == 0 and len(ext21) == 0, str(errs21[:3] + ext21[:3]))
+        await ctx21.close(); _sh21.rmtree(tmp21, ignore_errors=True)
         await b.close()
 
 def main():

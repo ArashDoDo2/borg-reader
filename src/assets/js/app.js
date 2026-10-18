@@ -454,7 +454,34 @@
   }
   function newUid() { return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`).slice(0, 40); }
 
-  function bookCardHtml(b, prog) {
+  // v8.5 library search: one spelling for the query and the book fields. normalizeForSearch (ی/ي/ى, ک/ك, RLM half-space)
+  // keeps offsets; then half-spaces, spaces, bidi marks, tatweel and harakat are dropped, Persian/Arabic digits become
+  // 0-9 and Latin is lower-cased. `map[i]` is the index in the original text of key[i] (used to highlight the match).
+  const LIB_SEARCH_KEY = "borg-library-search"; // sessionStorage only: the query is not kept across sessions
+  const LIB_DIGITS = "۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩";
+  const LIB_DROP = /[\s\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF\u0640\u064B-\u065F\u0670]/;
+  function libFold(text) {
+    const src = normalizeForSearch(String(text ?? ""));
+    let key = ""; const map = [];
+    for (let i = 0; i < src.length; i++) {
+      const c = src[i];
+      if (LIB_DROP.test(c)) continue;
+      const d = LIB_DIGITS.indexOf(c);
+      const f = d >= 0 ? String(d % 10) : c.toLocaleLowerCase();
+      for (let k = 0; k < f.length; k++) { key += f[k]; map.push(i); }
+    }
+    return { key, map };
+  }
+  function libMarkHtml(text, q) {
+    text = String(text ?? "");
+    if (!q) return esc(text);
+    const { key, map } = libFold(text);
+    const at = key.indexOf(q);
+    if (at < 0) return esc(text);
+    const a = map[at], z = map[at + q.length - 1] + 1;
+    return `${esc(text.slice(0, a))}<mark>${esc(text.slice(a, z))}</mark>${esc(text.slice(z))}`;
+  }
+  function bookCardHtml(b, prog, hl) {
     const [bg, fg] = paletteFor(b.title || b.id);
     const cover = b.cover ? `<img alt="" src="${b.cover}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
     const pct = prog && typeof prog.percentage === "number" ? Math.max(0, Math.min(100, prog.percentage)) : null;
@@ -464,15 +491,22 @@
     const badge = (statusLabel || (pct ? `${pct.toLocaleString("fa-IR")}٪ خوانده‌شده` : (prog ? "شروع‌شده" : "خوانده‌نشده"))) + catalogLabel;
     return `<article class="book-card" tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="باز کردن ${esc(b.title)}">
           <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${bar}</div>
-          <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p><span class="book-badge">${badge}</span></div>
+          <div class="book-meta"><h3 title="${esc(b.title)}">${libMarkHtml(b.title, hl)}</h3><p>${libMarkHtml(b.author || "نویسنده نامشخص", hl)}</p><span class="book-badge">${badge}</span></div>
           <button class="remove-book" type="button" data-remove="${esc(b.id)}" aria-label="حذف ${esc(b.title)}" title="حذف">×</button>
           <button class="book-options" type="button" data-options="${esc(b.id)}" aria-label="تنظیمات ${esc(b.title)}" title="وضعیت و قفسه">⋯</button>
           ${account && b.serverId && !b.catalogStatus ? `<button class="share-book" type="button" data-share="${esc(b.id)}" aria-label="پیشنهاد ${esc(b.title)} برای کتابخانهٔ عمومی" title="پیشنهاد برای کتابخانهٔ عمومی">⇪</button>` : ""}
         </article>`;
   }
+  let libRenderSeq = 0;
   function renderLibrary() {
-    const query = $("searchInput").value.trim().toLocaleLowerCase();
+    const seq = ++libRenderSeq;
+    const raw = $("searchInput").value.trim();
+    $("librarySearchClear").hidden = !raw;
     Promise.all([getAllBooks(), getAllProgress()]).then(([books, progressList]) => {
+      if (seq !== libRenderSeq) return; // a newer render (e.g. the next keystroke) is on its way
+      const query = libFold(raw).key;
+      const shelfName = new Map(shelvesCache.map(x => [x.uid, x.name]));
+      const haystack = b => libFold([b.title, b.author, b.publisher, ...(b.shelves || []).map(u => shelfName.get(u))].filter(Boolean).join("\u0000")).key;
       const prog = new Map(progressList.map(p => [p.bookId, p]));
       const lastRead = b => (prog.get(b.id) && prog.get(b.id).updatedAt) || 0;
       const sort = readerPrefs.librarySort;
@@ -480,11 +514,12 @@
       else if (sort === "read") books.sort((a, b) => lastRead(b) - lastRead(a) || (b.addedAt || 0) - (a.addedAt || 0));
       else books.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
       const f = readerPrefs.libraryFilter || "all";
-      const filtered = books.filter(b => `${b.title} ${b.author}`.toLocaleLowerCase().includes(query))
+      const filtered = books.filter(b => !query || haystack(b).includes(query))
         .filter(b => f === "all" || (f.startsWith("status:") ? (b.status || (prog.get(b.id)?.cfi ? "reading" : "")) === f.slice(7) : (b.shelves || []).includes(f.slice(6))));
       renderFilters(books);
       renderStats(books);
-      $("bookGrid").innerHTML = filtered.map(b => bookCardHtml(b, prog.get(b.id))).join("");
+      $("bookGrid").innerHTML = filtered.map(b => bookCardHtml(b, prog.get(b.id), query)).join("");
+      // While searching the «ادامهٔ مطالعه» shelf is hidden: the grid is the single result list the count refers to.
       const reading = query ? [] : books.filter(b => { const p = prog.get(b.id); return p && p.cfi && (p.percentage || 0) < 100; })
         .sort((a, b) => lastRead(b) - lastRead(a)).slice(0, 8);
       $("continueSection").hidden = reading.length === 0;
@@ -492,9 +527,14 @@
       updateStorageInfo();
       $("emptyState").classList.toggle("visible", books.length === 0);
       $("bookGrid").style.display = books.length ? "grid" : "none";
+      const countEl = $("librarySearchCount");
+      countEl.hidden = !query || !books.length || !filtered.length;
+      countEl.textContent = query && filtered.length ? `${filtered.length.toLocaleString("fa-IR")} کتاب پیدا شد` : "";
       if (books.length && !filtered.length) {
         $("bookGrid").style.display = "block";
-        $("bookGrid").innerHTML = '<p class="muted">کتابی با این عبارت پیدا نشد.</p>';
+        $("bookGrid").innerHTML = query
+          ? '<div class="lib-search-empty" role="status"><p>کتابی با این عبارت پیدا نشد</p><button type="button" class="secondary-button" data-search-clear>× پاک کردن جستجو</button></div>'
+          : '<p class="muted">کتابی با این عبارت پیدا نشد.</p>';
       }
     }).catch(() => showToast("خواندن کتابخانه محلی ناموفق بود."));
   }
@@ -1879,7 +1919,37 @@
       hideSelectionBar(); renderNotesList();
     }
   });
-  $("searchInput").addEventListener("input", renderLibrary);
+  // v8.5 library search: debounced live filter, × / Escape clear, "/" focuses it, query kept per tab session only.
+  try { $("searchInput").value = sessionStorage.getItem(LIB_SEARCH_KEY) || ""; } catch (_) {}
+  let libSearchTimer = null;
+  function storeLibSearch() {
+    try { const v = $("searchInput").value.trim(); if (v) sessionStorage.setItem(LIB_SEARCH_KEY, v); else sessionStorage.removeItem(LIB_SEARCH_KEY); } catch (_) {}
+  }
+  function clearLibSearch(focus) {
+    clearTimeout(libSearchTimer);
+    $("searchInput").value = ""; storeLibSearch(); renderLibrary();
+    if (focus) $("searchInput").focus({ preventScroll: true });
+  }
+  $("searchInput").addEventListener("input", () => {
+    $("librarySearchClear").hidden = !$("searchInput").value.trim();
+    clearTimeout(libSearchTimer);
+    libSearchTimer = setTimeout(() => { storeLibSearch(); renderLibrary(); }, 180);
+  });
+  $("searchInput").addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    e.preventDefault(); e.stopPropagation();
+    if ($("searchInput").value) clearLibSearch(true); else $("searchInput").blur();
+  });
+  $("librarySearchClear").addEventListener("click", () => clearLibSearch(true));
+  $("bookGrid").addEventListener("click", e => { if (e.target.closest("[data-search-clear]")) clearLibSearch(true); });
+  document.addEventListener("keydown", e => {
+    if (!(e.key === "/" || (e.code === "Slash" && !e.shiftKey)) || e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+    if (readerOpen() || $("viewMine").hidden || document.querySelector("dialog[open]")) return;
+    const t = e.target;
+    if (t && t.closest && (t.closest("input, textarea, select, [contenteditable]") || t.isContentEditable)) return;
+    e.preventDefault();
+    $("searchInput").focus(); $("searchInput").select();
+  });
   inputEls.forEach(el => el?.addEventListener("change", e => importFile(e.target.files?.[0])));
   const onLibraryClick = async e => {
     const optBtn = e.target.closest("[data-options]");

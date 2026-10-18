@@ -60,7 +60,7 @@
           <select id="librarySort" class="reader-select sort-select" aria-label="مرتب‌سازی کتاب‌ها">
             <option value="added">تازه‌ترین افزوده</option><option value="read">آخرین مطالعه</option><option value="title">عنوان</option>
           </select>
-          <label class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="جست‌وجوی کتاب…" autocomplete="off"></label>
+          <div id="librarySearchBox" class="search-box lib-search" role="search"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="جستجو در عنوان، نویسنده، ناشر…" autocomplete="off" aria-label="جستجو در کتابخانهٔ من" aria-keyshortcuts="/" enterkeyhint="search"><button id="librarySearchClear" class="lib-search-clear" type="button" aria-label="پاک کردن جستجو" title="پاک کردن جستجو (Esc)" hidden>×</button></div>
           <label class="secondary-button import-button">افزودن EPUB<input id="epubInputSmall" type="file" accept=".epub,application/epub+zip" hidden></label>
           <button id="cleanOpen" class="secondary-button clean-open" type="button" aria-haspopup="dialog" title="حذف عبارت‌های ناخواسته (مثل لینک کانال) از متن همهٔ کتاب‌ها">🧹 پاک‌سازی متن</button>
         </div>
@@ -73,6 +73,7 @@
         <div class="stat-mini"><b id="statFinished">۰</b><span>کتاب تمام‌شده</span></div>
       </div>
       <div id="libraryFilters" class="filter-chips" role="group" aria-label="فیلتر کتابخانه"></div>
+      <p id="librarySearchCount" class="lib-search-count" aria-live="polite" hidden></p>
       <div id="continueSection" class="continue-section" hidden>
         <h3 class="shelf-title">ادامهٔ مطالعه</h3>
         <div id="continueShelf" class="continue-shelf"></div>
