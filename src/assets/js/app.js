@@ -613,6 +613,7 @@
     if (!record) { showToast("فایل این کتاب روی دستگاه پیدا نشد."); return; }
     if (!librariesReady()) { showToast("کتاب‌خوان کامل بارگذاری نشده است. صفحه را تازه‌سازی کن."); return; }
     const token = ++openToken;
+    clearJumps();
     currentBook = record; currentProgressKey = record.id;
     $("readerTitle").textContent = record.title;
     $("previewBanner").hidden = !record.preview;
@@ -671,6 +672,7 @@
     rendition.on("touchend", onTouchEnd);
     rendition.on("click", onReaderClick);
     rendition.on("selected", onTextSelected);
+    rendition.on("relocated", onJumpRelocated);
     rendition.on("keydown", markActivity); rendition.on("touchstart", markActivity); rendition.on("click", markActivity);
     lastTurnAt = 0; markActivity(); updateWakeLock();
     if (!record.preview && (!record.status || record.status === "want")) setBookMeta(record.id, { status: "reading" }).then(r => { if (r && currentBook && currentBook.id === r.id) currentBook = r; });
@@ -713,6 +715,7 @@
     }
     if (!shown) await rendition.display();
     if (token !== openToken) return;
+    maybeShowGuide();
     const nav = await bookInstance.loaded.navigation;
     if (token !== openToken) return;
     const toc = nav.toc || [];
@@ -720,7 +723,7 @@
     const flat = [];
     (function walk(items, depth) { (items || []).forEach(it => { flat.push({ it, depth }); if (depth < 2) walk(it.subitems, depth + 1); }); })(toc, 0);
     $("tocList").innerHTML = flat.length ? flat.map(({ it, depth }, i) => `<button class="toc-link${depth ? " toc-sub toc-d" + depth : ""}" type="button" dir="auto" data-href="${esc(it.href)}">${esc((it.label || "").trim() || `بخش ${i+1}`)}</button>`).join("") : '<p class="muted">فهرست فصل‌ها در این EPUB وجود ندارد.</p>';
-    $("tocList").querySelectorAll("[data-href]").forEach(btn => btn.addEventListener("click", () => { closeToc(false); if (rendition) rendition.display(btn.dataset.href); }));
+    $("tocList").querySelectorAll("[data-href]").forEach(btn => btn.addEventListener("click", () => { closeToc(false); jumpTo(btn.dataset.href); }));
     await renderBookAnnotations();
     updateBookmarkButton();
     prepareLocations(record, token);
@@ -743,6 +746,7 @@
     $("reader").classList.remove("toc-open", "immersive");
     closeSettings(false);
     closeSearch(false);
+    clearJumps(); closeGuide(false);
     hideSelectionBar(); renderedHighlights = new Set();
     ttsStop(); $("notePopup").hidden = true; $("lookupBox").hidden = true; closeImage();
     $("bookSearchResults").innerHTML = ""; $("bookSearchStatus").textContent = ""; $("bookSearchInput").value = "";
@@ -811,6 +815,11 @@
   function handleReaderKey(e) {
     if (!readerOpen() || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
     const tag = (e.target && e.target.tagName) || "";
+    // The first-run guide is modal: only Escape (closes it) and Tab (kept on its button) do anything.
+    if (guideOpen() && e.key !== "Escape") {
+      if (e.key === "Tab") { e.preventDefault(); $("readerGuideOk").focus(); }
+      return;
+    }
     if (/^(INPUT|SELECT|TEXTAREA)$/.test(tag)) return;
     if (tag === "BUTTON" && (e.key === " " || e.key === "Enter")) return;
     let handled = true;
@@ -822,7 +831,8 @@
       case " ": if (e.shiftKey) goBack(); else goForward(); break;
       case "Escape":
         // Innermost layer first; this also runs for keys pressed while focus is inside the book iframe.
-        if (!$("imageViewer").hidden) closeImage();
+        if (guideOpen()) closeGuide(true);
+        else if (!$("imageViewer").hidden) closeImage();
         else if (!$("notePopup").hidden || !$("lookupBox").hidden) { $("notePopup").hidden = true; $("lookupBox").hidden = true; }
         else if (!$("selectionBar").hidden) hideSelectionBar();
         else if (searchOpen()) closeSearch(true);
@@ -887,6 +897,116 @@
   $("tocBackdrop").addEventListener("click", () => closeToc(true));
   document.addEventListener("keydown", handleReaderKey);
   document.addEventListener("keydown", () => { if (currentBook) markActivity(); });
+
+  // ---- «برگشت به جای قبلی» (v8.2): a jump (not a page turn) remembers where the reader was ----
+  const JUMP_STACK_MAX = 10, JUMP_HIDE_AFTER_TURNS = 5;
+  // stack: CFIs to go back to (newest last). pending: a jump whose relocation has not settled yet.
+  const jumps = { stack: [], pending: null, timer: 0, turns: 0, lastCfi: null };
+  function currentStartCfi() {
+    try { const loc = rendition && rendition.currentLocation(); return (loc && loc.start && loc.start.cfi) || null; } catch (_) { return null; }
+  }
+  /** Remember the current page before a jump that epub.js (or jumpTo) is about to make. kind "back" = returning via the chip. */
+  function noteJumpOrigin(kind) {
+    if (!rendition) return;
+    clearTimeout(jumps.timer);
+    jumps.pending = { from: currentStartCfi(), kind: kind || "jump" };
+    jumps.timer = setTimeout(settleJump, 2500); // no relocation at all (link to the same page): settle anyway
+  }
+  /**
+   * jumpTo(target): the one entry point for every non-page-turn navigation — TOC entries, search results,
+   * notes/bookmarks list, footnote targets, and future callers such as a whole-book seek bar.
+   * `target` is anything rendition.display() accepts (CFI or href). It records the current start CFI first so the
+   * «↩ برگشت به صفحهٔ قبل» chip can return there, then returns rendition.display(target)'s promise.
+   * Plain page turns keep using rendition.next()/prev(). Nothing is stored, so previews (preview-*) are safe.
+   */
+  function jumpTo(target) {
+    if (!rendition) return Promise.resolve();
+    noteJumpOrigin("jump");
+    return rendition.display(target);
+  }
+  function settleJump() {
+    clearTimeout(jumps.timer);
+    const p = jumps.pending; jumps.pending = null;
+    if (!p || !rendition) return;
+    const here = currentStartCfi();
+    if (p.kind === "jump" && p.from && here && p.from !== here && jumps.stack[jumps.stack.length - 1] !== p.from) {
+      jumps.stack.push(p.from);
+      if (jumps.stack.length > JUMP_STACK_MAX) jumps.stack.shift();
+    }
+    jumps.turns = 0; jumps.lastCfi = here;
+    updateBackChip();
+  }
+  function onJumpRelocated(location) {
+    const cfi = location && location.start && location.start.cfi;
+    if (!cfi) return;
+    if (jumps.pending) { clearTimeout(jumps.timer); jumps.timer = setTimeout(settleJump, 400); return; } // wait for the jump to settle
+    if (!jumps.stack.length || cfi === jumps.lastCfi) return;
+    jumps.lastCfi = cfi;
+    // After ~5 page turns away from the jump target the way back is no longer interesting.
+    if (++jumps.turns >= JUMP_HIDE_AFTER_TURNS) clearJumps();
+  }
+  function clearJumps() {
+    clearTimeout(jumps.timer);
+    jumps.stack = []; jumps.pending = null; jumps.turns = 0; jumps.lastCfi = null;
+    updateBackChip();
+  }
+  function updateBackChip() { const chip = $("backChip"); if (chip) chip.hidden = jumps.stack.length === 0; }
+  $("backChip").addEventListener("click", () => {
+    const cfi = jumps.stack.pop();
+    updateBackChip();
+    if (!cfi || !rendition) return;
+    noteJumpOrigin("back");
+    rendition.display(cfi);
+  });
+
+  // ---- First-run gesture guide (v8.2): shown once per device, can be reopened from the settings panel ----
+  const GUIDE_KEY = "borg-guide-seen" + STORAGE_SUFFIX;
+  let guideReturnFocus = null;
+  function guideOpen() { return !$("readerGuide").hidden; }
+  function maybeShowGuide() {
+    let seen = true;
+    try { seen = localStorage.getItem(GUIDE_KEY) === "1"; } catch (_) {}
+    if (!seen) showGuide(null);
+  }
+  function showGuide(returnFocus) {
+    const rtl = bookIsRtl(), scrolled = readerPrefs.flow === "scrolled", edges = readerPrefs.taps !== false && !scrolled;
+    const nextSide = rtl ? "چپ" : "راست", prevSide = rtl ? "راست" : "چپ";
+    const items = [];
+    if (scrolled) {
+      items.push(["scroll", "حالت پیمایشی: متن را با کشیدن انگشت یا چرخ ماوس بالا و پایین ببر؛ برای فصل بعد و قبل از دکمه‌های «بعدی» و «قبلی» استفاده کن."]);
+      items.push(["middle", "لمس صفحه: حالت تمام‌صفحه (برای برگشتن نوارها دوباره لمس کن)."]);
+    } else {
+      if (edges) {
+        items.push(["next", `لمس لبهٔ ${nextSide} صفحه: صفحهٔ بعد`]);
+        items.push(["prev", `لمس لبهٔ ${prevSide} صفحه: صفحهٔ قبل`]);
+        items.push(["middle", "لمس وسط صفحه: حالت تمام‌صفحه (برای برگشتن نوارها دوباره لمس کن)."]);
+      } else {
+        items.push(["edges-off", "ورق زدن با لمس لبه‌ها در تنظیمات خاموش است؛ با کشیدن انگشت یا دکمه‌های «قبلی» و «بعدی» ورق بزن."]);
+        items.push(["middle", "لمس صفحه: حالت تمام‌صفحه (برای برگشتن نوارها دوباره لمس کن)."]);
+      }
+      items.push(["swipe", `روی گوشی و تبلت: کشیدن انگشت به ${prevSide} صفحهٔ بعد را می‌آورد و به ${nextSide} صفحهٔ قبل را.`]);
+      items.push(["keys", `صفحه‌کلید: کلید ${rtl ? "←" : "→"} صفحهٔ بعد و ${rtl ? "→" : "←"} صفحهٔ قبل.`]);
+    }
+    items.push(["settings", "دکمهٔ «Aa» بالای صفحه: فونت، اندازهٔ متن، رنگ صفحه و نحوهٔ نمایش."]);
+    $("readerGuideList").innerHTML = items.map(([k, t]) => `<li data-guide="${k}">${esc(t)}</li>`).join("");
+    const left = $("readerGuideLeft"), right = $("readerGuideRight");
+    left.hidden = right.hidden = !edges;
+    left.textContent = rtl ? "← صفحهٔ بعد" : "← صفحهٔ قبل";
+    right.textContent = rtl ? "صفحهٔ قبل →" : "صفحهٔ بعد →";
+    guideReturnFocus = returnFocus || null;
+    $("readerGuide").hidden = false;
+    setTimeout(() => { if (guideOpen()) $("readerGuideOk").focus({ preventScroll: true }); }, 30);
+  }
+  /** remember=true: the reader dismissed it, so it is not shown automatically again on this device. */
+  function closeGuide(remember) {
+    if (!guideOpen()) return;
+    $("readerGuide").hidden = true;
+    if (remember) { try { localStorage.setItem(GUIDE_KEY, "1"); } catch (_) {} }
+    const back = guideReturnFocus; guideReturnFocus = null;
+    if (back && remember) back.focus({ preventScroll: true });
+  }
+  $("readerGuideOk").addEventListener("click", () => closeGuide(true));
+  $("showGuide").addEventListener("click", () => { closeSettings(false); showGuide($("settingsToggle")); });
 
   // ======================= Reading features (v8) =======================
   function reopenCurrentBook() {
@@ -974,7 +1094,7 @@
     return true;
   }
   $("notePopupClose").addEventListener("click", () => { $("notePopup").hidden = true; });
-  $("notePopupGo").addEventListener("click", () => { $("notePopup").hidden = true; if (rendition && noteTarget) rendition.display(noteTarget); });
+  $("notePopupGo").addEventListener("click", () => { $("notePopup").hidden = true; if (rendition && noteTarget) jumpTo(noteTarget); });
   function openImage(src) {
     if (!src) return;
     $("imageViewerImg").src = src;
@@ -1013,8 +1133,13 @@
       const a = e.target.closest && e.target.closest("a[href]");
       if (a && isNoteRef(a)) {
         e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
-        showFootnote(contents, a).then(ok => { if (!ok && rendition) rendition.display(a.getAttribute("href")); }).catch(() => {});
+        showFootnote(contents, a).then(ok => { if (!ok && rendition) jumpTo(a.getAttribute("href")); }).catch(() => {});
         return;
+      }
+      // Other internal links are followed by epub.js itself (same rules as its replaceLinks): remember the page first.
+      if (a) {
+        const href = a.getAttribute("href") || "";
+        if (href.indexOf("mailto:") !== 0 && href.indexOf("://") < 0) noteJumpOrigin("jump");
       }
       const img = !a && e.target.closest && e.target.closest("img, image");
       if (img) {
@@ -1258,7 +1383,7 @@
     const btn = e.target.closest("[data-cfi]");
     if (!btn || !rendition) return;
     closeSearch(false);
-    rendition.display(btn.dataset.cfi);
+    jumpTo(btn.dataset.cfi);
   });
   document.addEventListener("click", e => {
     if (searchOpen() && !$("searchPanel").contains(e.target) && !$("searchToggle").contains(e.target)) closeSearch(false);
@@ -1399,7 +1524,7 @@
       return;
     }
     const item = e.target.closest("[data-goto]");
-    if (item && rendition) { closeToc(false); rendition.display(item.dataset.goto); }
+    if (item && rendition) { closeToc(false); jumpTo(item.dataset.goto); }
   });
   $("exportNotes").addEventListener("click", async () => {
     if (!currentBook) return;

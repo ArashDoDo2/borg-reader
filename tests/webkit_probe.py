@@ -46,7 +46,8 @@ async def probe(p, url, name, debug, prefs):
     b = await p.webkit.launch()
     ctx = await b.new_context(viewport={"width": 820, "height": 1180}, has_touch=True)
     await ctx.add_init_script(f"localStorage.setItem('borg-debug', {json.dumps(json.dumps(debug))});"
-                              f"localStorage.setItem('ketabkhane-reader-preferences', {json.dumps(json.dumps(prefs))});")
+                              f"localStorage.setItem('ketabkhane-reader-preferences', {json.dumps(json.dumps(prefs))});"
+                              "localStorage.setItem('borg-guide-seen', '1');")
     pg = await ctx.new_page()
     logs = []
     pg.on("pageerror", lambda e: logs.append(str(e)[:150]))

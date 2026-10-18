@@ -205,6 +205,7 @@
         <label class="setting-check"><input id="prefDigits" type="checkbox"> اعداد متن به فارسی نمایش داده شوند</label>
         <label class="setting-check"><input id="prefTaps" type="checkbox"> ورق زدن با لمس لبه‌های صفحه</label>
         <label class="setting-check"><input id="prefWake" type="checkbox"> صفحه هنگام خواندن خاموش نشود</label>
+        <button id="showGuide" class="text-button show-guide" type="button">نمایش راهنمای ورق زدن</button>
       </div>
     </div>
     <div class="reader-layout">
@@ -249,6 +250,16 @@
           <div class="note-popup-actions"><button id="lookupClose" class="text-button" type="button">بستن</button></div>
         </div>
         <div class="immersive-progress" aria-hidden="true"><span id="immersiveBar"></span></div>
+        <button id="backChip" class="back-chip" type="button" hidden>↩ برگشت به صفحهٔ قبل</button>
+        <div id="readerGuide" class="reader-guide" role="dialog" aria-modal="true" aria-labelledby="readerGuideTitle" hidden>
+          <div id="readerGuideLeft" class="reader-guide-edge left" aria-hidden="true"></div>
+          <div id="readerGuideRight" class="reader-guide-edge right" aria-hidden="true"></div>
+          <div class="reader-guide-card">
+            <h2 id="readerGuideTitle">راهنمای ورق زدن</h2>
+            <ul id="readerGuideList" class="reader-guide-list"></ul>
+            <button id="readerGuideOk" class="primary-button" type="button">متوجه شدم</button>
+          </div>
+        </div>
         <div id="selectionBar" class="selection-bar" role="toolbar" aria-label="ابزار متن انتخاب‌شده" hidden>
           <span class="sel-new">
             <button type="button" class="hl-swatch" data-hl="yellow" aria-label="هایلایت زرد"></button>
