@@ -63,8 +63,8 @@ Host: shared cPanel, HTTPS. Repository cloned by cPanel Git Version Control outs
 - branch `staging` → `~/public_html/borg-test/` (staging)
 
 and forces permissions to 644/755 (v5 shipped files with 600 → HTTP 403, ADR 0004).
-`scripts/smoke-test.sh` verifies a deployment over HTTP. The legacy `/reader/` path is handled separately
-(see ADR 0002).
+`scripts/smoke-test.sh` verifies a deployment over HTTP. The legacy `/reader/` path was removed on
+2026-10-18 (ADR 0002).
 
 ## 7. Testing
 `tests/e2e_test.py` serves `src/` under `/borg/`, blocks all non-local requests and runs 27 checks
