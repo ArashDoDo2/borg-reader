@@ -97,7 +97,7 @@ body.dark .empty-state{background:#202b2570}
  .hero{margin:16px 12px 34px;padding:25px 22px;min-height:0;border-radius:21px}.hero-art{display:none}.hero h1{font-size:29px}
  .library-section{padding:0 16px}.section-heading{align-items:stretch;flex-direction:column}.library-controls{width:100%}.search-box{flex:1;min-width:0}.import-button{padding:10px 12px}
  .book-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 14px}.book-cover-thumb{max-height:260px}.remove-book{opacity:1}
- .reader-toolbar{height:auto;min-height:62px;padding:9px 10px;gap:7px}.reader-toolbar>.secondary-button{font-size:10px;padding:8px}.reader-title{font-size:12px;flex:1}.reader-tools{gap:4px}.reader-tools .icon-button{min-width:34px;height:36px;padding:0 5px;font-size:11px}
+ .reader-toolbar{height:auto;min-height:62px;padding:9px 10px;gap:7px}.reader-toolbar>.secondary-button{font-size:10px;padding:8px}.reader-title{font-size:12px;flex:1}.reader-tools{gap:4px}.reader-tools .icon-button{min-width:40px;height:40px;padding:0 7px;font-size:14px}
  .reader-layout{display:flex;flex-direction:column}.toc-panel{display:none}.reading-area{padding:0 8px}.page-nav{height:48px}.viewer{border-radius:10px}.reader-bottom{font-size:9px}
  footer{flex-direction:column;gap:4px}
 }
@@ -369,3 +369,8 @@ body.dark .cat-chip{background:#3d3524;color:#e5c58b}
 .toc-link.toc-d1{padding-inline-start:24px}
 .toc-link.toc-d2{padding-inline-start:38px}
 .toc-link.toc-sub.active{color:var(--green2)}
+
+/* v8.1.5: drawn toolbar icons (font glyphs rendered tiny on some phones) */
+.icon-button{display:inline-flex;align-items:center;justify-content:center}
+.icon-button .ico{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
+.settings-toggle{font-weight:700;font-size:16px}

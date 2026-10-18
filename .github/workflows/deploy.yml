@@ -86,6 +86,11 @@ jobs:
         run: |
           if [ "$BRANCH" = "main" ]; then URL="https://parsun.com/borg/"; else URL="https://parsun.com/borg-test/"; fi
           VERSION=$(sed -n 's/.*name="app-version" content="\([^"]*\)".*/\1/p' src/index.html | head -1)
+          # The server pulls the branch head; if a newer commit landed meanwhile, expect that commit's version.
+          if git fetch -q --depth=1 origin "$BRANCH" && [ "$(git rev-parse FETCH_HEAD)" != "$GITHUB_SHA" ]; then
+            VERSION=$(git show FETCH_HEAD:src/index.html | sed -n 's/.*name="app-version" content="\([^"]*\)".*/\1/p' | head -1)
+            echo "Newer commit on $BRANCH; expecting version $VERSION"
+          fi
           # cPanel deployment runs asynchronously; give it a moment, then retry.
           for i in 1 2 3 4 5 6; do
             sleep 10

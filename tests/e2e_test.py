@@ -962,6 +962,10 @@ async def run(url):
         check("nested TOC entries are listed", await D_.locator("#tocList .toc-sub", has_text="Second article").count() == 1)
         await D_.locator("#tocList .toc-sub", has_text="Second article").click(); await D_.wait_for_timeout(2000)
         check("English book: nested TOC entry opens its section at the start", await D_.evaluate(H1_VISIBLE, "Second article"))
+        await D_.set_viewport_size({"width": 390, "height": 844}); await D_.wait_for_timeout(600)
+        icons = await D_.evaluate("""()=>['ttsToggle','searchToggle','tocToggle'].map(id=>{const b=document.getElementById(id);const i=b&&b.querySelector('svg.ico');
+          if(!i)return [id,0,0];const r=i.getBoundingClientRect(),q=b.getBoundingClientRect();return [id,Math.round(r.width),Math.round(Math.min(q.width,q.height))]})""")
+        check("v8.1.5 mobile: toolbar icons are drawn at a readable size", all(w >= 18 and bw >= 38 for _, w, bw in icons), str(icons))
         check("v8.1.1 direction: no JS errors", len(errsD) == 0, str(errsD[:3]))
         await ctxD.close(); shutil.rmtree(tmpd, ignore_errors=True)
         await b.close()
