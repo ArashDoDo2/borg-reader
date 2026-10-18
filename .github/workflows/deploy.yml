@@ -1,0 +1,79 @@
+# Test, then deploy through cPanel Git Version Control:
+#   push to staging -> https://parsun.com/borg-test/
+#   push to main    -> https://parsun.com/borg/
+# Secrets (Settings > Secrets and variables > Actions): CPANEL_TOKEN (Git Version Control only), CPANEL_USER, CPANEL_HOST.
+name: test-and-deploy
+
+on:
+  push:
+    branches: [staging, main]
+  workflow_dispatch:
+
+# One clone on the server serves both branches, so deployments must never overlap.
+concurrency:
+  group: cpanel-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Playwright + Chromium
+        run: |
+          pip install playwright==1.48.0
+          python -m playwright install --with-deps chromium
+      - name: End-to-end tests (/borg/)
+        run: python tests/e2e_test.py
+      - name: End-to-end tests (/borg-test/)
+        run: python tests/e2e_test.py --base /borg-test/
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CPANEL_TOKEN: ${{ secrets.CPANEL_TOKEN }}
+      CPANEL_USER: ${{ secrets.CPANEL_USER }}
+      CPANEL_HOST: ${{ secrets.CPANEL_HOST }}
+      REPO_ROOT: /home/${{ secrets.CPANEL_USER }}/repositories/borg-reader
+      BRANCH: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check secrets
+        run: |
+          if [ -z "$CPANEL_TOKEN" ] || [ -z "$CPANEL_USER" ] || [ -z "$CPANEL_HOST" ]; then
+            echo "::error::CPANEL_TOKEN, CPANEL_USER and CPANEL_HOST secrets are required"; exit 1
+          fi
+      - name: Pull branch on the server
+        run: |
+          set -euo pipefail
+          resp=$(curl -sS --fail-with-body -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/VersionControl/update" \
+            --data-urlencode "repository_root=${REPO_ROOT}" --data-urlencode "branch=${BRANCH}" -G)
+          echo "$resp" | python3 -c 'import json,sys; r=json.load(sys.stdin); print("status", r.get("status"), r.get("errors")); sys.exit(0 if r.get("status")==1 else 1)'
+      - name: Deploy HEAD commit
+        run: |
+          set -euo pipefail
+          resp=$(curl -sS --fail-with-body -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
+            "https://${CPANEL_HOST}:2083/execute/VersionControlDeployment/create" \
+            --data-urlencode "repository_root=${REPO_ROOT}" -G)
+          echo "$resp" | python3 -c 'import json,sys; r=json.load(sys.stdin); print("status", r.get("status"), r.get("errors")); sys.exit(0 if r.get("status")==1 else 1)'
+      - name: Smoke test
+        run: |
+          if [ "$BRANCH" = "main" ]; then URL="https://parsun.com/borg/"; else URL="https://parsun.com/borg-test/"; fi
+          VERSION=$(sed -n 's/.*name="app-version" content="\([^"]*\)".*/\1/p' src/index.html | head -1)
+          # cPanel deployment runs asynchronously; give it a moment, then retry.
+          for i in 1 2 3 4 5 6; do
+            sleep 10
+            if bash scripts/smoke-test.sh "$URL" "$VERSION"; then exit 0; fi
+            echo "Not live yet, retrying ($i/6)"
+          done
+          exit 1
