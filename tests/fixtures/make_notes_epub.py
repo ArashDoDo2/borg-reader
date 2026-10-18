@@ -19,6 +19,7 @@ z.writestr("OEBPS/c1.xhtml", '''<?xml version="1.0" encoding="utf-8"?><html xmln
 <p id="p1">این جمله یک پانویس دارد<a id="r1" epub:type="noteref" href="notes.xhtml#n1"><sup>۱</sup></a> و ادامه پیدا می‌کند. سال 1404 است.</p>
 <p id="p2">این جمله پانویس قدیمی دارد<sup><a id="r2" href="#fn2">2</a></sup> که در همین فایل است.</p>
 <p><img id="pic" src="pic.png" alt="تصویر آزمایشی" style="width:200px;height:150px"/></p>
+<p id="p3">نیم‌فاصلهٔ قدیمی: صیقل‏یافته و مى‏کنم.</p>
 <p>پاراگراف آخر.</p>
 <p id="fn2">2. این پانویس دوم در همین فایل است.</p>
 </body></html>''', D)

@@ -871,9 +871,25 @@
     else if (e.target.closest(".image-viewer-scroll") === null || e.target.classList.contains("image-viewer-scroll")) closeImage();
   });
   document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("imageViewer").hidden) { e.stopImmediatePropagation(); closeImage(); } }, true);
+  // Many Persian EPUBs (old keyboards / converters) use RLM (U+200F) where a ZWNJ half-space was meant.
+  // RLM does not stop letters from joining, so "صیقل‌یافته" renders as "صیقلیافته". Same length, so CFIs stay valid.
+  const AR_LETTER = "[\u0620-\u064A\u066E-\u06D3\u06D5\u06EE\u06EF\u06FA-\u06FC\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFC]";
+  const RLM_AS_ZWNJ = new RegExp(`(${AR_LETTER})\u200F(?=${AR_LETTER}|$)`, "g");
+  function eachTextNode(doc, fn) {
+    const w = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: n => n.parentElement && /^(SCRIPT|STYLE)$/.test(n.parentElement.tagName) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+    });
+    const nodes = [];
+    while (w.nextNode()) nodes.push(w.currentNode);
+    for (const n of nodes) { const v = fn(n.nodeValue); if (v !== n.nodeValue) n.nodeValue = v; }
+  }
+  function fixHalfSpaces(doc) { eachTextNode(doc, v => v.indexOf("\u200F") < 0 ? v : v.replace(RLM_AS_ZWNJ, "$1\u200C")); }
+  /** For search only: one spelling for ی/ي/ى, ک/ك and half-spaces (all single characters, so offsets are unchanged). */
+  function normalizeForSearch(t) { return t.replace(/[يى]/g, "ی").replace(/ك/g, "ک").replace(RLM_AS_ZWNJ, "$1\u200C"); }
   function onBookContent(contents) {
     const doc = contents.document;
     if (!doc || !doc.body) return;
+    try { fixHalfSpaces(doc); } catch (_) {}
     if (readerPrefs.digits) { try { toPersianDigits(doc); } catch (_) {} }
     // Capture phase: runs before epub.js' own link handling, so footnotes open in place instead of jumping.
     doc.addEventListener("click", e => {
@@ -1099,7 +1115,8 @@
       if (results.length >= 100) break;
       try {
         await item.load(book.load.bind(book));
-        for (const v of searchVariants(query)) {
+        try { if (item.document && item.document.body) eachTextNode(item.document, normalizeForSearch); } catch (_) {}
+        for (const v of searchVariants(normalizeForSearch(query))) {
           for (const r of item.find(v)) { if (!seen.has(r.cfi)) { seen.add(r.cfi); results.push({ ...r, index: item.index }); } }
         }
       } catch (_) {} finally { try { item.unload(); } catch (_) {} }
