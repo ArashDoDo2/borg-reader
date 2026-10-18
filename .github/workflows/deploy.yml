@@ -35,6 +35,23 @@ jobs:
       - name: End-to-end tests
         run: python tests/e2e_test.py
 
+  # Safari engine check (informational for now): reports via annotations whether book text renders in WebKit.
+  webkit-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Playwright + WebKit
+        run: |
+          pip install playwright==1.56.0
+          python -m playwright install --with-deps webkit
+      - name: Probe
+        run: python tests/webkit_probe.py
+
   deploy:
     needs: test
     runs-on: ubuntu-latest
