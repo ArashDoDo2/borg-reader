@@ -58,6 +58,7 @@ async def new_ctx(browser, url, external, errors, **kw):
     return ctx, pg
 
 async def run(url):
+    suffix = "-test" if "/borg-test/" in url else ""
     sample, corrupt = str(FIX / "sample-fa.epub"), str(FIX / "corrupt.epub")
     async with async_playwright() as p:
         b = await p.chromium.launch()
@@ -101,8 +102,10 @@ async def run(url):
         await pg.reload(); await pg.wait_for_timeout(1000)
         await pg.click(".book-card"); await pg.wait_for_timeout(2500)
         check("reopen restores position", (await visible_text(pg) or "").startswith("فصل دوم"), await visible_text(pg))
-        fs = await pg.evaluate("JSON.parse(localStorage.getItem('ketabkhane-reader-preferences')||'{}').fontSize")
+        fs = await pg.evaluate(f"JSON.parse(localStorage.getItem('ketabkhane-reader-preferences{suffix}')||'{{}}').fontSize")
         check("font size persisted", fs == 120, str(fs))
+        dbs = await pg.evaluate("indexedDB.databases().then(d=>d.map(x=>x.name))")
+        check("uses the right database for this path", dbs == ["ketabkhane-db" + suffix], str(dbs))
         await pg.click("#closeReader")
 
         # 2. Offline after first visit

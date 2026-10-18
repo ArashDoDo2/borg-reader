@@ -1,5 +1,5 @@
 // Bump this name on every release so old caches are removed.
-const CACHE_NAME = "ketabkhane-shell-v5-offline";
+const CACHE_NAME = "borg-shell-v6.0.0";
 const APP_SHELL = [
   "./",
   "./index.html",

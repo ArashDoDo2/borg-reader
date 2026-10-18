@@ -1,11 +1,15 @@
-/* Prototype only: local library. Cloud accounts and cross-device sync are not implemented yet. */
+/* Borg (بُرگ) — local EPUB library and reader. Cloud accounts and sync are not implemented yet. */
 (() => {
   "use strict";
-  const DB_NAME = "ketabkhane-db";
+  // Storage names predate the rename and are kept so existing books survive (ADR 0003).
+  // Staging shares the origin with production, so it gets its own storage (ADR 0005).
+  const STORAGE_SUFFIX = location.pathname.includes("/borg-test/") ? "-test" : "";
+  const DB_NAME = "ketabkhane-db" + STORAGE_SUFFIX;
+  const THEME_KEY = "ketab-theme" + STORAGE_SUFFIX;
   const DB_VERSION = 1;
   let db, currentBook = null, rendition = null, bookInstance = null, currentProgressKey = null;
   let fontSize = 100, isReaderDark = false, toastTimer;
-  const READER_PREFS_KEY = "ketabkhane-reader-preferences";
+  const READER_PREFS_KEY = "ketabkhane-reader-preferences" + STORAGE_SUFFIX;
   const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100 };
   let readerPrefs = loadReaderPrefs();
   fontSize = Math.min(180, Math.max(70, Number(readerPrefs.fontSize) || 100));
@@ -330,7 +334,7 @@
   }
   $("themeToggle").addEventListener("click", () => {
     document.body.classList.toggle("dark");
-    localStorage.setItem("ketab-theme", document.body.classList.contains("dark") ? "dark" : "light");
+    localStorage.setItem(THEME_KEY, document.body.classList.contains("dark") ? "dark" : "light");
   });
   $("readerTheme").addEventListener("click", setReaderTheme);
   $("readerFont").value = readerPrefs.font;
@@ -388,7 +392,7 @@
     $("networkStatus").style.color = online ? "#4b9874" : "#c67b5c";
   }
   window.addEventListener("online", network); window.addEventListener("offline", network);
-  if (localStorage.getItem("ketab-theme") === "dark") document.body.classList.add("dark");
+  if (localStorage.getItem(THEME_KEY) === "dark") document.body.classList.add("dark");
   openDB().then(database => { db = database; renderLibrary(); }).catch(err => { console.error(err); showToast("مرورگر اجازه ذخیره محلی نمی‌دهد."); });
   network();
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
