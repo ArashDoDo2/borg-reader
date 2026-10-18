@@ -26,16 +26,25 @@ PROBE_JS = """() => {
            visible: pts };
 }"""
 
+DIAG_JS = """() => {
+  const f = document.querySelector('#viewer iframe'); const d = f.contentDocument, b = d.body, r = d.createRange();
+  r.selectNodeContents(b); const br = r.getBoundingClientRect(); let lo = 1e9, hi = -1e9, n = 0, odd = [];
+  for (const q of r.getClientRects()) { n++; if (q.width > 0 && q.height > 0) { lo = Math.min(lo, q.left); hi = Math.max(hi, q.right); } else if (odd.length < 3) odd.push([Math.round(q.left), Math.round(q.width)]); }
+  let elo = 1e9, ehi = -1e9; for (const el of b.querySelectorAll('*')) for (const q of el.getClientRects()) if (q.width > 0 && q.height > 0) { elo = Math.min(elo, q.left); ehi = Math.max(ehi, q.right); }
+  const cs = getComputedStyle(d.documentElement);
+  return { bound: [Math.round(br.left), Math.round(br.right)], rects: [n, Math.round(lo), Math.round(hi)], odd, elems: [Math.round(elo), Math.round(ehi)],
+           html: [cs.width, cs.height, cs.columnWidth, cs.columnGap, cs.direction], bodyDir: getComputedStyle(b).direction };
+}"""
+
 VARIANTS = [
     ("base", {}, {}),
+    ("tw=rects", {"tw": "rects"}, {}),
+    ("tw=elems", {"tw": "elems"}, {}),
     ("noDir", {"noDir": True}, {}),
     ("write", {"method": "write"}, {}),
     ("blobUrl", {"method": "blobUrl"}, {}),
-    ("noDir+write", {"noDir": True, "method": "write"}, {}),
-    ("dirLtrDefault", {"direction": "ltr"}, {}),
     ("scrolled", {}, {"flow": "scrolled"}),
     ("spreadNone", {}, {"spread": "none"}),
-    ("noDir+spreadNone", {"noDir": True}, {"spread": "none"}),
 ]
 
 async def probe(p, url, name, debug, prefs):
@@ -52,6 +61,8 @@ async def probe(p, url, name, debug, prefs):
     first = await pg.evaluate(PROBE_JS)
     await pg.click("#nextPage"); await pg.wait_for_timeout(1500)
     second = await pg.evaluate(PROBE_JS)
+    if name == "base":
+        report(f"[base diag] {await pg.evaluate(DIAG_JS)}")
     report(f"[{name}] open={first} | afterNext.visible={second.get('visible')} | errors={logs[:3]}")
     await b.close()
 

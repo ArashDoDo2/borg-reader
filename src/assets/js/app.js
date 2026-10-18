@@ -21,6 +21,26 @@
   let readerPrefs = loadReaderPrefs();
   // Diagnostics only (set by the WebKit probe): {noDir, method, direction}. Empty for real users.
   let DEBUG = {};
+  // Alternative content-width measurements for WebKit, where Range#getBoundingClientRect over RTL columns is huge.
+  function patchTextWidth(mode) {
+    const C = window.ePub && window.ePub.Contents; if (!C || C.prototype.__borgTw) return;
+    const orig = C.prototype.textWidth; C.prototype.__borgTw = mode;
+    C.prototype.textWidth = function () {
+      try {
+        const doc = this.document, root = this.content || doc.body, r = doc.createRange();
+        if (mode === "rects") {
+          r.selectNodeContents(root); let lo = Infinity, hi = -Infinity;
+          for (const q of r.getClientRects()) { if (q.width > 0 && q.height > 0) { lo = Math.min(lo, q.left); hi = Math.max(hi, q.right); } }
+          if (hi > lo) return Math.round(hi - lo);
+        } else if (mode === "elems") {
+          let lo = Infinity, hi = -Infinity;
+          for (const el of root.querySelectorAll("*")) for (const q of el.getClientRects()) { if (q.width > 0 && q.height > 0) { lo = Math.min(lo, q.left); hi = Math.max(hi, q.right); } }
+          if (hi > lo) return Math.round(hi - lo);
+        }
+      } catch (_) {}
+      return orig.call(this);
+    };
+  }
   try { DEBUG = JSON.parse(localStorage.getItem("borg-debug") || "{}") || {}; } catch (_) {}
   fontSize = Math.min(180, Math.max(70, Number(readerPrefs.fontSize) || 100));
 
@@ -585,6 +605,7 @@
       console.error("EPUB openFailed:", err);
       if (token === openToken) showToast("این فایل EPUB قابل خواندن نیست یا خراب است.");
     });
+    if (DEBUG.tw) patchTextWidth(DEBUG.tw);
     rendition = bookInstance.renderTo("viewer", {
       width: "100%", height: "100%", flow: readerPrefs.flow === "scrolled" ? "scrolled-doc" : "paginated",
       spread: readerPrefs.spread === "none" ? "none" : "auto", manager: "default",
