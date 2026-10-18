@@ -257,6 +257,32 @@ def run(base, tmp):
     st, r = other.call("GET", "annotations", query="&since=0")
     check("annotations are private per user", r["annotations"] == [])
 
+    # ---------- Shelves, reading status, stats (v7.3) ----------
+    st, r = user.call("POST", "shelves", {"items": [{"uid": "shelf-0001", "name": "فلسفه", "position": 1, "updated_at": now},
+                                                    {"uid": "x", "name": "bad"}]})
+    check("shelf saved (invalid skipped)", st == 200 and r["saved"] == 1)
+    st, r = user.call("POST", "shelves", {"items": [{"uid": "shelf-0001", "name": "فلسفهٔ قدیم", "updated_at": now - 100}]})
+    check("older shelf rename ignored", r["saved"] == 0)
+    st, r = user.call("GET", "shelves")
+    check("shelves listed", [x["name"] for x in r["shelves"]] == ["فلسفه"])
+    st, r = user.call("POST", "library-meta", {"items": [{"book_id": book2, "status": "reading", "shelves": ["shelf-0001"], "updated_at": now},
+                                                         {"book_id": book2, "status": "weird", "updated_at": now + 1}]})
+    check("reading status and shelves saved", st == 200 and r["saved"] == 1)
+    st, r = user.call("POST", "library-meta", {"items": [{"book_id": book2, "status": "want", "shelves": [], "updated_at": now - 1}]})
+    check("older status ignored", r["saved"] == 0)
+    st, r = user.call("GET", "library")
+    b2 = [b for b in r["books"] if b["id"] == book2][0]
+    check("library returns status and shelves", b2["status"] == "reading" and b2["shelves"] == ["shelf-0001"])
+    st, r = other.call("POST", "library-meta", {"items": [{"book_id": book2, "status": "finished", "updated_at": now + 50}]})
+    st, r2 = user.call("GET", "library")
+    check("status is per user", [b for b in r2["books"] if b["id"] == book2][0]["status"] == "reading")
+    user.call("POST", "stats", {"device": "device-aaaa", "days": [{"day": "2026-10-18", "seconds": 600}]})
+    user.call("POST", "stats", {"device": "device-bbbb", "days": [{"day": "2026-10-18", "seconds": 300}]})
+    user.call("POST", "stats", {"device": "device-aaaa", "days": [{"day": "2026-10-18", "seconds": 120}]})
+    st, r = user.call("GET", "stats")
+    day = [d for d in r["days"] if d["day"] == "2026-10-18"]
+    check("stats summed across devices, never decrease", day and day[0]["seconds"] == 900, str(r)[:200])
+
     # ---------- Admin management ----------
     st, r = admin.call("GET", "admin-stats")
     check("admin stats", st == 200 and r["users"] == 3 and r["books"] >= 1 and r["storage_bytes"] > 0, str(r))

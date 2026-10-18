@@ -83,7 +83,8 @@ function handle_books_route(string $route): bool {
         case 'library':
             method('GET');
             $s = require_user();
-            $rows = all("SELECT b.*, p.cfi, p.percentage, p.updated_at, c.status AS catalog_status
+            $rows = all("SELECT b.*, p.cfi, p.percentage, p.updated_at, c.status AS catalog_status,
+                                ub.status AS read_status, ub.shelves AS shelf_ids, ub.meta_updated_at
                          FROM user_books ub JOIN books b ON b.id = ub.book_id
                          LEFT JOIN progress p ON p.user_id = ub.user_id AND p.book_id = b.id
                          LEFT JOIN catalog c ON c.book_id = b.id
@@ -91,7 +92,79 @@ function handle_books_route(string $route): bool {
             json_out(200, ['books' => array_map(fn($r) => book_out($r) + [
                 'progress' => $r['cfi'] !== null ? ['cfi' => $r['cfi'], 'percentage' => (int)$r['percentage'], 'updated_at' => (int)$r['updated_at']] : null,
                 'catalog_status' => $r['catalog_status'],
+                'status' => (string)$r['read_status'], 'shelves' => json_decode((string)$r['shelf_ids'], true) ?: [],
+                'meta_updated_at' => (int)$r['meta_updated_at'],
             ], $rows)]);
+
+        case 'library-meta':
+            // Reading status and shelf membership per book; last write wins by client timestamp.
+            method('POST');
+            $s = require_user(true);
+            $items = body_json()['items'] ?? [];
+            if (!is_array($items) || count($items) > 1000) fail(400, 'bad_items', 'Invalid items.');
+            $saved = 0;
+            foreach ($items as $it) {
+                if (!is_array($it)) continue;
+                $bookId = (int)($it['book_id'] ?? 0);
+                $status = (string)($it['status'] ?? '');
+                if (!in_array($status, ['', 'want', 'reading', 'finished'], true)) continue;
+                $shelves = array_values(array_filter(array_map('strval', is_array($it['shelves'] ?? null) ? $it['shelves'] : []), fn($x) => preg_match('/^[A-Za-z0-9-]{8,40}$/', $x)));
+                $at = (int)($it['updated_at'] ?? 0);
+                if ($at <= 0 || $at > (time() + 300) * 1000) $at = (int)(microtime(true) * 1000);
+                $saved += q('UPDATE user_books SET status = ?, shelves = ?, meta_updated_at = ? WHERE user_id = ? AND book_id = ? AND meta_updated_at < ?',
+                            [$status, json_encode(array_slice($shelves, 0, 50)), $at, $s['id'], $bookId, $at])->rowCount();
+            }
+            json_out(200, ['saved' => $saved]);
+
+        case 'shelves':
+            if ($method === 'GET') {
+                $s = require_user();
+                json_out(200, ['shelves' => array_map(fn($r) => [
+                    'uid' => $r['uid'], 'name' => $r['name'], 'position' => (int)$r['position'],
+                    'updated_at' => (int)$r['updated_at'], 'deleted' => (int)$r['deleted'] === 1,
+                ], all('SELECT * FROM shelves WHERE user_id = ? ORDER BY position, updated_at', [$s['id']]))]);
+            }
+            method('POST');
+            $s = require_user(true);
+            $items = body_json()['items'] ?? [];
+            if (!is_array($items) || count($items) > 200) fail(400, 'bad_items', 'Invalid items.');
+            $saved = 0;
+            foreach ($items as $it) {
+                if (!is_array($it)) continue;
+                $uid = (string)($it['uid'] ?? '');
+                $name = trim((string)($it['name'] ?? ''));
+                if (!preg_match('/^[A-Za-z0-9-]{8,40}$/', $uid) || $name === '' || mb_strlen($name) > 80) continue;
+                $at = (int)($it['updated_at'] ?? 0);
+                if ($at <= 0 || $at > (time() + 300) * 1000) $at = (int)(microtime(true) * 1000);
+                $cur = one('SELECT updated_at FROM shelves WHERE user_id = ? AND uid = ?', [$s['id'], $uid]);
+                $row = [$name, (int)($it['position'] ?? 0), $at, !empty($it['deleted']) ? 1 : 0];
+                if (!$cur) { insert_ignore('shelves', ['uid' => $uid, 'user_id' => $s['id'], 'name' => $row[0], 'position' => $row[1], 'updated_at' => $at, 'deleted' => $row[3]]); $saved++; }
+                elseif ($at > (int)$cur['updated_at']) { q('UPDATE shelves SET name = ?, position = ?, updated_at = ?, deleted = ? WHERE user_id = ? AND uid = ?', array_merge($row, [$s['id'], $uid])); $saved++; }
+            }
+            json_out(200, ['saved' => $saved]);
+
+        case 'stats':
+            // Reading seconds per day; each device reports its own running total, totals are summed across devices.
+            if ($method === 'GET') {
+                $s = require_user();
+                $since = date('Y-m-d', time() - 400 * 86400);
+                json_out(200, ['days' => array_map(fn($r) => ['day' => $r['day'], 'seconds' => (int)$r['seconds']],
+                    all('SELECT day, SUM(seconds) AS seconds FROM reading_days WHERE user_id = ? AND day >= ? GROUP BY day ORDER BY day', [$s['id'], $since]))]);
+            }
+            method('POST');
+            $s = require_user(true);
+            $d = body_json();
+            $device = (string)($d['device'] ?? '');
+            if (!preg_match('/^[A-Za-z0-9-]{8,40}$/', $device)) fail(400, 'bad_device', 'Invalid device.');
+            $days = is_array($d['days'] ?? null) ? array_slice($d['days'], 0, 400) : [];
+            foreach ($days as $it) {
+                $day = (string)($it['day'] ?? ''); $sec = (int)($it['seconds'] ?? 0);
+                if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $day) || $sec < 0 || $sec > 86400) continue;
+                $cur = one('SELECT seconds FROM reading_days WHERE user_id = ? AND device = ? AND day = ?', [$s['id'], $device, $day]);
+                if (!$cur) insert_ignore('reading_days', ['user_id' => $s['id'], 'device' => $device, 'day' => $day, 'seconds' => $sec]);
+                elseif ($sec > (int)$cur['seconds']) q('UPDATE reading_days SET seconds = ? WHERE user_id = ? AND device = ? AND day = ?', [$sec, $s['id'], $device, $day]);
+            }
+            json_out(200, ['ok' => true]);
 
         case 'upload-init':
             method('POST');

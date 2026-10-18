@@ -60,6 +60,19 @@ VISIBLE_TEXT_JS = """()=>{const f=document.querySelector('#viewer iframe');if(!f
 
 async def visible_text(pg): return await pg.evaluate(VISIBLE_TEXT_JS)
 
+async def poll(fn, timeout=10000, step=200):
+    """Wait until async fn() is truthy. Used instead of wait_for_function, which needs eval (blocked by our CSP)."""
+    for _ in range(max(1, timeout // step)):
+        try:
+            if await fn(): return True
+        except Exception:
+            pass
+        await asyncio.sleep(step / 1000)
+    raise TimeoutError("condition not met")
+
+async def _contains(pg, sel, text): return text in (await pg.inner_text(sel))
+async def _count_gt(pg, sel, n): return await pg.locator(sel).count() > n
+
 async def page_pos(pg):
     """Position of the first visible block: -1 for a chapter heading, else the paragraph number."""
     import re
@@ -333,7 +346,7 @@ async def run(url):
         # 10. Accounts and cloud: setup admin, upload, invite, catalog, second device sync
         async def wait_synced(pg, timeout=20000):
             try:
-                await pg.wait_for_function("document.getElementById('syncStatus').textContent.includes('همگام شد')", timeout=timeout)
+                await poll(lambda: _contains(pg, "#syncStatus", "همگام شد"), timeout)
                 return True
             except Exception:
                 return False
@@ -411,7 +424,7 @@ async def run(url):
         await pg.click("#searchToggle"); await pg.wait_for_timeout(200)
         check("search panel opens", await pg.is_visible("#searchPanel"))
         await pg.fill("#bookSearchInput", "شماره 35 از فصل دوم"); await pg.press("#bookSearchInput", "Enter")
-        await pg.wait_for_function("document.querySelectorAll('#bookSearchResults button').length > 0", timeout=10000)
+        await poll(lambda: _count_gt(pg, "#bookSearchResults button", 0), 10000)
         n = await pg.locator("#bookSearchResults button").count()
         check("search finds the text", n == 1, str(n))
         check("search result is highlighted", await pg.locator("#bookSearchResults mark").count() >= 1)
@@ -420,7 +433,7 @@ async def run(url):
         check("clicking a result jumps there", await pg.inner_text("#chapterLabel") == "بخش ۲" and pos is not None and 26 <= pos <= 35, f"{await pg.inner_text('#chapterLabel')} pos={pos}")
         check("search panel closes after jumping", not await pg.is_visible("#searchPanel"))
         await pg.click("#searchToggle"); await pg.fill("#bookSearchInput", "نیست-در-کتاب"); await pg.press("#bookSearchInput", "Enter")
-        await pg.wait_for_function("document.getElementById('bookSearchStatus').textContent.includes('پیدا نشد')", timeout=10000)
+        await poll(lambda: _contains(pg, "#bookSearchStatus", "پیدا نشد"), 10000)
         check("search reports no results", True)
         await pg.keyboard.press("Escape"); await pg.click("#closeReader"); await pg.wait_for_timeout(400)
         # Simulate a book imported by an old version: filename as title, unknown author, never checked.
@@ -475,7 +488,7 @@ async def run(url):
         await pg.goto(url); await pg.wait_for_timeout(1500)
         version = await pg.evaluate("new Promise(res => { const r = indexedDB.open('ketabkhane-db'); r.onsuccess = () => { res(r.result.version); r.result.close(); }; })")
         anns = await pg.evaluate(ANN_COUNT_JS)
-        check("v1 database upgraded to v2 without losing the book", version == 2 and await pg.locator("#bookGrid .book-card").count() == 1, str(version))
+        check("v1 database upgraded to the current schema without losing the book", version >= 3 and await pg.locator("#bookGrid .book-card").count() == 1, str(version))
         check("old bookmark migrated into annotations", anns == ["bookmark:"], str(anns))
         await pg.click("#bookGrid .book-card"); await pg.wait_for_timeout(2500)
         await pg.click('[data-ptab="notes"]'); await pg.wait_for_timeout(300)
@@ -551,6 +564,75 @@ async def run(url):
         allerrs = errsD + errsE
         check("v7.2 sync/admin: no JS errors", len(allerrs) == 0, str(allerrs[:3]))
         await ctxD.close(); await ctxE.close()
+
+        # 13. v7.3: stats/goals, reading status, shelves, time left, quote card, status+shelf sync
+        ext, errs = [], []
+        ctx, pg = await new_ctx(b, url, ext, errs, accept_downloads=True)
+        await open_sample(pg, url, sample)
+        for _ in range(2):
+            await pg.wait_for_timeout(3500); await pg.click("#nextPage")
+        await pg.wait_for_timeout(500)
+        tl = await pg.inner_text("#timeLeft")
+        check("time left in chapter shown", "دقیقه" in tl or "آخرین" in tl, tl)
+        await pg.evaluate(SELECT_JS, [0, 30]); await pg.wait_for_timeout(800)
+        async with pg.expect_download(timeout=15000) as dl:
+            await pg.click('[data-sel="quote"]')
+        d = await dl.value
+        path = await d.path()
+        sig = open(path, "rb").read(8) if path else b""
+        check("quote card produced as PNG", sig.startswith(b"\x89PNG"), d.suggested_filename)
+        await pg.click("#closeReader"); await pg.wait_for_timeout(600)
+        check("opening a book marks it as reading", "status:reading" in " ".join([await x.get_attribute("data-filter") for x in await pg.locator("#libraryFilters button").all()]))
+        await pg.click('[data-filter="status:reading"]'); await pg.wait_for_timeout(300)
+        check("filter: reading shows the book", await pg.locator("#bookGrid .book-card").count() == 1)
+        await pg.click('[data-filter="status:want"]'); await pg.wait_for_timeout(300)
+        check("filter: want-to-read is empty", await pg.locator("#bookGrid .book-card").count() == 0)
+        await pg.click('[data-filter="all"]'); await pg.wait_for_timeout(300)
+        await pg.click("#bookGrid [data-options]"); await pg.wait_for_timeout(300)
+        check("book options dialog opens", await pg.is_visible("#bookOptions"))
+        await pg.click('#bookOptions [data-status="finished"]'); await pg.wait_for_timeout(300)
+        await pg.fill("#newShelfName", "فلسفه"); await pg.click("#addShelf"); await pg.wait_for_timeout(400)
+        check("new shelf created and checked", await pg.locator('#shelfChecks input[type=checkbox]:checked').count() == 1)
+        await pg.click("#bookOptionsClose"); await pg.wait_for_timeout(500)
+        check("status shown on the card", "خوانده‌شده" in await pg.inner_text("#bookGrid .book-badge"))
+        check("finished counter", await pg.inner_text("#statFinished") == "۱")
+        await pg.click('#libraryFilters button:has-text("فلسفه")'); await pg.wait_for_timeout(300)
+        check("shelf filter shows the book", await pg.locator("#bookGrid .book-card").count() == 1)
+        await pg.click('[data-filter="all"]')
+        # Stats: today 30 min, yesterday 10 min -> streak 2; goal 30 -> full ring
+        await pg.evaluate("""() => { const z = n => String(n).padStart(2, '0'); const k = d => `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;
+            const t = new Date(), y = new Date(); y.setDate(y.getDate() - 1);
+            localStorage.setItem('borg-reading-days', JSON.stringify({ [k(t)]: 1800, [k(y)]: 600 })); }""")
+        pg.once("dialog", lambda dd: asyncio.ensure_future(dd.accept("30")))
+        await pg.click("#goalButton"); await pg.wait_for_timeout(500)
+        check("stats: today minutes", await pg.inner_text("#statToday") == "۳۰", await pg.inner_text("#statToday"))
+        check("stats: streak of consecutive days", await pg.inner_text("#statStreak") == "۲")
+        check("stats: week total", await pg.inner_text("#statWeek") == "۴۰")
+        check("goal updated", "۳۰" in await pg.inner_text("#goalButton") and (await pg.get_attribute("#goalArc", "stroke-dasharray")).startswith("100"))
+        await pg.reload(); await pg.wait_for_timeout(1200)
+        check("status and shelf survive reload", "خوانده‌شده" in await pg.inner_text("#bookGrid .book-badge") and await pg.locator('#libraryFilters button:has-text("فلسفه")').count() == 1)
+        check("v7.3 local features: no JS errors", len(errs) == 0, str(errs[:3]))
+        await ctx.close()
+
+        # Status + shelves sync across devices (admin account)
+        ext, errsF = [], []
+        ctxF, F = await new_ctx(b, url, ext, errsF)
+        await F.goto(url); await F.wait_for_timeout(800)
+        await auth(F, "login", email="admin@example.com", password="password1"); await wait_synced(F)
+        await F.click("#bookGrid [data-options]"); await F.wait_for_timeout(300)
+        await F.click('#bookOptions [data-status="want"]')
+        await F.fill("#newShelfName", "رمان"); await F.click("#addShelf"); await F.wait_for_timeout(300)
+        await F.click("#bookOptionsClose"); await F.wait_for_timeout(3500)
+        ext, errsG = [], []
+        ctxG, G = await new_ctx(b, url, ext, errsG)
+        await G.goto(url); await G.wait_for_timeout(800)
+        await auth(G, "login", email="admin@example.com", password="password1"); await wait_synced(G)
+        await G.wait_for_timeout(500)
+        check("status synced to the other device", "می‌خواهم بخوانم" in await G.inner_text("#bookGrid .book-badge"))
+        check("shelf synced to the other device", await G.locator('#libraryFilters button:has-text("رمان")').count() == 1)
+        allerrs = errsF + errsG
+        check("v7.3 sync: no JS errors", len(allerrs) == 0, str(allerrs[:3]))
+        await ctxF.close(); await ctxG.close()
         await b.close()
 
 def main():

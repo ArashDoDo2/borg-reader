@@ -100,6 +100,17 @@ function migrations(): array {
             "CREATE INDEX annotations_user_updated ON annotations (user_id, updated_at)",
             "CREATE TABLE settings (name VARCHAR(64) PRIMARY KEY, value VARCHAR(500) NOT NULL)",
         ],
+        3 => [
+            "ALTER TABLE user_books ADD COLUMN status VARCHAR(12) NOT NULL DEFAULT ''",
+            "ALTER TABLE user_books ADD COLUMN shelves VARCHAR(2000) NOT NULL DEFAULT '[]'",
+            "ALTER TABLE user_books ADD COLUMN meta_updated_at BIGINT NOT NULL DEFAULT 0",
+            "CREATE TABLE shelves (uid VARCHAR(40) NOT NULL, user_id INTEGER NOT NULL, name VARCHAR(80) NOT NULL,
+               position INTEGER NOT NULL DEFAULT 0, updated_at BIGINT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0,
+               PRIMARY KEY (user_id, uid), FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",
+            "CREATE TABLE reading_days (user_id INTEGER NOT NULL, device VARCHAR(40) NOT NULL, day CHAR(10) NOT NULL,
+               seconds INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, device, day),
+               FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",
+        ],
     ];
 }
 function migrate(PDO $pdo): void {

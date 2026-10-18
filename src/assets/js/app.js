@@ -6,11 +6,11 @@
   const STORAGE_SUFFIX = location.pathname.includes("/borg-test/") ? "-test" : "";
   const DB_NAME = "ketabkhane-db" + STORAGE_SUFFIX;
   const THEME_KEY = "ketab-theme" + STORAGE_SUFFIX;
-  const DB_VERSION = 2; // v2 (7.2): annotations store; single bookmark migrated into it
+  const DB_VERSION = 3; // v2 (7.2): annotations; v3 (7.3): shelves
   let db, currentBook = null, rendition = null, bookInstance = null, currentProgressKey = null;
   let fontSize = 100, toastTimer;
   const READER_PREFS_KEY = "ketabkhane-reader-preferences" + STORAGE_SUFFIX;
-  const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100, theme: "light", align: "justify", librarySort: "added" };
+  const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100, theme: "light", align: "justify", librarySort: "added", libraryFilter: "all", dailyGoal: 20 };
   const READER_THEMES = { light: ["#fffdf7", "#252923"], sepia: ["#f4ecd8", "#5b4636"], dark: ["#1f2623", "#e6ece7"] };
   let readerPrefs = loadReaderPrefs();
   fontSize = Math.min(180, Math.max(70, Number(readerPrefs.fontSize) || 100));
@@ -74,6 +74,7 @@
         const tx = req.transaction;
         if (!database.objectStoreNames.contains("books")) database.createObjectStore("books", { keyPath: "id" });
         if (!database.objectStoreNames.contains("progress")) database.createObjectStore("progress", { keyPath: "bookId" });
+        if (!database.objectStoreNames.contains("shelves")) database.createObjectStore("shelves", { keyPath: "uid" });
         if (!database.objectStoreNames.contains("annotations")) {
           const ann = database.createObjectStore("annotations", { keyPath: "uid" });
           ann.createIndex("bookId", "bookId");
@@ -163,6 +164,150 @@
       req.onerror = () => reject(req.error);
     });
   }
+  function getAllShelves() {
+    return new Promise((resolve, reject) => {
+      const req = db.transaction("shelves", "readonly").objectStore("shelves").getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  let shelvesCache = [];
+  async function refreshShelves() { shelvesCache = (await getAllShelves()).filter(x => !x.deleted).sort((a, b) => (a.position || 0) - (b.position || 0) || a.updatedAt - b.updatedAt); }
+  function renderFilters(books) {
+    const counts = { reading: 0, want: 0, finished: 0 };
+    const f = readerPrefs.libraryFilter || "all";
+    const chips = [["all", "همه"], ["status:reading", "در حال خواندن"], ["status:want", "می‌خواهم بخوانم"], ["status:finished", "خوانده‌شده"],
+                   ...shelvesCache.map(x => [`shelf:${x.uid}`, `📚 ${x.name}`])];
+    $("libraryFilters").innerHTML = books.length ? chips.map(([k, l]) => `<button type="button" data-filter="${esc(k)}" aria-pressed="${k === f}">${esc(l)}</button>`).join("") : "";
+  }
+  async function setBookMeta(localId, patch) {
+    const b = await getBook(localId);
+    if (!b) return null;
+    const rec = { ...b, ...patch, metaUpdatedAt: Date.now(), metaDirty: true };
+    await put("books", rec);
+    scheduleMetaPush();
+    return rec;
+  }
+  let metaTimer = null;
+  function scheduleMetaPush() {
+    if (!account || !navigator.onLine) return;
+    clearTimeout(metaTimer);
+    metaTimer = setTimeout(() => { syncLibraryMeta(null).catch(err => console.warn("Meta sync failed:", err)); }, 2000);
+  }
+  async function saveShelf(rec) {
+    rec.updatedAt = Date.now(); rec.dirty = true;
+    await put("shelves", rec);
+    await refreshShelves();
+    scheduleMetaPush();
+  }
+  // ---- Reading time and goals ----
+  const DAYS_KEY = "borg-reading-days" + STORAGE_SUFFIX;
+  const OTHER_KEY = "borg-reading-other" + STORAGE_SUFFIX;
+  const PUSHED_KEY = "borg-reading-pushed" + STORAGE_SUFFIX;
+  function readJson(key) { try { return JSON.parse(localStorage.getItem(key) || "{}") || {}; } catch (_) { return {}; } }
+  function writeJson(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (_) {} }
+  function dayKey(d = new Date()) { const z = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`; }
+  function deviceId() {
+    let id = null;
+    try { id = localStorage.getItem("borg-device-id"); } catch (_) {}
+    if (!id) { id = newUid(); try { localStorage.setItem("borg-device-id", id); } catch (_) {} }
+    return id;
+  }
+  function secondsOn(day) { return (readJson(DAYS_KEY)[day] || 0) + (readJson(OTHER_KEY)[day] || 0); }
+  let lastActivity = 0;
+  function markActivity() { lastActivity = Date.now(); }
+  setInterval(() => {
+    if (!currentBook || document.visibilityState !== "visible" || Date.now() - lastActivity > 120000) return;
+    const days = readJson(DAYS_KEY), k = dayKey();
+    days[k] = Math.min(86400, (days[k] || 0) + 15);
+    writeJson(DAYS_KEY, days);
+  }, 15000);
+  function renderStats(books) {
+    if (!books || !books.length) { $("statsCard").hidden = true; return; }
+    $("statsCard").hidden = false;
+    const fa = n => Number(n).toLocaleString("fa-IR");
+    const goal = Math.max(1, Number(readerPrefs.dailyGoal) || 20);
+    const today = Math.floor(secondsOn(dayKey()) / 60);
+    $("statToday").textContent = fa(today);
+    $("goalArc").setAttribute("stroke-dasharray", `${Math.min(100, Math.round(today / goal * 100))} 100`);
+    $("goalButton").textContent = `هدف: ${fa(goal)} دقیقه`;
+    let streak = 0;
+    const d = new Date();
+    if (secondsOn(dayKey(d)) < 60) d.setDate(d.getDate() - 1);
+    while (secondsOn(dayKey(d)) >= 60 && streak < 3650) { streak++; d.setDate(d.getDate() - 1); }
+    let week = 0;
+    for (let i = 0; i < 7; i++) { const x = new Date(); x.setDate(x.getDate() - i); week += secondsOn(dayKey(x)); }
+    $("statStreak").textContent = fa(streak);
+    $("statWeek").textContent = fa(Math.floor(week / 60));
+    $("statFinished").textContent = fa(books.filter(b => b.status === "finished").length);
+  }
+  // ---- Time left in chapter (from this reader's own page speed) ----
+  let secPerPage = 60, lastTurnAt = 0;
+  try { secPerPage = Number(localStorage.getItem("borg-sec-per-page")) || 60; } catch (_) {}
+  function updateTimeLeft(location) {
+    const now = Date.now(), dt = (now - lastTurnAt) / 1000;
+    if (lastTurnAt && dt > 3 && dt < 300) {
+      secPerPage = Math.round(secPerPage * 0.7 + dt * 0.3);
+      try { localStorage.setItem("borg-sec-per-page", String(secPerPage)); } catch (_) {}
+    }
+    lastTurnAt = now;
+    const disp = location?.start?.displayed;
+    if (!disp || !disp.total) return;
+    const pagesLeft = Math.max(0, disp.total - disp.page);
+    const min = Math.ceil(pagesLeft * secPerPage / 60);
+    $("timeLeft").textContent = pagesLeft === 0 ? "آخرین صفحهٔ این فصل" : `حدود ${min.toLocaleString("fa-IR")} دقیقه تا پایان فصل`;
+  }
+  // ---- Quote card ----
+  function wrapLines(ctx, text, maxWidth) {
+    const words = text.replace(/\s+/g, " ").trim().split(" "), lines = [];
+    let line = "";
+    for (const w of words) {
+      const t = line ? line + " " + w : w;
+      if (ctx.measureText(t).width > maxWidth && line) { lines.push(line); line = w; } else line = t;
+    }
+    if (line) lines.push(line);
+    return lines;
+  }
+  async function makeQuoteCard(quote, title, author) {
+    try { await document.fonts.load('700 52px "Vazirmatn"'); } catch (_) {}
+    const W = 1080, H = 1350, c = document.createElement("canvas");
+    c.width = W; c.height = H;
+    const ctx = c.getContext("2d");
+    const g = ctx.createLinearGradient(0, 0, W, H); g.addColorStop(0, "#173b35"); g.addColorStop(1, "#2a5d50");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(255,255,255,0.06)"; ctx.beginPath(); ctx.arc(W * 0.85, H * 0.12, 260, 0, Math.PI * 2); ctx.fill();
+    ctx.direction = "rtl"; ctx.textAlign = "right"; ctx.fillStyle = "#f7efdc";
+    ctx.font = '700 120px "Vazirmatn", Tahoma, sans-serif'; ctx.fillStyle = "#e5c58b"; ctx.fillText("«", W - 110, 260);
+    let size = 54, lines;
+    for (;;) {
+      ctx.font = `500 ${size}px "Vazirmatn", Tahoma, sans-serif`;
+      lines = wrapLines(ctx, quote, W - 220);
+      if (lines.length * size * 1.75 < H - 620 || size <= 32) break;
+      size -= 4;
+    }
+    const maxLines = Math.floor((H - 620) / (size * 1.75));
+    if (lines.length > maxLines) { lines = lines.slice(0, maxLines); lines[maxLines - 1] += " …"; }
+    ctx.fillStyle = "#f7efdc";
+    lines.forEach((l, i) => ctx.fillText(l, W - 110, 360 + i * size * 1.75));
+    ctx.fillStyle = "#e5c58b"; ctx.fillRect(W - 210, H - 300, 100, 4);
+    ctx.font = '700 40px "Vazirmatn", Tahoma, sans-serif'; ctx.fillStyle = "#f7efdc"; ctx.fillText(title.slice(0, 60), W - 110, H - 220);
+    ctx.font = '400 32px "Vazirmatn", Tahoma, sans-serif'; ctx.fillStyle = "#cfe0d8"; ctx.fillText((author || "").slice(0, 60), W - 110, H - 165);
+    ctx.textAlign = "left"; ctx.font = '700 34px "Vazirmatn", Tahoma, sans-serif'; ctx.fillStyle = "#e5c58b"; ctx.fillText("بُرگ", 110, H - 110);
+    return new Promise(res => c.toBlob(b => res(b), "image/png"));
+  }
+  async function shareQuote(quote) {
+    if (!currentBook || !quote) return;
+    const blob = await makeQuoteCard(quote, currentBook.title || "", currentBook.author && currentBook.author !== "نویسنده نامشخص" ? currentBook.author : "");
+    if (!blob) { showToast("ساخت تصویر ممکن نشد."); return; }
+    const file = new File([blob], `${(currentBook.title || "quote").slice(0, 40)}.png`, { type: "image/png" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: currentBook.title }); return; } catch (err) { if (err && err.name === "AbortError") return; }
+    }
+    const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(file), download: file.name });
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+    showToast("کارت نقل‌قول ذخیره شد.");
+  }
   function newUid() { return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`).slice(0, 40); }
 
   function bookCardHtml(b, prog) {
@@ -171,11 +316,13 @@
     const pct = prog && typeof prog.percentage === "number" ? Math.max(0, Math.min(100, prog.percentage)) : null;
     const bar = pct ? `<div class="cover-progress" aria-hidden="true"><span style="width:${pct}%"></span></div>` : "";
     const catalogLabel = b.catalogStatus === "approved" ? " · عمومی" : b.catalogStatus === "pending" ? " · در انتظار تأیید" : "";
-    const badge = (pct ? `${pct.toLocaleString("fa-IR")}٪ خوانده‌شده` : (prog ? "شروع‌شده" : "خوانده‌نشده")) + catalogLabel;
+    const statusLabel = b.status === "finished" ? "خوانده‌شده" : b.status === "want" ? "می‌خواهم بخوانم" : null;
+    const badge = (statusLabel || (pct ? `${pct.toLocaleString("fa-IR")}٪ خوانده‌شده` : (prog ? "شروع‌شده" : "خوانده‌نشده"))) + catalogLabel;
     return `<article class="book-card" tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="باز کردن ${esc(b.title)}">
           <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${bar}</div>
           <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p><span class="book-badge">${badge}</span></div>
           <button class="remove-book" type="button" data-remove="${esc(b.id)}" aria-label="حذف ${esc(b.title)}" title="حذف">×</button>
+          <button class="book-options" type="button" data-options="${esc(b.id)}" aria-label="تنظیمات ${esc(b.title)}" title="وضعیت و قفسه">⋯</button>
           ${account && b.serverId && !b.catalogStatus ? `<button class="share-book" type="button" data-share="${esc(b.id)}" aria-label="پیشنهاد ${esc(b.title)} برای کتابخانهٔ عمومی" title="پیشنهاد برای کتابخانهٔ عمومی">⇪</button>` : ""}
         </article>`;
   }
@@ -188,7 +335,11 @@
       if (sort === "title") books.sort((a, b) => String(a.title).localeCompare(String(b.title), "fa"));
       else if (sort === "read") books.sort((a, b) => lastRead(b) - lastRead(a) || (b.addedAt || 0) - (a.addedAt || 0));
       else books.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
-      const filtered = books.filter(b => `${b.title} ${b.author}`.toLocaleLowerCase().includes(query));
+      const f = readerPrefs.libraryFilter || "all";
+      const filtered = books.filter(b => `${b.title} ${b.author}`.toLocaleLowerCase().includes(query))
+        .filter(b => f === "all" || (f.startsWith("status:") ? (b.status || (prog.get(b.id)?.cfi ? "reading" : "")) === f.slice(7) : (b.shelves || []).includes(f.slice(6))));
+      renderFilters(books);
+      renderStats(books);
       $("bookGrid").innerHTML = filtered.map(b => bookCardHtml(b, prog.get(b.id))).join("");
       const reading = query ? [] : books.filter(b => { const p = prog.get(b.id); return p && p.cfi && (p.percentage || 0) < 100; })
         .sort((a, b) => lastRead(b) - lastRead(a)).slice(0, 8);
@@ -402,6 +553,9 @@
     rendition.on("touchend", onTouchEnd);
     rendition.on("click", onReaderClick);
     rendition.on("selected", onTextSelected);
+    rendition.on("keydown", markActivity); rendition.on("touchstart", markActivity); rendition.on("click", markActivity);
+    lastTurnAt = 0; markActivity();
+    if (!record.status || record.status === "want") setBookMeta(record.id, { status: "reading" }).then(r => { if (r && currentBook && currentBook.id === r.id) currentBook = r; });
     renderedHighlights = new Set();
     rendition.on("relocated", async location => {
       if (token !== openToken || !location?.start) return;
@@ -411,6 +565,11 @@
       $("prevPage").disabled = !!location.atStart;
       if (!pendingSelection) hideSelectionBar();
       updateBookmarkButton();
+      markActivity();
+      updateTimeLeft(location);
+      if (location.atEnd && currentBook && currentBook.status !== "finished") {
+        setBookMeta(currentBook.id, { status: "finished" }).then(r => { if (r) { currentBook = r; showToast("تبریک! این کتاب را تمام کردی."); } });
+      }
       $("nextPage").disabled = !!location.atEnd;
       try { await saveProgress(record.id, location.start.cfi, pct); } catch (err) { console.warn("Saving progress failed:", err); }
     });
@@ -562,6 +721,7 @@
   $("tocToggle").addEventListener("click", () => { if ($("reader").classList.contains("toc-open")) closeToc(true); else openToc(); });
   $("tocBackdrop").addEventListener("click", () => closeToc(true));
   document.addEventListener("keydown", handleReaderKey);
+  document.addEventListener("keydown", () => { if (currentBook) markActivity(); });
 
   // ---- In-book search (v7.1) ----
   function searchOpen() { return !$("searchPanel").hidden; }
@@ -799,6 +959,13 @@
     if (sw) { await createHighlight(sw.dataset.hl, ""); return; }
     const act = e.target.closest("[data-sel]")?.dataset.sel;
     if (act === "close") { try { pendingSelection?.contents.window.getSelection().removeAllRanges(); } catch (_) {} hideSelectionBar(); }
+    else if (act === "quote" && pendingSelection) {
+      let quote = "";
+      try { quote = String(await bookInstance.getRange(pendingSelection.cfiRange) || "").trim(); } catch (_) {}
+      if (!quote) { try { quote = String(pendingSelection.contents.window.getSelection()).trim(); } catch (_) {} }
+      hideSelectionBar();
+      shareQuote(quote.slice(0, 600));
+    }
     else if (act === "note") { const note = prompt("یادداشت تو برای این قسمت:", ""); if (note !== null) await createHighlight("yellow", note.trim()); }
     else if (act === "edit" && editingUid) {
       const a = await getAnnotation(editingUid);
@@ -814,6 +981,8 @@
   $("searchInput").addEventListener("input", renderLibrary);
   inputEls.forEach(el => el?.addEventListener("change", e => importFile(e.target.files?.[0])));
   const onLibraryClick = async e => {
+    const optBtn = e.target.closest("[data-options]");
+    if (optBtn) { e.stopPropagation(); openBookOptions(optBtn.dataset.options); return; }
     const shareBtn = e.target.closest("[data-share]");
     if (shareBtn) { e.stopPropagation(); shareBook(shareBtn.dataset.share); return; }
     const removeBtn = e.target.closest("[data-remove]");
@@ -838,6 +1007,73 @@
     if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-open]")) { e.preventDefault(); openReader(e.target.dataset.open).catch(err => { console.error(err); showToast("بازکردن کتاب ناموفق بود."); }); }
   };
   ["bookGrid", "continueShelf"].forEach(id => { $(id).addEventListener("click", onLibraryClick); $(id).addEventListener("keydown", onLibraryKey); });
+  $("libraryFilters").addEventListener("click", e => {
+    const b = e.target.closest("[data-filter]");
+    if (!b) return;
+    readerPrefs.libraryFilter = b.dataset.filter; saveReaderPrefs(); renderLibrary();
+  });
+  $("goalButton").addEventListener("click", () => {
+    const v = prompt("هدف روزانه (دقیقه):", String(readerPrefs.dailyGoal || 20));
+    const n = Math.round(Number(v));
+    if (v !== null && n > 0 && n <= 600) { readerPrefs.dailyGoal = n; saveReaderPrefs(); renderLibrary(); }
+  });
+  let optionsBookId = null;
+  async function renderBookOptions() {
+    const b = await getBook(optionsBookId);
+    if (!b) return;
+    $("bookOptionsTitle").textContent = b.title;
+    document.querySelectorAll("[data-status]").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.status === (b.status || ""))));
+    $("shelfChecks").innerHTML = shelvesCache.length ? shelvesCache.map(sh => `<label><input type="checkbox" data-shelf="${esc(sh.uid)}" ${(b.shelves || []).includes(sh.uid) ? "checked" : ""}> ${esc(sh.name)}
+        <button type="button" class="note-del" data-shelf-del="${esc(sh.uid)}" aria-label="حذف قفسه">×</button></label>`).join("") : '<p class="muted small">هنوز قفسه‌ای نساخته‌ای.</p>';
+    $("bookOptionsActions").innerHTML = (account && b.serverId && !b.catalogStatus ? `<button class="secondary-button" type="button" data-opt="share">⇪ پیشنهاد برای کتابخانهٔ عمومی</button>` : "")
+      + `<button class="secondary-button" type="button" data-opt="remove">حذف کتاب</button>`;
+  }
+  async function openBookOptions(id) { optionsBookId = id; await refreshShelves(); await renderBookOptions(); $("bookOptions").showModal(); }
+  $("bookOptionsClose").addEventListener("click", () => $("bookOptions").close());
+  $("bookOptions").addEventListener("close", () => renderLibrary());
+  $("bookOptions").addEventListener("click", async e => {
+    const st = e.target.closest("[data-status]");
+    if (st) {
+      const b = await getBook(optionsBookId);
+      await setBookMeta(optionsBookId, { status: b && b.status === st.dataset.status ? "" : st.dataset.status });
+      return renderBookOptions();
+    }
+    const del = e.target.closest("[data-shelf-del]");
+    if (del) {
+      e.preventDefault();
+      const sh = shelvesCache.find(x => x.uid === del.dataset.shelfDel);
+      if (sh && confirm(`قفسهٔ «${sh.name}» حذف شود؟ (کتاب‌ها حذف نمی‌شوند)`)) {
+        await saveShelf({ ...sh, deleted: true });
+        if (readerPrefs.libraryFilter === `shelf:${sh.uid}`) { readerPrefs.libraryFilter = "all"; saveReaderPrefs(); }
+      }
+      return renderBookOptions();
+    }
+    const opt = e.target.closest("[data-opt]")?.dataset.opt;
+    if (opt === "share") { $("bookOptions").close(); return shareBook(optionsBookId); }
+    if (opt === "remove") {
+      $("bookOptions").close();
+      const btn = document.querySelector(`#bookGrid [data-remove="${CSS.escape(optionsBookId)}"]`);
+      if (btn) btn.click();
+    }
+  });
+  $("shelfChecks").addEventListener("change", async e => {
+    const cb = e.target.closest("[data-shelf]");
+    if (!cb) return;
+    const b = await getBook(optionsBookId);
+    const set = new Set(b.shelves || []);
+    if (cb.checked) set.add(cb.dataset.shelf); else set.delete(cb.dataset.shelf);
+    await setBookMeta(optionsBookId, { shelves: [...set] });
+  });
+  $("addShelf").addEventListener("click", async () => {
+    const name = $("newShelfName").value.trim();
+    if (!name) return;
+    const uid = newUid();
+    await saveShelf({ uid, name: name.slice(0, 80), position: shelvesCache.length, deleted: false });
+    $("newShelfName").value = "";
+    const b = await getBook(optionsBookId);
+    await setBookMeta(optionsBookId, { shelves: [...new Set([...(b.shelves || []), uid])] });
+    renderBookOptions();
+  });
   function network() {
     const online = navigator.onLine;
     $("networkStatus").textContent = online ? "● آنلاین" : "● آفلاین";
@@ -847,6 +1083,8 @@
   if (localStorage.getItem(THEME_KEY) === "dark") document.body.classList.add("dark");
   openDB().then(async database => {
     db = database; renderLibrary();
+    await refreshShelves();
+    renderLibrary();
     await importSharedFiles();
     await initAccount();
     setTimeout(repairMetadata, 1200);
@@ -1060,6 +1298,8 @@
           try { await api("progress", { method: "POST", body: { book_id: b.serverId, cfi: lp.cfi, percentage: lp.percentage || 0, updated_at: lp.updatedAt || Date.now() } }); } catch (_) {}
         }
       }
+      await syncLibraryMeta(byId);
+      await syncStats();
       await syncAnnotations();
       setSyncStatus("همگام شد ✓");
     } catch (err) {
@@ -1070,6 +1310,47 @@
       renderLibrary();
       if (syncAgain) { syncAgain = false; sync(); }
     }
+  }
+  /** Shelves and per-book status/shelves. serverBooks: Map(serverId -> library row) from this sync, or null to fetch. */
+  async function syncLibraryMeta(serverBooks) {
+    const dirtyShelves = (await getAllShelves()).filter(x => x.dirty);
+    if (dirtyShelves.length) {
+      await api("shelves", { method: "POST", body: { items: dirtyShelves.map(x => ({ uid: x.uid, name: x.name, position: x.position || 0, updated_at: x.updatedAt, deleted: !!x.deleted })) } });
+      for (const x of dirtyShelves) { const cur = (await getAllShelves()).find(y => y.uid === x.uid); if (cur && cur.updatedAt === x.updatedAt) await put("shelves", { ...cur, dirty: false }); }
+    }
+    for (const r of (await api("shelves")).shelves) {
+      const cur = (await getAllShelves()).find(y => y.uid === r.uid);
+      if (!cur || (!cur.dirty && r.updated_at > (cur.updatedAt || 0))) await put("shelves", { uid: r.uid, name: r.name, position: r.position, updatedAt: r.updated_at, deleted: r.deleted, dirty: false });
+    }
+    await refreshShelves();
+    if (!serverBooks) serverBooks = new Map((await api("library")).books.map(b => [b.id, b]));
+    const local = (await getAllBooks()).filter(b => b.serverId);
+    const push = [];
+    for (const b of local) {
+      const sb = serverBooks.get(b.serverId);
+      if (!sb) continue;
+      if (b.metaDirty && (b.metaUpdatedAt || 0) > (sb.meta_updated_at || 0)) {
+        push.push({ book_id: b.serverId, status: b.status || "", shelves: b.shelves || [], updated_at: b.metaUpdatedAt });
+      } else if ((sb.meta_updated_at || 0) > (b.metaUpdatedAt || 0)) {
+        await put("books", { ...b, status: sb.status || "", shelves: sb.shelves || [], metaUpdatedAt: sb.meta_updated_at, metaDirty: false });
+      }
+    }
+    if (push.length) {
+      await api("library-meta", { method: "POST", body: { items: push } });
+      for (const p of push) { const b = local.find(x => x.serverId === p.book_id); const cur = b && await getBook(b.id); if (cur && cur.metaUpdatedAt === p.updated_at) await put("books", { ...cur, metaDirty: false }); }
+    }
+    if (!serverBooks.size) return;
+    renderLibrary();
+  }
+  async function syncStats() {
+    const mine = readJson(DAYS_KEY);
+    const cutoff = dayKey(new Date(Date.now() - 400 * 86400000));
+    const days = Object.entries(mine).filter(([d]) => d >= cutoff).map(([day, seconds]) => ({ day, seconds }));
+    if (days.length) await api("stats", { method: "POST", body: { device: deviceId(), days } });
+    const totals = (await api("stats")).days;
+    const other = {};
+    for (const t of totals) other[t.day] = Math.max(0, t.seconds - (mine[t.day] || 0));
+    writeJson(OTHER_KEY, other);
   }
   function annSinceKey() { return `borg-ann-since-${account?.user?.id || 0}${STORAGE_SUFFIX}`; }
   async function syncAnnotations() {

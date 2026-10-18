@@ -247,3 +247,26 @@ body.dark .empty-state{background:#202b2570}
 .admin-toggle input{width:18px;height:18px}
 .status-chip{display:inline-block;border-radius:20px;padding:1px 8px;font-size:10px;background:var(--mint);color:var(--green2)}
 .status-chip.off{background:#f6dcd3;color:#9b3d23}
+
+/* v7.3: stats, filters, book options, shelves */
+.stats-card{display:grid;grid-template-columns:2fr repeat(3,1fr);gap:10px;margin:0 0 18px}
+.stats-card[hidden]{display:none}
+.stats-goal,.stat-mini{background:var(--paper);border:1px solid var(--line);border-radius:16px;padding:12px 14px}
+.stats-goal{display:flex;align-items:center;gap:14px;font-size:13px}
+.goal-ring{position:relative;width:58px;height:58px;flex-shrink:0}
+.goal-ring svg{width:100%;height:100%;transform:rotate(-90deg)}
+.goal-ring circle{fill:none;stroke-width:3.4}
+.ring-bg{stroke:var(--line)}.ring-fg{stroke:var(--green2);stroke-linecap:round;transition:stroke-dasharray .4s}
+.goal-ring b{position:absolute;inset:0;display:grid;place-items:center;font-size:15px}
+.goal-button{border:0;padding:2px 0;font-size:12px}
+.stat-mini b{display:block;font-size:20px;color:var(--green2)}
+.stat-mini span{font-size:11px;color:var(--muted)}
+.filter-chips{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 22px}
+.filter-chips button{border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:20px;padding:6px 13px;font-size:12px}
+.filter-chips button[aria-pressed="true"]{background:var(--green2);border-color:var(--green2);color:#fff}
+.book-options{position:absolute;top:8px;left:8px;z-index:3;width:30px;height:30px;border-radius:50%;border:0;background:#ffffffe6;color:#173b35;font-size:16px;line-height:1;box-shadow:0 2px 8px #0002}
+.share-book{left:44px}
+.status-picker{margin-bottom:10px}.status-picker button{flex:1;font-size:12px}
+.shelf-checks{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;max-height:180px;overflow:auto}
+.shelf-checks label{display:flex;gap:8px;align-items:center;font-size:13px}
+@media(max-width:700px){.stats-card{grid-template-columns:repeat(3,1fr)}.stats-goal{grid-column:1/-1}}

@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="7.2.0">
+  <meta name="app-version" content="7.3.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="assets/icon-192.png">
@@ -63,6 +64,14 @@
           <label class="secondary-button import-button">افزودن EPUB<input id="epubInputSmall" type="file" accept=".epub,application/epub+zip" hidden></label>
         </div>
       </div>
+      <div id="statsCard" class="stats-card" hidden>
+        <div class="stats-goal"><div class="goal-ring"><svg viewBox="0 0 36 36" aria-hidden="true"><circle cx="18" cy="18" r="15.5" class="ring-bg"/><circle id="goalArc" cx="18" cy="18" r="15.5" class="ring-fg" stroke-dasharray="0 100"/></svg><b id="statToday">۰</b></div>
+          <div><strong>مطالعهٔ امروز</strong><br><button id="goalButton" class="text-button goal-button" type="button">هدف: ۲۰ دقیقه</button></div></div>
+        <div class="stat-mini"><b id="statStreak">۰</b><span>روز پیاپی</span></div>
+        <div class="stat-mini"><b id="statWeek">۰</b><span>دقیقه در ۷ روز</span></div>
+        <div class="stat-mini"><b id="statFinished">۰</b><span>کتاب تمام‌شده</span></div>
+      </div>
+      <div id="libraryFilters" class="filter-chips" role="group" aria-label="فیلتر کتابخانه"></div>
       <div id="continueSection" class="continue-section" hidden>
         <h3 class="shelf-title">ادامهٔ مطالعه</h3>
         <div id="continueShelf" class="continue-shelf"></div>
@@ -166,6 +175,7 @@
             <button type="button" class="hl-swatch" data-hl="green" aria-label="هایلایت سبز"></button>
             <button type="button" class="hl-swatch" data-hl="pink" aria-label="هایلایت صورتی"></button>
             <button type="button" data-sel="note">✎ یادداشت</button>
+            <button type="button" data-sel="quote">🖼 کارت نقل‌قول</button>
           </span>
           <span class="sel-edit" hidden>
             <button type="button" data-sel="edit">✎ ویرایش یادداشت</button>
@@ -173,7 +183,7 @@
           </span>
           <button type="button" data-sel="close" aria-label="بستن">×</button>
         </div>
-        <div class="reader-bottom"><span>برای هایلایت یا یادداشت، متن را انتخاب کن.</span><button id="bookmarkButton" class="text-button" type="button">☆ نشانک</button></div>
+        <div class="reader-bottom"><span id="timeLeft">برای هایلایت یا یادداشت، متن را انتخاب کن.</span><button id="bookmarkButton" class="text-button" type="button">☆ نشانک</button></div>
       </div>
     </div>
   </section>
@@ -204,6 +214,18 @@
       <div class="dialog-actions"><button id="syncNow" class="secondary-button" type="button">همگام‌سازی الان</button><button id="logoutButton" class="secondary-button" type="button">خروج</button></div>
     </div>
   </dialog>
+  <dialog id="bookOptions" class="account-dialog" aria-labelledby="bookOptionsTitle">
+    <button id="bookOptionsClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <h2 id="bookOptionsTitle"></h2>
+    <p class="muted small">وضعیت</p>
+    <div class="segmented status-picker" role="group" aria-label="وضعیت کتاب">
+      <button type="button" data-status="want">می‌خواهم بخوانم</button><button type="button" data-status="reading">در حال خواندن</button><button type="button" data-status="finished">خوانده‌شده</button>
+    </div>
+    <p class="muted small">قفسه‌ها</p>
+    <div id="shelfChecks" class="shelf-checks"></div>
+    <div class="admin-row"><input id="newShelfName" class="admin-input" placeholder="قفسهٔ جدید…" maxlength="80"><button id="addShelf" class="secondary-button" type="button">افزودن</button></div>
+    <div id="bookOptionsActions" class="dialog-actions"></div>
+  </dialog>
   <dialog id="bookDialog" class="account-dialog book-dialog" aria-labelledby="bookDialogTitle">
     <button id="bookDialogClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
     <div class="book-dialog-body">
@@ -219,7 +241,7 @@
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۷.۲.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۷.۳.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>
