@@ -62,6 +62,7 @@
           </select>
           <label class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="جست‌وجوی کتاب…" autocomplete="off"></label>
           <label class="secondary-button import-button">افزودن EPUB<input id="epubInputSmall" type="file" accept=".epub,application/epub+zip" hidden></label>
+          <button id="cleanOpen" class="secondary-button clean-open" type="button" aria-haspopup="dialog" title="حذف عبارت‌های ناخواسته (مثل لینک کانال) از متن همهٔ کتاب‌ها">🧹 پاک‌سازی متن</button>
         </div>
       </div>
       <div id="statsCard" class="stats-card" hidden>
@@ -322,6 +323,23 @@
     <div id="shelfChecks" class="shelf-checks"></div>
     <div class="admin-row"><input id="newShelfName" class="admin-input" placeholder="قفسهٔ جدید…" maxlength="80"><button id="addShelf" class="secondary-button" type="button">افزودن</button></div>
     <div id="bookOptionsActions" class="dialog-actions"></div>
+  </dialog>
+  <dialog id="cleanDialog" class="account-dialog clean-dialog" aria-labelledby="cleanTitle">
+    <button id="cleanClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <h2 id="cleanTitle">پاک‌سازی متن</h2>
+    <p class="muted small clean-intro">عبارت‌هایی که اینجا اضافه کنی از <b>خود فایل</b> همهٔ کتاب‌ها حذف می‌شوند (فقط همان عبارت). نسخهٔ اصلی نگه داشته نمی‌شود. کتاب‌هایی که از این به بعد اضافه کنی هم خودکار پاک‌سازی می‌شوند.</p>
+    <form id="cleanForm" class="admin-row clean-form" novalidate>
+      <input id="cleanPhrase" class="admin-input" placeholder="عبارت دقیق، مثلاً: کانال ما در تلگرام" maxlength="200" aria-label="عبارت برای حذف" autocomplete="off">
+      <button id="cleanAdd" class="secondary-button" type="submit">افزودن</button>
+    </form>
+    <p id="cleanError" class="form-error" role="alert"></p>
+    <button id="cleanPresetTelegram" class="text-button clean-preset" type="button">＋ آماده: لینک‌های تلگرام (t.me و @نام‌کاربری)</button>
+    <ul id="cleanRules" class="clean-rules" aria-label="قاعده‌های پاک‌سازی"></ul>
+    <div class="dialog-actions"><button id="cleanSearch" class="primary-button" type="button">جستجو در همهٔ کتاب‌ها</button></div>
+    <div id="cleanProgressWrap" class="clean-progress" hidden><progress id="cleanProgress" max="1" value="0"></progress><span id="cleanProgressText" aria-live="polite"></span></div>
+    <p id="cleanStatus" class="muted small clean-status" aria-live="polite"></p>
+    <div id="cleanResults" class="clean-results"></div>
+    <div id="cleanApplyRow" class="dialog-actions" hidden><button id="cleanApply" class="primary-button" type="button">حذف از فایل‌ها</button></div>
   </dialog>
   <dialog id="catalogEditDialog" class="account-dialog" aria-labelledby="catalogEditTitle">
     <button id="catalogEditClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>

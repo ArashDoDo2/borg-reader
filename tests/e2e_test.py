@@ -1177,6 +1177,120 @@ async def run(url):
         check("v8.2 back chip: hides after turning 6 pages away from the jump", shown_again and states[0] and not states[-1], str(states))
         check("v8.2 help: no JS errors, no external requests", len(errsJ) == 0 and len(extJ) == 0, str(errsJ[:3] + extJ[:3]))
         await ctxJ.close(); shutil.rmtree(tmpd, ignore_errors=True)
+
+        # 17. v8.3 text cleanup: rules, search preview, apply to the EPUB file, re-anchored highlight, auto-clean on import
+        import zipfile, json as _json
+        tmpd = Path(tempfile.mkdtemp(prefix="borg-e2e-clean-"))
+        def clean_epub(path, title, ident, special):
+            with zipfile.ZipFile(path, "w") as z:
+                z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+                D = zipfile.ZIP_DEFLATED
+                z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>', D)
+                z.writestr("OEBPS/content.opf", f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">{ident}</dc:identifier><dc:title>{title}</dc:title><dc:creator>نویسنده</dc:creator><dc:language>fa</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="text/c1.xhtml" media-type="application/xhtml+xml"/></manifest><spine page-progression-direction="rtl"><itemref idref="c1"/></spine></package>', D)
+                z.writestr("OEBPS/nav.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>فهرست</title></head><body><nav epub:type="toc"><ol><li><a href="text/c1.xhtml">فصل اول</a></li></ol></nav></body></html>', D)
+                normal = "".join(f"<p>این پاراگراف شماره {k} از فصل اول در کتاب {title} است.</p>" for k in range(120))
+                z.writestr("OEBPS/text/c1.xhtml", f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="fa" dir="rtl"><head><title>فصل اول</title></head><body><h1>فصل اول</h1>{special}{normal}</body></html>', D)
+            return str(path)
+        SPECIAL1 = ('<p id="p1">کانال ما: https://t.me/testchannel متن عادی بعد از لینک برای هایلایت است.</p>'
+                    '<p>برای پرسش‌ها @test_channel را دنبال کنید یا به info@example.com بنویسید.</p>'
+                    '<p>لینک: <a href="https://t.me/x">https://t.me/x</a> پایان پاراگراف.</p>')
+        book1 = clean_epub(tmpd / "clean1.epub", "کتاب پاک‌سازی", "test-clean-1", SPECIAL1)
+        book2 = clean_epub(tmpd / "clean2.epub", "کتاب دوم پاک‌سازی", "test-clean-2",
+                           '<p>عضو شوید: https://t.me/second_chan و همچنین @second_chan جملهٔ سالم.</p>')
+        errsK, extK = [], []
+        ctxK, K = await new_ctx(b, url, extK, errsK)
+        await K.goto(url); await K.wait_for_timeout(1200)
+        await K.set_input_files("#epubInput", book1); await K.wait_for_timeout(2500)
+        check("v8.3 clean: no rules → import toast has no removal count", "حذف شد" not in await K.inner_text("#toast"))
+        await K.click("#bookGrid .book-card"); await K.wait_for_timeout(3000)
+        HL = "متن عادی بعد از لینک"
+        await K.evaluate("""(q)=>{const d=document.querySelector('#viewer iframe').contentDocument;const p=d.getElementById('p1');
+            const t=p.firstChild;const i=t.nodeValue.indexOf(q);const r=d.createRange();r.setStart(t,i);r.setEnd(t,i+q.length);
+            const s=d.getSelection();s.removeAllRanges();s.addRange(r);d.dispatchEvent(new Event('selectionchange'));}""", HL)
+        await K.wait_for_timeout(800)
+        await K.click('[data-hl="yellow"]'); await K.wait_for_timeout(800)
+        anns0 = [a for a in await K.evaluate(IDB_JS, ["annotations"]) if a["type"] == "highlight"]
+        check("v8.3 clean: highlight after the phrase saved", len(anns0) == 1 and anns0[0]["quote"] == HL, str(anns0))
+        await K.click("#closeReader"); await K.wait_for_timeout(800)
+        books0 = await K.evaluate(IDB_JS, ["books"]); prog0 = await K.evaluate(IDB_JS, ["progress"])
+        # Dialog from the library toolbar
+        check("v8.3 clean: «پاک‌سازی متن» button visible in the library toolbar", await K.is_visible("#cleanOpen"))
+        await K.click("#cleanOpen"); await K.wait_for_timeout(300)
+        DLG = """()=>{const d=document.getElementById('cleanDialog');const r=d.getBoundingClientRect();
+          const hit=document.elementFromPoint(r.left+r.width/2,r.top+30);
+          return {open:d.open,inView:r.top>=0&&r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,w:Math.round(r.width),onTop:!!(hit&&d.contains(hit))}}"""
+        dg = await K.evaluate(DLG)
+        check("v8.3 clean: dialog opens in the viewport, on top", dg["open"] and dg["inView"] and dg["onTop"] and dg["w"] > 300, str(dg))
+        await K.fill("#cleanPhrase", "ab@"); await K.click("#cleanAdd"); await K.wait_for_timeout(200)
+        rules = await K.evaluate(f"localStorage.getItem('borg-clean-rules{suffix}')")
+        check("v8.3 clean: rule shorter than 4 characters is rejected with a visible message",
+              await K.is_visible("#cleanError") and "۴" in await K.inner_text("#cleanError") and not rules, str(rules))
+        await K.click("#cleanPresetTelegram"); await K.wait_for_timeout(200)
+        rules = _json.loads(await K.evaluate(f"localStorage.getItem('borg-clean-rules{suffix}')") or "[]")
+        check("v8.3 clean: Telegram preset added and stored",
+              [r["type"] for r in rules] == ["telegram"] and "لینک‌های تلگرام" in await K.inner_text("#cleanRules") and await K.is_disabled("#cleanPresetTelegram"), str(rules))
+        await K.fill("#cleanPhrase", "این پاراگراف شماره"); await K.click("#cleanAdd"); await K.wait_for_timeout(200)
+        await K.click("#cleanSearch")
+        await poll(lambda: K.is_visible("#cleanApply"), 15000)
+        bk = K.locator(".clean-book")
+        cnt = await bk.first.locator(".clean-count").inner_text() if await bk.count() else ""
+        snip = await bk.first.locator(".clean-snips").inner_text() if await bk.count() else ""
+        marks = await K.locator(".clean-snips mark").all_inner_texts()
+        check("v8.3 clean: search shows the book with the right count (3)", await bk.count() == 1 and "۳ مورد" in cnt and "کتاب پاک‌سازی" in await bk.first.inner_text(), cnt)
+        check("v8.3 clean: preview snippets highlight the matches, e-mail untouched",
+              "https://t.me/testchannel" in marks and "@test_channel" in marks and "https://t.me/x" in marks and not any("example" in m for m in marks)
+              and await K.locator(".clean-snips mark").first.is_visible() and "کانال ما" in snip, str(marks))
+        broad = K.locator(".clean-broad")
+        check("v8.3 clean: a rule matching too much is flagged «احتمالاً بیش از حد کلی است» and excluded by default",
+              await broad.count() == 1 and await broad.first.is_visible() and "احتمالاً بیش از حد کلی است" in await broad.first.inner_text()
+              and "این پاراگراف شماره" in await broad.first.inner_text() and not await K.is_checked("[data-clean-broad]") and "این پاراگراف" not in "".join(marks), str(marks))
+        check("v8.3 clean: per-book checkbox checked by default", await K.is_checked("[data-clean-book]"))
+        await K.click("#cleanApply")
+        await poll(lambda: _contains(K, "#cleanStatus", "حذف شد"), 20000)
+        toast = await K.inner_text("#toast")
+        check("v8.3 clean: apply toasts «۳ مورد حذف شد»", "۳ مورد حذف شد" in toast, toast)
+        await K.click("#cleanClose"); await K.wait_for_timeout(300)
+        books1 = await K.evaluate(IDB_JS, ["books"]); prog1 = await K.evaluate(IDB_JS, ["progress"])
+        anns1 = [a for a in await K.evaluate(IDB_JS, ["annotations"]) if a["type"] == "highlight"]
+        check("v8.3 clean: same book record kept (id/title), contentHash changed, locations cleared",
+              len(books1) == 1 and books1[0]["id"] == books0[0]["id"] and books1[0]["title"] == books0[0]["title"]
+              and books1[0]["contentHash"] != books0[0]["contentHash"] and len(books1[0]["contentHash"] or "") == 64
+              and "locations" not in (await K.evaluate("""()=>new Promise(res=>{const r=indexedDB.open('ketabkhane-db');r.onsuccess=()=>{const q=r.result.transaction('books').objectStore('books').getAll();q.onsuccess=()=>res(Object.keys(q.result[0]))}})""")), str(books1)[:200])
+        check("v8.3 clean: progress kept", len(prog1) == 1 and prog1[0]["cfi"] == prog0[0]["cfi"], f"{prog0} {prog1}")
+        check("v8.3 clean: highlight re-anchored (new CFI, same quote, marked for sync)",
+              len(anns1) == 1 and anns1[0]["cfi"] != anns0[0]["cfi"] and anns1[0]["quote"] == HL and anns1[0]["updatedAt"] > anns0[0]["updatedAt"] and anns1[0]["dirty"], f"{anns0} {anns1}")
+        check("v8.3 clean: book still in the library", await K.locator("#bookGrid .book-card").count() == 1 and await K.locator("#bookGrid .book-card").first.is_visible())
+        await K.reload(); await K.wait_for_timeout(1200)
+        await K.click("#bookGrid .book-card"); await K.wait_for_timeout(3000)
+        txt = await K.evaluate("()=>document.querySelector('#viewer iframe').contentDocument.body.textContent")
+        check("v8.3 clean: phrases gone from the rendered text",
+              "t.me" not in txt and "@test_channel" not in txt and await K.evaluate("()=>document.querySelector('#viewer iframe').contentDocument.querySelectorAll('a[href*=\"t.me\"]').length") == 0, txt[:200])
+        check("v8.3 clean: normal text intact", "کانال ما:" in txt and HL in txt and "info@example.com" in txt and "پایان پاراگراف." in txt and "این پاراگراف شماره 5 از فصل اول" in txt)
+        HLGEOM = """([cfi,q])=>{const f=document.querySelector('#viewer iframe');const d=f.contentDocument;let txt=null;
+          try{txt=new ePub.CFI(cfi).toRange(d).toString()}catch(e){txt='ERR '+e}
+          const p=d.getElementById('p1').firstChild;const i=p.nodeValue.indexOf(q);const r=d.createRange();r.setStart(p,i);r.setEnd(p,i+q.length);
+          const fr=f.getBoundingClientRect();const tr=r.getBoundingClientRect();
+          const hs=[...document.querySelectorAll('#viewer svg .borg-hl rect, #viewer svg g.borg-hl rect')].map(x=>x.getBoundingClientRect()).filter(x=>x.width>0);
+          const cx=fr.left+(tr.left+tr.right)/2, cy=fr.top+(tr.top+tr.bottom)/2;
+          return {txt,n:hs.length,over:hs.some(h=>cx>=h.left-2&&cx<=h.right+2&&cy>=h.top-2&&cy<=h.bottom+2)}}"""
+        hg = await K.evaluate(HLGEOM, [anns1[0]["cfi"] if anns1 else "", HL])
+        check("v8.3 clean: highlight points at the same quote text and is drawn over it", hg["txt"] == HL and hg["n"] >= 1 and hg["over"], str(hg))
+        await K.click("#closeReader"); await K.wait_for_timeout(800)
+        # Auto-clean on import with the rule present
+        await K.set_input_files("#epubInput", book2)
+        await poll(lambda: _contains(K, "#toast", "حذف شد"), 15000)
+        toast2 = await K.inner_text("#toast")
+        check("v8.3 clean: importing with a rule present toasts «۲ مورد حذف شد»", "۲ مورد حذف شد" in toast2, toast2)
+        await K.wait_for_timeout(800)
+        await K.locator("#bookGrid .book-card", has_text="کتاب دوم").click(); await K.wait_for_timeout(3000)
+        txt2 = await K.evaluate("()=>document.querySelector('#viewer iframe').contentDocument.body.textContent")
+        check("v8.3 clean: imported book text is cleaned; the too-broad rule was skipped", "t.me" not in txt2 and "@second_chan" not in txt2 and "جملهٔ سالم" in txt2 and "عضو شوید:" in txt2
+              and "این پاراگراف شماره 7 از فصل اول" in txt2, txt2[:120])
+        await K.click("#closeReader"); await K.wait_for_timeout(500)
+        await K.set_input_files("#epubInput", book2); await K.wait_for_timeout(2500)
+        check("v8.3 clean: re-importing the original file is still detected as a duplicate", "قبلاً" in await K.inner_text("#toast") and await K.locator("#bookGrid .book-card").count() == 2)
+        check("v8.3 clean: no JS errors, no external requests", len(errsK) == 0 and len(extK) == 0, str(errsK[:3] + extK[:3]))
+        await ctxK.close(); shutil.rmtree(tmpd, ignore_errors=True)
         await b.close()
 
 def main():

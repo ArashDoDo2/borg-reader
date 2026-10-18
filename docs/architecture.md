@@ -43,10 +43,14 @@ continuity, ADR 0003; the unused staging path would use `ketabkhane-db-test`, AD
 
 Books also carry `serverId`, `catalogStatus`, reading `status` and `shelves` when synced. When a browser refuses to
 store Blobs, `file` is null and `fileBuffer` (ArrayBuffer) + `fileName` are stored instead (`fileOf()`).
+v8.3 text cleanup adds `sourceHash` (SHA-256 of the file as first imported, so re-importing the original is still a
+duplicate), `cleanedAt`, and for synced books `cleanPending` (new file not yet swapped in on the server) +
+`cleanAnns` (uids of re-anchored annotations to re-push after the swap).
 
 localStorage: `ketabkhane-reader-preferences` → `{font, lineHeight, fontSize, theme (light/sepia/dark/black/auto),
 align, librarySort, libraryFilter, dailyGoal, margin, para, flow, spread, digits, taps, wake, ttsRate, ttsVoice}`;
-`ketab-theme`; `borg-reading-days`/`-other`/`-pushed` (stats); `borg-device-id`; `borg-debug` (diagnostics only,
+`ketab-theme`; `borg-clean-rules` (v8.3 cleanup rules: `[{id, type: "phrase", text} | {id, type: "telegram"}]`);
+`borg-reading-days`/`-other`/`-pushed` (stats); `borg-device-id`; `borg-debug` (diagnostics only,
 read by the WebKit probe; empty for real users).
 
 Migration rules:
@@ -91,6 +95,33 @@ Migration rules:
   one) and puts the book on the checked shelves after `catalog-add` + download. `catalog-submit` asks for an optional
   category; the admin catalog editor is a dialog (title, author, description, category, publisher, date, language).
 - **Race guard:** `openToken` invalidates async work when the reader is closed or another book opens.
+
+## 4a. Text cleanup («پاک‌سازی متن», v8.3)
+Removes unwanted phrases (typically Telegram channel links) from the **EPUB file itself**, for all books; only the
+matched text is removed and no original is kept (owner's decisions, `docs/context/status.md`).
+- **UI:** library toolbar button «🧹 پاک‌سازی متن» → `#cleanDialog` (library level, works without an account; the
+  reader «Aa» panel stays display-only). Add an exact phrase (≥ 4 characters, else rejected) or the preset
+  «لینک‌های تلگرام»: `t.me/…`, `telegram.me/…`, `telegram.dog/…` URLs (with or without scheme) and `@handle`
+  (5–32 `[A-Za-z0-9_]`, not part of an e-mail address). Rules live in localStorage `borg-clean-rules`.
+- **Search («جستجو در همهٔ کتاب‌ها»):** for each local book `cleanEpub(buf, rules, false)` opens the file with JSZip,
+  reads the OPF manifest (container.xml → rootfile), parses each XHTML/HTML item with `DOMParser` (XHTML as XML; an
+  XHTML file that is not well-formed is parsed as HTML and re-serialised as XML) and removes matches inside text
+  nodes (not `script`/`style`; a phrase split across elements is not matched). Results are grouped per book: count,
+  up to 5 snippets with `<mark>`, a checkbox per book (checked). A rule with > 300 matches in one book or > 2% of its
+  text is flagged «احتمالاً بیش از حد کلی است» and excluded unless its checkbox is ticked. Progress bar; the loop
+  yields between books.
+- **Apply (`applyCleanToBook`):** changed documents are written back (XMLSerializer for XHTML, original XML
+  declaration kept), a new zip is built (`mimetype` first and STORED, everything else DEFLATE), stored in the same
+  book record through `put()` (ArrayBuffer fallback still applies) with the new `size`/`contentHash`, cached
+  `locations` dropped; id, title, author, cover, shelves, status and progress (CFI kept as is) stay. A link whose text
+  became empty is removed with it. Annotations with a `quote` are re-anchored (`reanchorAnnotations`): both files are
+  opened with epub.js, the quote is searched in the same spine item of the new file (whitespace-insensitive; RLM/ZWNJ,
+  digits and ي/ك folded; nearest occurrence to the old position) and `section.cfiFromRange()` gives the new CFI;
+  if the quote is gone the old CFI is kept. Updated annotations are saved with a new `updatedAt` (dirty → synced).
+  If the book is open in the reader it is reopened at the current position.
+- **Import:** `importFile` runs the saved rules on the new book before it is uploaded (`autoCleanImported`); rules
+  that look too broad for that book are skipped silently; the toast then says «… N مورد حذف شد».
+- **Server swap:** see §10 (`book-replace`).
 
 ## 4b. Reader engine (v8)
 Details and history of each workaround: `docs/context/reader-engine-notes.md`.
@@ -149,7 +180,8 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   non-local request. Covers import, render, TOC, fonts in the iframe, paging, progress, annotations, settings,
   persistence, offline, corrupt files, mobile layout, keyboard, edge taps, swipe (CDP touch), immersive mode,
   accounts/sync between two browsers, catalog/admin, v8 reading features, v8.1 catalog page and preview, and
-  section 14: direction detection (no-direction Persian book, English book), nested TOC, load veil.
+  section 14: direction detection (no-direction Persian book, English book), nested TOC, load veil; section 17: v8.3
+  text cleanup (rules, preview, apply, re-anchored highlight, auto-clean on import; server swap is in `api_test.py`).
   Checks assert visibility (geometry), not DOM presence. Use `poll()` (CSP forbids `wait_for_function`).
 - `tests/webkit_probe.py`: opens a sample in WebKit (iPad viewport) under rendering variants and reports frame
   width and what is under the viewer; diagnostics, not a gate (see open item in `docs/context/status.md`).
@@ -217,6 +249,13 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   v8.1: `upload-init`/`upload-complete` and `book-meta` carry `publisher`/`published`/`language` when known; on sync
   the client fills fields the server lacks (once, `metaExtPush`) and adopts non-empty server values. Books imported
   before v8.1 are re-read once (`metaExt`) to pick these fields up.
+- v8.3 cleaned books (`replaceOnServer`): the new file goes through `upload-init/chunk/complete`, then `book-replace`
+  `{old_book_id, new_book_id}` moves progress, annotations, shelves (and for an admin the catalog entry and other
+  users' copies) to it; the record gets the new `serverId`, then the re-anchored annotations (`cleanAnns`) are saved
+  again with fresh timestamps and pushed (the server re-stamps moved annotations, so an earlier push would lose).
+  Offline or on failure the book keeps `cleanPending`: `sync()` retries first, skips the book in the normal
+  upload/adopt pass, never re-downloads the old server copy, and `syncAnnotations` does not push that book's
+  annotations until the swap is done.
 - Progress is pushed 4 s after the last page turn. Deleting a synced book removes it from the account (confirmation).
 - Without an account or offline, everything works locally exactly as before.
 - Share target (`share-target`, POST multipart) is handled by the Service Worker: files are parked in the
