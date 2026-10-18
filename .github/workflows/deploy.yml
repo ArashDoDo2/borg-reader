@@ -34,11 +34,11 @@ jobs:
       - name: End-to-end tests
         run: python tests/e2e_test.py
 
-  # Safari engine check (informational for now): reports via annotations whether book text renders in WebKit.
-  webkit-probe:
+  # Safari engine (WebKit) end-to-end checks: iPad/iPhone touch + desktop. Gates the deploy like `test`.
+  # The whole script is retried once (flake guard); first-attempt failures are reported as warnings only.
+  webkit:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -48,11 +48,19 @@ jobs:
         run: |
           pip install playwright==1.56.0
           python -m playwright install --with-deps webkit
-      - name: Probe
+      - name: WebKit end-to-end tests
+        run: |
+          if WEBKIT_ANNOTATE=warning python tests/webkit_e2e.py; then exit 0; fi
+          echo "::warning title=webkit::first attempt failed, retrying once (flake guard)"
+          python tests/webkit_e2e.py
+      # Diagnostics only when the checks failed: frame width and what is under the viewer per rendering variant.
+      - name: WebKit probe (diagnostics)
+        if: failure()
+        continue-on-error: true
         run: python tests/webkit_probe.py
 
   deploy:
-    needs: test
+    needs: [test, webkit]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:

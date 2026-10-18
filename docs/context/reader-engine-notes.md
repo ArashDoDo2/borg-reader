@@ -8,14 +8,16 @@ Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/ap
 - **Blank book page on iPad/Safari (TOC visible)** → WebKit's `Range#getBoundingClientRect()` over RTL multi-column
   content made epub.js size the iframe ~500,000 px wide, which Safari cannot paint. → `patchTextWidth("rects")`
   overrides `ePub.Contents.prototype.textWidth` with the union of `getClientRects()`; identical results in Chromium.
-  → `tests/webkit_probe.py` (CI job `webkit-probe`) reports frame width per variant.
+  → `tests/webkit_e2e.py` (CI job `webkit`, gates the deploy) checks frame width and that text intersects the viewer;
+  `tests/webkit_probe.py` adds per-variant diagnostics when it fails.
 - **Edge taps do nothing on iPhone/iPad** → iOS Safari does not fire `click` on plain text inside the iframe. →
   `onTouchEnd` recognises a tap (<10 px, <500 ms) and calls `handleTap`; the follow-up synthetic click is swallowed
   for 700 ms (no double turn). → e2e edge-tap checks; verified with mobile Chromium touch emulation.
 - **"Saving book failed" in some Safari modes** → IndexedDB refuses Blobs. → `put()` falls back to storing an
   ArrayBuffer (`fileBuffer`); `fileOf()` rebuilds a File.
 - The about:srcdoc "Blocked script execution" console message is expected (scripts in books are disabled).
-- WebKit cannot be run in the agent's container; use the CI `webkit-probe` job and read its annotations.
+- WebKit cannot be run in the agent's container; check `tests/webkit_e2e.py` locally with `--browser chromium`, then read
+  the CI `webkit` job's annotations (`::error title=webkit`).
 
 ## epub.js
 - **Direction**: if the spine has no `page-progression-direction`, epub.js uses `defaultDirection` (stock "ltr").
@@ -42,6 +44,10 @@ Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/ap
 - Fonts: Vazirmatn (default), Shabnam, Parastoo, Noto Naskh Arabic, Amiri (all OFL, local). Sahel/Samim were
   removed because they look like Vazir. Fonts are injected into each iframe via `reader-fonts.css`.
 - Footnotes: EPUB3 `epub:type="noteref"` and classic `#fn` links open a popup instead of navigating.
+- **TOC entry does nothing ("No Section Found")** → nav/NCX hrefs are relative to the nav document (`../text/c1.xhtml`
+  from `nav/nav.xhtml`) but `spine.get()` looks them up as package-relative hrefs. → `resolveTocHref()` resolves each
+  href against `packaging.navPath`/`ncxPath` to the spine item's href (fragment kept) when the TOC is built; buttons,
+  `jumpTo` and header matching use it. → e2e section 18.
 - TOC: nested entries are listed up to 3 levels; labels use `dir="auto"` + `text-align:start`, so English aligns left and Persian right.
 - Metadata is often wrong (language, missing direction, missing publisher): never trust a single field.
 

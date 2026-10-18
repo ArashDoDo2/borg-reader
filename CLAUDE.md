@@ -22,7 +22,8 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
   - `api/` — PHP API: `index.php` (router), `lib/core.php` (config, DB, migrations, sessions, CSRF, rate limits),
     `lib/books.php` (upload, library, progress, annotations, shelves, stats, catalog), `lib/admin.php`.
 - `tests/api_test.py` — API tests (PHP built-in server + SQLite). `tests/e2e_test.py` — Playwright/Chromium
-  end-to-end tests. `tests/webkit_probe.py` — Safari-engine diagnostics run in CI. `tests/fixtures/` — sample EPUBs.
+  end-to-end tests. `tests/webkit_e2e.py` — WebKit (Safari engine) checks that gate the deploy in CI (iPad/iPhone/desktop;
+  `--browser chromium` to check its logic locally). `tests/webkit_probe.py` — WebKit diagnostics, run in CI only when those fail. `tests/fixtures/` — sample EPUBs.
 - `scripts/cpanel-deploy.sh` (run by `.cpanel.yml`), `scripts/smoke-test.sh`, `scripts/build-zip.sh` (fallback).
 - `.github/workflows/deploy.yml` — CI: tests → deploy through cPanel UAPI → smoke test.
 
@@ -35,7 +36,7 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
 ## Release flow (single branch, see ADR 0007)
 1. Commit on `main`. Bump the version in **three** places: `app-version` meta and the footer «نسخهٔ …» in
    `src/index.html`, and `CACHE_NAME` in `src/service-worker.js`. Add new assets to `APP_SHELL`.
-2. `git push origin main`. GitHub Actions runs API + e2e tests (+ WebKit probe, informational), then deploys via
+2. `git push origin main`. GitHub Actions runs API + e2e tests (Chromium) and the WebKit e2e checks (both gate), then deploys via
    cPanel UAPI and runs the smoke test. A failing test blocks the deploy.
 3. Check the run: `gh run list -R ArashDoDo2/borg-reader --limit 1`; failure details are emitted as annotations:
    `gh api repos/ArashDoDo2/borg-reader/check-runs/<job-id>/annotations` (log downloads are blocked here).

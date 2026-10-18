@@ -42,9 +42,9 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 ## Open items (not started unless the owner says so)
 0. Text cleanup shipped in 8.3.0. Limits: a phrase split across formatting tags is not matched; the
    "too broad" override is per rule, not per book; server swap path is covered by API tests, not e2e.
-- Known epub.js bug: TOC hrefs that go up a folder (`../text/c1.xhtml` from `nav/`) fail with "No Section Found".
-2. **Safari tests in CI**: turn `tests/webkit_probe.py` into real WebKit checks (open book, text painted, edge taps,
-   TOC). Proposed, awaiting approval. The probe already runs in CI but only reports.
+- Fixed (v8.4, not yet released): TOC hrefs that go up a folder (`../text/c1.xhtml` from `nav/`) failed with "No Section Found".
+2. **Safari tests in CI** (v8.4, not yet released): `tests/webkit_e2e.py` runs in the CI job `webkit` and gates the deploy
+   (open book, text laid out, touch edge taps, TOC, veil, seek bar, back chip). The probe now runs only when it fails.
 3. **Real-device confirmation** still pending from the owner: iPad shows text (8.0.4), iPhone edge taps (8.0.5).
 4. Later candidates (owner chose reading features first): error reporting to the admin, upload progress/resume,
    performance on very large books, Android app wrapper (needs owner's package name, signing key, Play account).

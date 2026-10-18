@@ -590,9 +590,24 @@
   }
   // TOC hrefs may be relative to the nav document, spine hrefs to the package: compare as path suffixes.
   const sameFile = (a, b) => !!a && !!b && (a === b || a.endsWith("/" + b) || b.endsWith("/" + a));
+  // v8.4: nav/NCX hrefs are relative to the nav document, but epub.js looks them up as package-relative spine hrefs,
+  // so "../text/c1.xhtml" from "nav/nav.xhtml" failed with "No Section Found". Resolve against the nav document's
+  // own path to the spine item's href (keeping the #fragment); unknown targets are returned unchanged.
+  function resolveTocHref(href) {
+    const raw = String(href || ""), hash = raw.indexOf("#");
+    const file = hash >= 0 ? raw.slice(0, hash) : raw, frag = hash >= 0 ? raw.slice(hash) : "";
+    if (!file || !bookInstance || /^[a-z][a-z0-9+.-]*:/i.test(file)) return raw;
+    const items = (bookInstance.spine && bookInstance.spine.spineItems) || [];
+    const pk = bookInstance.packaging || {}, nav = String(pk.navPath || pk.ncxPath || "");
+    const want = normHref(nav.slice(0, nav.lastIndexOf("/") + 1) + file);
+    let item = items.find(s => normHref(s.href) === want);
+    if (!item) { try { item = bookInstance.spine.get(file); } catch (_) {} }
+    if (!item) item = items.find(s => sameFile(normHref(s.href), want));
+    return item ? item.href + frag : raw;
+  }
   function setTocEntries(flat) {
-    tocFlat = flat.map(({ it, depth }, i) => {
-      const href = String(it.href || ""), hash = href.indexOf("#");
+    tocFlat = flat.map(({ it, depth, href: resolved }, i) => {
+      const href = String(resolved || it.href || ""), hash = href.indexOf("#");
       let frag = hash >= 0 ? href.slice(hash + 1) : "";
       try { frag = decodeURIComponent(frag); } catch (_) {}
       return { i, depth, label: (it.label || "").trim() || `بخش ${i + 1}` /* same text as the TOC button */, file: normHref(href), frag };
@@ -882,8 +897,8 @@
     const toc = nav.toc || [];
     // Nested entries (e.g. articles under a section) are listed too, indented by depth (max 3 levels).
     const flat = [];
-    (function walk(items, depth) { (items || []).forEach(it => { flat.push({ it, depth }); if (depth < 2) walk(it.subitems, depth + 1); }); })(toc, 0);
-    $("tocList").innerHTML = flat.length ? flat.map(({ it, depth }, i) => `<button class="toc-link${depth ? " toc-sub toc-d" + depth : ""}" type="button" dir="auto" data-href="${esc(it.href)}">${esc((it.label || "").trim() || `بخش ${i+1}`)}</button>`).join("") : '<p class="muted">فهرست فصل‌ها در این EPUB وجود ندارد.</p>';
+    (function walk(items, depth) { (items || []).forEach(it => { flat.push({ it, depth, href: resolveTocHref(it.href) }); if (depth < 2) walk(it.subitems, depth + 1); }); })(toc, 0);
+    $("tocList").innerHTML = flat.length ? flat.map(({ it, depth, href }, i) => `<button class="toc-link${depth ? " toc-sub toc-d" + depth : ""}" type="button" dir="auto" data-href="${esc(href)}">${esc((it.label || "").trim() || `بخش ${i+1}`)}</button>`).join("") : '<p class="muted">فهرست فصل‌ها در این EPUB وجود ندارد.</p>';
     $("tocList").querySelectorAll("[data-href]").forEach(btn => btn.addEventListener("click", () => { closeToc(false); jumpTo(btn.dataset.href); }));
     setTocEntries(flat);
     try { updateChapter(rendition.currentLocation()); } catch (_) {}

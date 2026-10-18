@@ -1291,6 +1291,60 @@ async def run(url):
         check("v8.3 clean: re-importing the original file is still detected as a duplicate", "قبلاً" in await K.inner_text("#toast") and await K.locator("#bookGrid .book-card").count() == 2)
         check("v8.3 clean: no JS errors, no external requests", len(errsK) == 0 and len(extK) == 0, str(errsK[:3] + extK[:3]))
         await ctxK.close(); shutil.rmtree(tmpd, ignore_errors=True)
+
+        # 18. v8.4 TOC hrefs that go up a folder (nav in nav/, chapters in text/): epub.js said "No Section Found"
+        import zipfile
+        tmpt = Path(tempfile.mkdtemp(prefix="borg-e2e-toc-"))
+        upbook = tmpt / "up.epub"
+        names = ["اول", "دوم", "سوم"]
+        with zipfile.ZipFile(upbook, "w") as z:
+            z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            D = zipfile.ZIP_DEFLATED
+            z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>', D)
+            items = "".join(f'<item id="c{i}" href="text/c{i}.xhtml" media-type="application/xhtml+xml"/>' for i in range(1, 4))
+            refs = "".join(f'<itemref idref="c{i}"/>' for i in range(1, 4))
+            z.writestr("OEBPS/content.opf", f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">toc-up-1</dc:identifier><dc:title>کتاب پوشه‌دار</dc:title><dc:creator>نویسنده</dc:creator><dc:language>fa</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav/nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>{items}</manifest><spine page-progression-direction="rtl">{refs}</spine></package>', D)
+            z.writestr("OEBPS/nav/nav.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>فهرست</title></head><body><nav epub:type="toc"><ol>'
+                       '<li><a href="../text/c1.xhtml">فصل اول</a></li><li><a href="../text/c2.xhtml">فصل دوم</a><ol><li><a href="../text/c3.xhtml">فصل سوم</a></li>'
+                       '<li><a href="../text/c3.xhtml#deep">بخش ژرف</a></li></ol></li></ol></nav></body></html>', D)
+            for i, n in enumerate(names, 1):
+                ps = [f"<p>پاراگراف {k} از فصل {n}: متنی برای آزمایش پیوندهای فهرست در پوشه‌ای دیگر.</p>" for k in range(60)]
+                if i == 3: ps.insert(40, '<h2 id="deep">بخش ژرف</h2>')
+                z.writestr(f"OEBPS/text/c{i}.xhtml", f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="fa" dir="rtl"><head><title>فصل {n}</title></head><body><h1>فصل {n}</h1>{"".join(ps)}</body></html>', D)
+        # Same layout for an EPUB2 book: the NCX lives in toc/ and points at ../text/
+        upen = tmpt / "up-en.epub"
+        with zipfile.ZipFile(upen, "w") as z:
+            z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+            z.writestr("OPS/book.opf", '<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">toc-up-en</dc:identifier><dc:title>Folder Atlas</dc:title><dc:language>en</dc:language></metadata><manifest><item id="ncx" href="toc/toc.ncx" media-type="application/x-dtbncx+xml"/><item id="a" href="text/a.html" media-type="application/xhtml+xml"/><item id="b" href="text/b.html" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="a"/><itemref idref="b"/></spine></package>')
+            z.writestr("OPS/toc/toc.ncx", '<?xml version="1.0" encoding="utf-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head/><docTitle><text>Folder Atlas</text></docTitle><navMap><navPoint id="n1" playOrder="1"><navLabel><text>Opening</text></navLabel><content src="../text/a.html"/><navPoint id="n2" playOrder="2"><navLabel><text>Far Article</text></navLabel><content src="../text/b.html"/></navPoint></navPoint></navMap></ncx>')
+            for f, h in (("a.html", "Opening"), ("b.html", "Far Article")):
+                body = "".join(f"<p>This is paragraph {k} of the part called {h}, kept in a text folder.</p>" for k in range(50))
+                z.writestr(f"OPS/text/{f}", f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><title>{h}</title></head><body><h1>{h}</h1>{body}</body></html>')
+        H_IN_VIEW = """(t)=>{const f=document.querySelector('#viewer iframe');if(!f)return false;const r=f.getBoundingClientRect();
+          const box=document.querySelector('#viewer').getBoundingClientRect();const h=[...f.contentDocument.querySelectorAll('h1,h2')].find(x=>x.textContent.trim()===t);
+          if(!h)return false;const x=h.getBoundingClientRect();return x.width>0&&x.right+r.left>box.left&&x.left+r.left<box.right&&x.bottom+r.top>box.top&&x.top+r.top<box.bottom}"""
+        errsT, extT = [], []
+        ctxT, T = await new_ctx(b, url, extT, errsT)
+        await T.goto(url); await T.wait_for_timeout(1000)
+        await T.set_input_files("#epubInput", str(upbook)); await T.wait_for_timeout(2500)
+        await T.click('#bookGrid .book-card:has-text("کتاب پوشه‌دار")'); await T.wait_for_timeout(3000)
+        hrefs = await T.evaluate("()=>[...document.querySelectorAll('#tocList .toc-link')].map(b=>b.dataset.href)")
+        check("v8.4 TOC: entries from nav/nav.xhtml resolve to the spine hrefs (text/…, #fragment kept)",
+              hrefs == ["text/c1.xhtml", "text/c2.xhtml", "text/c3.xhtml", "text/c3.xhtml#deep"], str(hrefs))
+        for label, heading in (("فصل دوم", "فصل دوم"), ("فصل سوم", "فصل سوم"), ("بخش ژرف", "بخش ژرف"), ("فصل اول", "فصل اول")):
+            await T.locator("#tocList .toc-link", has_text=label).first.click(); await T.wait_for_timeout(1800)
+            check(f"v8.4 TOC: «{label}» (../text/ href) opens its chapter, heading inside the viewer, title in the header",
+                  await T.evaluate(H_IN_VIEW, heading) and await T.inner_text("#chapterLabel") == label, await T.inner_text("#chapterLabel"))
+        check("v8.4 TOC: no «No Section Found» / JS errors (nav document)", len(errsT) == 0, str(errsT[:3]))
+        await T.click("#closeReader"); await T.wait_for_timeout(500)
+        await T.set_input_files("#epubInput", str(upen)); await T.wait_for_timeout(2500)
+        await T.click('#bookGrid .book-card:has-text("Folder Atlas")'); await T.wait_for_timeout(3000)
+        await T.locator("#tocList .toc-sub", has_text="Far Article").click(); await T.wait_for_timeout(1800)
+        check("v8.4 TOC: nested NCX entry (toc/toc.ncx → ../text/b.html) opens its article with the title in the header",
+              await T.evaluate(H_IN_VIEW, "Far Article") and await T.inner_text("#chapterLabel") == "Far Article", await T.inner_text("#chapterLabel"))
+        check("v8.4 TOC: no JS errors, no external requests", len(errsT) == 0 and len(extT) == 0, str(errsT[:3] + extT[:3]))
+        await ctxT.close(); shutil.rmtree(tmpt, ignore_errors=True)
         await b.close()
 
 def main():

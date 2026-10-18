@@ -137,7 +137,8 @@ Details and history of each workaround: `docs/context/reader-engine-notes.md`.
   (margin, paragraph spacing, paged/scrolled, single/two columns), 9 font choices, Persian digits option.
 - **TOC and header (8.2):** nested entries up to 3 levels (`.toc-sub`), labels `dir="auto"`. The header label shows the
   matching TOC title (deepest entry for the file; `#fragment` entries matched against the end of the visible page),
-  falling back to «بخش N»; the matching entry gets `.active`/`aria-current`.
+  falling back to «بخش N»; the matching entry gets `.active`/`aria-current`. TOC hrefs are resolved against the nav/NCX
+  document's own path to spine hrefs (`resolveTocHref`, v8.4) before they are rendered, clicked or matched.
 - **Seek bar (8.2):** `#bookSeek` range 0–1000 over `book.locations`, direction = `bookDir`, disabled until locations
   are ready; dragging previews chapter + percentage, release navigates via `jumpTo()`. Shows «٪X از کتاب · حدود N
   دقیقه تا پایان کتاب».
@@ -160,8 +161,9 @@ Host: shared cPanel (`parsun.com`, user `parsunco`), HTTPS. Single branch `main`
 1. `git push origin main` triggers `.github/workflows/deploy.yml`.
 2. Job `test`: `tests/api_test.py` + `tests/e2e_test.py` (Chromium). Failures are printed as `::error`
    annotations (readable with `gh api repos/ArashDoDo2/borg-reader/check-runs/<job-id>/annotations`).
-   Job `webkit-probe` (`tests/webkit_probe.py`, `continue-on-error`) reports Safari-engine measurements as `::warning`.
-3. Job `deploy` (needs `test`): first checks that the tested commit is still the head of `main`; if a newer
+   Job `webkit` (in parallel): `tests/webkit_e2e.py` in WebKit, retried once as a flake guard (first attempt reports
+   `::warning`, the retry `::error title=webkit`); on failure `tests/webkit_probe.py` adds diagnostics.
+3. Job `deploy` (needs `test` and `webkit`): first checks that the tested commit is still the head of `main`; if a newer
    commit was pushed meanwhile it skips (the newer run, queued behind it, tests and deploys that commit) — the server
    always pulls the branch head, so this is what guarantees only tested code is deployed. Then cPanel UAPI `VersionControl/update` then `VersionControlDeployment/create` on the
    clone `/home/parsunco/repositories/borg-reader`. `.cpanel.yml` runs `scripts/cpanel-deploy.sh`, which rsyncs
@@ -183,8 +185,13 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   section 14: direction detection (no-direction Persian book, English book), nested TOC, load veil; section 17: v8.3
   text cleanup (rules, preview, apply, re-anchored highlight, auto-clean on import; server swap is in `api_test.py`).
   Checks assert visibility (geometry), not DOM presence. Use `poll()` (CSP forbids `wait_for_function`).
-- `tests/webkit_probe.py`: opens a sample in WebKit (iPad viewport) under rendering variants and reports frame
-  width and what is under the viewer; diagnostics, not a gate (see open item in `docs/context/status.md`).
+- `tests/webkit_e2e.py` (~19 checks, gates the deploy): WebKit with iPad (820×1180) and iPhone (390×844) touch contexts
+  and a desktop one: import (IndexedDB), text laid out inside the viewer (frame width), touch edge taps turn exactly one
+  page, middle tap immersive, TOC jump heading in view + header title, veil lifted, seek bar, back chip, English LTR book
+  with nested TOC, no page errors. `--browser chromium` runs the same checks locally (WebKit cannot run in the agent's container).
+- `tests/webkit_probe.py`: WebKit diagnostics per rendering variant (frame width, what is under the viewer); CI runs it
+  only when `webkit_e2e.py` fails.
+- e2e section 18 (v8.4): TOC hrefs that go up a folder (`nav/nav.xhtml` → `../text/c1.xhtml`, NCX in `toc/`).
 
 ## 8. Known gaps
 - No WebKit/Safari gate in CI yet; iOS behaviour is verified by the owner on devices after release.
