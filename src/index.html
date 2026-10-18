@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#173b35">
+  <meta name="description" content="کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="assets/icon-192.png">
+  <link rel="apple-touch-icon" href="assets/icon-192.png">
+  <link rel="preload" href="assets/fonts/Vazirmatn-Variable.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="assets/css/app.css">
+  <title>کتابخانه من</title>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="صفحه اصلی"><span class="brand-mark">ک</span><span>کتابخانه من</span></a>
+    <div class="top-actions">
+      <span id="networkStatus" class="network-status">در حال بررسی اتصال…</span>
+      <button id="themeToggle" class="icon-button" type="button" aria-label="تغییر حالت شب">◐</button>
+    </div>
+  </header>
+
+  <main id="app">
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">گوشه‌ای برای آرام خواندن</p>
+        <h1>کتاب‌هایت، همیشه همراهت</h1>
+        <p>فایل EPUB را اضافه کن، در کتاب‌خوان بازش کن و حتی بدون اینترنت ادامه بده.</p>
+        <label class="primary-button upload-button">
+          <span>＋ افزودن کتاب EPUB</span>
+          <input id="epubInput" type="file" accept=".epub,application/epub+zip" hidden>
+        </label>
+        <p class="privacy-note">نسخه اولیه: کتاب انتخابی در همین مرورگر ذخیره می‌شود؛ هنوز آپلود ابری و همگام‌سازی حساب کاربری فعال نیست.</p>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="book-stack stack-back"></div>
+        <div class="book-stack stack-mid"></div>
+        <div class="book-cover">
+          <div class="cover-sun"></div><span class="cover-line"></span><span class="cover-title">وقتِ<br>خواندن</span><span class="cover-small">کتابخانه من</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="library-section">
+      <div class="section-heading">
+        <div><p class="eyebrow">مجموعه شخصی</p><h2>کتابخانه</h2></div>
+        <div class="library-controls">
+          <label class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="جست‌وجوی کتاب…" autocomplete="off"></label>
+          <label class="secondary-button import-button">افزودن EPUB<input id="epubInputSmall" type="file" accept=".epub,application/epub+zip" hidden></label>
+        </div>
+      </div>
+      <div id="bookGrid" class="book-grid"></div>
+      <div id="emptyState" class="empty-state">
+        <div class="empty-icon">▤</div>
+        <h3>کتابخانه‌ات هنوز خالی است</h3>
+        <p>یک فایل EPUB انتخاب کن تا اینجا ظاهر شود.</p>
+        <label class="secondary-button">انتخاب فایل EPUB<input id="emptyEpubInput" type="file" accept=".epub,application/epub+zip" hidden></label>
+      </div>
+    </section>
+  </main>
+
+  <section id="reader" class="reader hidden" aria-label="کتاب‌خوان">
+    <div class="reader-toolbar">
+      <button id="closeReader" class="secondary-button" type="button">← بازگشت به کتابخانه</button>
+      <div id="readerTitle" class="reader-title">کتاب</div>
+      <div class="reader-tools">
+        <label class="reader-setting-label" for="readerFont">فونت
+          <select id="readerFont" class="reader-select" aria-label="انتخاب فونت متن کتاب">
+            <option value="vazirmatn">وزیرمتن</option>
+            <option value="tahoma">Tahoma</option>
+            <option value="arial">Arial</option>
+            <option value="serif">Serif</option>
+            <option value="sans-serif">Sans-serif</option>
+          </select>
+        </label>
+        <button id="fontDown" class="icon-button" type="button" aria-label="کوچک کردن فونت">A−</button>
+        <button id="fontUp" class="icon-button" type="button" aria-label="بزرگ کردن فونت">A+</button>
+        <label class="reader-setting-label" for="readerLineHeight">فاصلهٔ خطوط
+          <select id="readerLineHeight" class="reader-select" aria-label="تنظیم فاصلهٔ خطوط">
+            <option value="1.6">کم</option><option value="1.9" selected>معمولی</option><option value="2.2">زیاد</option>
+          </select>
+        </label>
+        <button id="readerTheme" class="icon-button" type="button" aria-label="تغییر رنگ صفحه">◐</button>
+      </div>
+    </div>
+    <div class="reader-layout">
+      <aside class="toc-panel">
+        <h3>فهرست کتاب</h3>
+        <div id="tocList" class="toc-list"><p class="muted">در حال بارگذاری…</p></div>
+        <div class="reader-progress"><div class="progress-track"><span id="progressBar"></span></div><small id="progressText">۰٪</small></div>
+      </aside>
+      <div class="reading-area">
+        <div class="page-nav">
+          <button id="prevPage" class="nav-button" type="button">→ قبلی</button>
+          <span id="chapterLabel">شروع مطالعه</span>
+          <button id="nextPage" class="nav-button" type="button">بعدی ←</button>
+        </div>
+        <div id="viewer" class="viewer"></div>
+        <div class="reader-bottom"><span>محل مطالعه در همین دستگاه ذخیره می‌شود.</span><button id="bookmarkButton" class="text-button" type="button">☆ نشانک</button></div>
+      </div>
+    </div>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <footer><span>کتابخانه من</span><span>نسخه آزمایشی · فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+
+  <script src="assets/vendor/jszip.min.js"></script>
+  <script src="assets/vendor/epub.min.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>
