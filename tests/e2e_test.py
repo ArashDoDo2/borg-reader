@@ -328,7 +328,81 @@ async def run(url):
         sb = await pg.locator("#settingsPanel").bounding_box()
         check("mobile: settings sheet inside the screen", sb["x"] >= 0 and sb["x"] + sb["width"] <= 391 and sb["y"] + sb["height"] <= 845, str(sb))
         check("mobile settings: no JS errors", len(errs) == 0, str(errs[:2]))
-        await ctx.close(); await b.close()
+        await ctx.close()
+
+        # 10. Accounts and cloud: setup admin, upload, invite, catalog, second device sync
+        async def wait_synced(pg, timeout=20000):
+            try:
+                await pg.wait_for_function("document.getElementById('syncStatus').textContent.includes('همگام شد')", timeout=timeout)
+                return True
+            except Exception:
+                return False
+        async def auth(pg, mode, **fields):
+            await pg.click("#accountButton"); await pg.wait_for_timeout(600)
+            await pg.click(f'[data-auth="{mode}"]')
+            for k, v in fields.items(): await pg.fill(f'#authForm [name="{k}"]', v)
+            await pg.click("#authSubmit")
+        ext, errsA = [], []
+        ctxA, A = await new_ctx(b, url, ext, errsA)
+        await A.goto(url); await A.wait_for_timeout(800)
+        await A.set_input_files("#epubInput", sample); await A.wait_for_timeout(2000)
+        await A.click("#accountButton"); await A.wait_for_timeout(800)
+        check("first visit offers initial setup", await A.get_attribute('[data-auth="setup"]', "aria-pressed") == "true")
+        await A.click("#accountClose")
+        await auth(A, "setup", setup_key=SETUP_KEY, name="مدیر بُرگ", email="admin@example.com", password="password1")
+        check("setup logs in as admin", await wait_synced(A) and await A.inner_text("#accountButton") == "مدیر بُرگ")
+        check("admin sees catalog and admin tabs", await A.is_visible('[data-view="catalog"]') and await A.is_visible('[data-view="admin"]'))
+        await A.click('[data-view="admin"]'); await A.wait_for_timeout(800)
+        await A.fill("#inviteNote", "دوست"); await A.click("#createInvite"); await A.wait_for_timeout(800)
+        code = (await A.inner_text("#inviteResult")).split(":")[-1].strip()
+        check("admin creates an invite code", len(code) == 10, code)
+        await A.click('[data-view="mine"]'); await A.wait_for_timeout(300)
+        await A.click("#bookGrid .share-book"); await A.wait_for_timeout(1500)
+        check("admin shares the book to the public catalog", "عمومی" in await A.inner_text("#bookGrid .book-badge"))
+        await A.click("#bookGrid .book-card"); await A.wait_for_timeout(2500)
+        for _ in range(3):
+            await A.click("#nextPage"); await A.wait_for_timeout(500)
+        posA = await page_pos(A)
+        await A.wait_for_timeout(5500)  # progress push is debounced (4 s)
+        await A.click("#closeReader"); await A.wait_for_timeout(500)
+
+        # Same account on a second device
+        ext, errsB = [], []
+        ctxB, B = await new_ctx(b, url, ext, errsB)
+        await B.goto(url); await B.wait_for_timeout(800)
+        await auth(B, "login", email="admin@example.com", password="password1")
+        check("second device: login and sync", await wait_synced(B))
+        await B.wait_for_timeout(500)
+        check("second device: book downloaded automatically", await B.locator("#bookGrid .book-card").count() == 1)
+        await B.click("#bookGrid .book-card"); await B.wait_for_timeout(2500)
+        posB = await page_pos(B)
+        check("second device: opens at the same position", posB == posA and posA is not None and posA > 0, f"A={posA} B={posB}")
+        await B.click("#closeReader")
+
+        # Invited user: register, browse catalog, add book
+        ext, errsC = [], []
+        ctxC, C = await new_ctx(b, url, ext, errsC)
+        await C.goto(url); await C.wait_for_timeout(800)
+        await auth(C, "register", invite=code, name="دوست", email="friend@example.com", password="password2")
+        check("invited user registers", await wait_synced(C) and await C.inner_text("#accountButton") == "دوست")
+        check("invited user has no admin tab", not await C.is_visible('[data-view="admin"]'))
+        check("invited user library starts empty", await C.locator("#bookGrid .book-card").count() == 0)
+        await C.click('[data-view="catalog"]'); await C.wait_for_timeout(1200)
+        check("catalog shows the shared book", await C.locator("#catalogGrid .book-card").count() == 1)
+        await C.click("[data-catalog-add]")
+        await wait_synced(C); await C.wait_for_timeout(800)
+        await C.click('[data-view="mine"]'); await C.wait_for_timeout(300)
+        check("catalog book lands in the user's library", await C.locator("#bookGrid .book-card").count() == 1)
+        await C.click("#bookGrid .book-card"); await C.wait_for_timeout(2500)
+        check("user can read the catalog book", bool(await visible_text(C)))
+        await C.click("#closeReader")
+        await C.click("#accountButton"); await C.wait_for_timeout(300)
+        await C.click("#logoutButton"); await C.wait_for_timeout(600)
+        check("logout returns to local mode, books stay", await C.inner_text("#accountButton") == "ورود" and await C.locator("#bookGrid .book-card").count() == 1)
+        allerrs = errsA + errsB + errsC
+        check("accounts flow: no JS errors", len(allerrs) == 0, str(allerrs[:3]))
+        for c in (ctxA, ctxB, ctxC): await c.close()
+        await b.close()
 
 def main():
     ap = argparse.ArgumentParser()

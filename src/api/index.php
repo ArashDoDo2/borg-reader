@@ -28,7 +28,16 @@ try {
                 config(); $out['configured'] = true;
                 $out['needs_setup'] = (int)one('SELECT COUNT(*) AS n FROM users')['n'] === 0;
                 $out['database'] = true;
-            } catch (Throwable $e) { $out['ok'] = false; }
+            } catch (Throwable $e) {
+                $out['ok'] = false;
+                // Only the numeric driver error code, never the message (it can contain user names or paths).
+                if ($e instanceof PDOException) {
+                    $info = $e->errorInfo;
+                    $out['database_error'] = isset($info[1]) ? (int)$info[1] : (int)$e->getCode();
+                } elseif ($e instanceof ApiError) {
+                    $out['database_error'] = $e->codeName;
+                }
+            }
             json_out(200, $out);
 
         // ---------- Auth ----------
