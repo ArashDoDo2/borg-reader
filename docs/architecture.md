@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.1.6 (2026-10-19). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.2.0 (2026-10-19). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -104,8 +104,17 @@ Details and history of each workaround: `docs/context/reader-engine-notes.md`.
   footnote popups, word lookup / copy / quote card from the selection bar, highlights in 4 colours, notes,
   multiple bookmarks, in-book search with Persian normalisation, image viewer, wake lock, layout options
   (margin, paragraph spacing, paged/scrolled, single/two columns), 9 font choices, Persian digits option.
-- **TOC:** nested entries up to 3 levels (`.toc-sub`), labels `dir="auto"`. The header label currently shows
-  «بخش N» (spine index), not the TOC title.
+- **TOC and header (8.2):** nested entries up to 3 levels (`.toc-sub`), labels `dir="auto"`. The header label shows the
+  matching TOC title (deepest entry for the file; `#fragment` entries matched against the end of the visible page),
+  falling back to «بخش N»; the matching entry gets `.active`/`aria-current`.
+- **Seek bar (8.2):** `#bookSeek` range 0–1000 over `book.locations`, direction = `bookDir`, disabled until locations
+  are ready; dragging previews chapter + percentage, release navigates via `jumpTo()`. Shows «٪X از کتاب · حدود N
+  دقیقه تا پایان کتاب».
+- **Jumps (8.2):** every non-page-turn navigation goes through `jumpTo(target)` (TOC, search, notes list, footnote
+  "go to", seek bar; internal links record their origin via a click listener). It keeps a stack (max 10) and shows
+  `#backChip` «↩ برگشت به صفحهٔ قبل», placed above the bottom bar by `placeBackChip()`; hidden after 5 page turns.
+- **First-run guide (8.2):** overlay `role="dialog"` once per device (`borg-guide-seen`), wording from `bookIsRtl()`
+  and the taps/flow prefs; reopen from settings. Tests pre-set the key in `new_ctx` (`show_guide=True` to test it).
 
 ## 5. Service Worker
 - Install: pre-cache `APP_SHELL` (every file in `src/` the app needs, including vendor, font and `offline.html`).
@@ -147,7 +156,6 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
 
 ## 8. Known gaps
 - No WebKit/Safari gate in CI yet; iOS behaviour is verified by the owner on devices after release.
-- Header shows «بخش N» rather than the chapter title.
 - Direction detection follows the majority script; no manual per-book override.
 - Very large books: locations generation and direction detection run on open; not profiled on 50 MB+ files.
 

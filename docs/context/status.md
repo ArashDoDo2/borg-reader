@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-19, version **8.1.6** (live at https://parsun.com/borg/).
+Last updated: 2026-10-19, version **8.2.0** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -36,9 +36,15 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.1.4 | Direction-aware TOC/notes/title text (English labels left-aligned) |
 | 8.1.5 | Drawn SVG toolbar icons, larger touch targets on mobile (its tests failed; it reached production through the CI race fixed in 8.1.6) |
 | 8.1.6 | Desktop TOC toggle hidden again; CI deploys only when the tested commit is still the branch head |
+| 8.2.0 | Chapter title in the header (from the TOC, active TOC entry), whole-book seek bar with preview and time left in book, «برگشت به صفحهٔ قبل» chip after any jump (`jumpTo()`), first-run page-turn guide |
 
 ## Open items (not started unless the owner says so)
-1. **Chapter name in the reader header** instead of «بخش N» (label currently counts spine files). Proposed, awaiting approval.
+0. **Next up (approved): text cleanup («پاک‌سازی متن»)** — owner's choices: edit the EPUB file itself, rules apply to
+   all books, remove only the matched phrase, no original kept, auto-apply on import with a «N مورد حذف شد» notice,
+   admin cleanup also replaces the public-catalog file (and, by default, other users' copies). Preview of every match
+   before changing existing books; reject too-broad rules; re-anchor highlights by quote; server "book replaced" step
+   that moves progress/annotations/shelves to the new file.
+- Known epub.js bug: TOC hrefs that go up a folder (`../text/c1.xhtml` from `nav/`) fail with "No Section Found".
 2. **Safari tests in CI**: turn `tests/webkit_probe.py` into real WebKit checks (open book, text painted, edge taps,
    TOC). Proposed, awaiting approval. The probe already runs in CI but only reports.
 3. **Real-device confirmation** still pending from the owner: iPad shows text (8.0.4), iPhone edge taps (8.0.5).

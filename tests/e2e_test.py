@@ -90,7 +90,7 @@ async def open_sample(pg, url, sample):
     await pg.set_input_files("#epubInput", sample); await pg.wait_for_timeout(1800)
     await pg.click(".book-card"); await pg.wait_for_timeout(2500)
 
-def make_epub(path, title, ident, author, publisher="", date="", direction="rtl", lang="fa"):
+def make_epub(path, title, ident, author, publisher="", date="", direction="rtl", lang="fa", paras=40):
     """A small two-chapter Persian EPUB like the fixtures, with optional publisher and date metadata."""
     import zipfile
     extra = (f"<dc:publisher>{publisher}</dc:publisher>" if publisher else "") + (f"<dc:date>{date}</dc:date>" if date else "")
@@ -101,7 +101,7 @@ def make_epub(path, title, ident, author, publisher="", date="", direction="rtl"
         z.writestr("OEBPS/content.opf", f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">{ident}</dc:identifier><dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><dc:language>{lang}</dc:language>{extra}<meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine{f' page-progression-direction="{direction}"' if direction else ''}><itemref idref="c1"/><itemref idref="c2"/></spine></package>', D)
         z.writestr("OEBPS/nav.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>فهرست</title></head><body><nav epub:type="toc"><ol><li><a href="c1.xhtml">فصل اول</a></li><li><a href="c2.xhtml">فصل دوم</a></li></ol></nav></body></html>', D)
         for i, n in ((1, "اول"), (2, "دوم")):
-            p = "".join(f"<p>این پاراگراف شماره {k} از فصل {n} در کتاب {title} است.</p>" for k in range(40))
+            p = "".join(f"<p>این پاراگراف شماره {k} از فصل {n} در کتاب {title} است.</p>" for k in range(paras))
             z.writestr(f"OEBPS/c{i}.xhtml", f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="fa" dir="rtl"><head><title>فصل {n}</title></head><body><h1>فصل {n}</h1>{p}</body></html>', D)
     return str(path)
 
@@ -115,8 +115,13 @@ async def swipe(cdp, x0, x1, y):
         await cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x0 + (x1 - x0) * i / 5, "y": y}]})
     await cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
 
-async def new_ctx(browser, url, external, errors, **kw):
+# v8.2: the reader shows a first-run gesture guide over the page; contexts mark it as seen unless show_guide=True.
+GUIDE_SEEN_JS = "try{localStorage.setItem('borg-guide-seen','1');localStorage.setItem('borg-guide-seen-test','1')}catch(e){}"
+
+async def new_ctx(browser, url, external, errors, show_guide=False, **kw):
     ctx = await browser.new_context(viewport={"width": 1280, "height": 800}, **kw)
+    if not show_guide:
+        await ctx.add_init_script(GUIDE_SEEN_JS)
     async def block(route):
         external.append(route.request.url); await route.abort()
     await ctx.route(lambda u: not u.startswith("http://localhost"), block)
@@ -1097,6 +1102,81 @@ async def run(url):
         check("v8.2 English mobile: no horizontal overflow", await E_.evaluate("document.documentElement.scrollWidth<=innerWidth"))
         check("v8.2 English: no JS errors", len(errsE) == 0, str(errsE[:3]))
         await ctxE.close(); shutil.rmtree(tmpn, ignore_errors=True)
+        # 16. v8.2 help: first-run gesture guide and «برگشت به صفحهٔ قبل» chip after jumps
+        tmpd = Path(tempfile.mkdtemp(prefix="borg-e2e-help-"))
+        helpbook = make_epub(tmpd / "help.epub", "کتاب راهنما", "test-help", "نویسنده", paras=300)
+        errsJ, extJ = [], []
+        ctxJ, J = await new_ctx(b, url, extJ, errsJ, show_guide=True)
+        await J.goto(url); await J.wait_for_timeout(1200)
+        await J.set_input_files("#epubInput", helpbook); await J.wait_for_timeout(2500)
+        await J.click("#bookGrid .book-card"); await J.wait_for_timeout(3000)
+        GUIDE_GEOM = """()=>{const g=document.getElementById('readerGuide');if(!g||g.hidden)return null;
+          const r=g.getBoundingClientRect(),v=document.getElementById('viewer').getBoundingClientRect();
+          const hit=document.elementFromPoint(v.left+v.width/2,v.top+v.height/2);
+          return {covers:r.left<=v.left+1&&r.right>=v.right-1&&r.top<=v.top+1&&r.bottom>=v.bottom-1,
+                  onTop:!!(hit&&g.contains(hit)),focus:document.activeElement&&document.activeElement.id,
+                  modal:g.getAttribute('role')==='dialog'&&g.getAttribute('aria-modal')==='true'}}"""
+        gg = await J.evaluate(GUIDE_GEOM)
+        check("v8.2 guide: shown over the page on the first open", bool(gg) and gg["covers"] and gg["onTop"] and gg["modal"] and await J.is_visible("#readerGuideOk"), str(gg))
+        check("v8.2 guide: focus is on «متوجه شدم»", bool(gg) and gg["focus"] == "readerGuideOk", str(gg))
+        nxt = await J.inner_text('#readerGuideList [data-guide="next"]') if await J.locator('#readerGuideList [data-guide="next"]').count() else ""
+        prv = await J.inner_text('#readerGuideList [data-guide="prev"]') if await J.locator('#readerGuideList [data-guide="prev"]').count() else ""
+        edges = await J.evaluate("""()=>['readerGuideLeft','readerGuideRight'].map(id=>{const e=document.getElementById(id);const r=e.getBoundingClientRect();return [e.textContent,Math.round(r.width)]})""")
+        check("v8.2 guide: RTL book — left edge is next, right edge is previous",
+              "چپ" in nxt and "صفحهٔ بعد" in nxt and "راست" in prv and "صفحهٔ قبل" in prv
+              and "بعد" in edges[0][0] and "قبل" in edges[1][0] and edges[0][1] > 50, f"{nxt!r} / {prv!r} / {edges}")
+        check("v8.2 guide: mentions full screen, swipe and «Aa»",
+              await J.locator('#readerGuideList [data-guide="middle"]').count() == 1 and await J.locator('#readerGuideList [data-guide="swipe"]').count() == 1
+              and "Aa" in await J.inner_text("#readerGuideList"))
+        await J.click("#readerGuideOk"); await J.wait_for_timeout(300)
+        seen = await J.evaluate(f"localStorage.getItem('borg-guide-seen{suffix}')")
+        check("v8.2 guide: «متوجه شدم» closes it and remembers it", not await J.is_visible("#readerGuide") and seen == "1", str(seen))
+        await J.click("#closeReader"); await J.wait_for_timeout(800)
+        await J.click("#bookGrid .book-card"); await J.wait_for_timeout(2500)
+        check("v8.2 guide: not shown again when the book is reopened", await J.is_visible("#viewer") and not await J.is_visible("#readerGuide"))
+        await J.reload(); await J.wait_for_timeout(1200)
+        await J.click("#bookGrid .book-card"); await J.wait_for_timeout(2500)
+        check("v8.2 guide: not shown again after a reload", await J.is_visible("#viewer") and not await J.is_visible("#readerGuide"))
+        await open_settings(J)
+        check("v8.2 guide: settings has «نمایش راهنمای ورق زدن»", await J.is_visible("#showGuide"))
+        await J.click("#showGuide"); await J.wait_for_timeout(300)
+        gg2 = await J.evaluate(GUIDE_GEOM)
+        check("v8.2 guide: can be reopened from settings", bool(gg2) and gg2["covers"] and gg2["onTop"] and not await J.is_visible("#settingsPanel"), str(gg2))
+        await J.keyboard.press("Escape"); await J.wait_for_timeout(300)
+        check("v8.2 guide: Escape closes it and keeps the reader open", not await J.is_visible("#readerGuide") and await J.is_visible("#viewer"))
+        # Back chip
+        for _ in range(2):
+            await J.click("#nextPage"); await J.wait_for_timeout(900)
+        t0 = await visible_text(J)
+        check("v8.2 back chip: hidden before any jump", not await J.is_visible("#backChip"))
+        await J.locator("#tocList >> text=فصل دوم").first.click(); await J.wait_for_timeout(1800)
+        t1 = await visible_text(J)
+        CHIP_GEOM = """()=>{const c=document.getElementById('backChip');if(!c||c.hidden)return null;const r=c.getBoundingClientRect();
+          const v=document.getElementById('viewer').getBoundingClientRect(),bb=document.querySelector('.reader-bottom').getBoundingClientRect();
+          const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);
+          return {w:Math.round(r.width),h:Math.round(r.height),inMiddle:r.left>=v.left+v.width*0.25-1&&r.right<=v.right-v.width*0.25+1,
+                  centered:Math.abs((r.left+r.right)/2-(v.left+v.right)/2)<4,aboveBar:bb.height===0||r.bottom<=bb.top+1,
+                  inView:r.top>=v.top&&r.bottom<=v.bottom+1,onTop:hit===c||c.contains(hit),text:c.textContent}}"""
+        cg = await J.evaluate(CHIP_GEOM)
+        check("v8.2 back chip: visible after a TOC jump, centered above the bottom bar", bool(cg) and cg["w"] > 60 and cg["h"] >= 30 and cg["centered"] and cg["aboveBar"] and cg["inView"] and cg["onTop"] and "برگشت" in cg["text"], f"{cg} {t0!r}→{t1!r}")
+        check("v8.2 back chip: stays out of the edge tap zones", bool(cg) and cg["inMiddle"], str(cg))
+        check("v8.2 guide: not shown on a chapter load", not await J.is_visible("#readerGuide"))
+        await J.set_viewport_size({"width": 390, "height": 844}); await J.wait_for_timeout(1200)
+        cgm = await J.evaluate(CHIP_GEOM)
+        check("v8.2 back chip (phone): compact, in the middle, above the bottom bar", bool(cgm) and cgm["inMiddle"] and cgm["aboveBar"] and cgm["onTop"] and cgm["h"] < 60, str(cgm))
+        await J.set_viewport_size({"width": 1280, "height": 800}); await J.wait_for_timeout(1200)
+        await J.click("#backChip"); await J.wait_for_timeout(1800)
+        t2 = await visible_text(J)
+        check("v8.2 back chip: returns to the page before the jump and hides", t0 and t2 == t0 and t1 != t0 and not await J.is_visible("#backChip"), f"{t0!r} / {t1!r} / {t2!r}")
+        await J.locator("#tocList >> text=فصل دوم").first.click(); await J.wait_for_timeout(1800)
+        shown_again = await J.is_visible("#backChip")
+        states = []
+        for _ in range(6):
+            await J.click("#nextPage"); await J.wait_for_timeout(900)
+            states.append(await J.is_visible("#backChip"))
+        check("v8.2 back chip: hides after turning 6 pages away from the jump", shown_again and states[0] and not states[-1], str(states))
+        check("v8.2 help: no JS errors, no external requests", len(errsJ) == 0 and len(extJ) == 0, str(errsJ[:3] + extJ[:3]))
+        await ctxJ.close(); shutil.rmtree(tmpd, ignore_errors=True)
         await b.close()
 
 def main():
