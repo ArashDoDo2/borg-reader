@@ -47,6 +47,24 @@ VISIBLE_TEXT_JS = """()=>{const f=document.querySelector('#viewer iframe');if(!f
 
 async def visible_text(pg): return await pg.evaluate(VISIBLE_TEXT_JS)
 
+async def page_pos(pg):
+    """Position of the first visible block: -1 for a chapter heading, else the paragraph number."""
+    import re
+    t = await visible_text(pg) or ""
+    m = re.search(r"شماره (\d+)", t)
+    return int(m.group(1)) if m else (-1 if t.startswith("فصل") else None)
+
+async def open_sample(pg, url, sample):
+    await pg.goto(url); await pg.wait_for_timeout(800)
+    await pg.set_input_files("#epubInput", sample); await pg.wait_for_timeout(1800)
+    await pg.click(".book-card"); await pg.wait_for_timeout(2500)
+
+async def swipe(cdp, x0, x1, y):
+    await cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x0, "y": y}]})
+    for i in range(1, 6):
+        await cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": x0 + (x1 - x0) * i / 5, "y": y}]})
+    await cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+
 async def new_ctx(browser, url, external, errors, **kw):
     ctx = await browser.new_context(viewport={"width": 1280, "height": 800}, **kw)
     async def block(route):
@@ -151,6 +169,84 @@ async def run(url):
         await pg.set_input_files("#epubInput", sample); await pg.wait_for_timeout(1800)
         await pg.click(".book-card"); await pg.wait_for_timeout(2500)
         check("mobile: book visible", bool(await visible_text(pg)))
+        await ctx.close()
+
+        # 6. Desktop navigation: keyboard, edge taps, immersive mode
+        ext, errs = [], []
+        ctx, pg = await new_ctx(b, url, ext, errs)
+        await open_sample(pg, url, sample)
+        check("desktop: TOC toggle hidden", not await pg.is_visible("#tocToggle"))
+        await pg.click("#readerTitle")
+        p0 = await page_pos(pg)
+        await pg.keyboard.press("ArrowLeft"); await pg.wait_for_timeout(500)
+        p1 = await page_pos(pg)
+        check("key ArrowLeft = next page (RTL)", p1 is not None and p0 is not None and p1 > p0, f"{p0}->{p1}")
+        await pg.keyboard.press("ArrowRight"); await pg.wait_for_timeout(500)
+        check("key ArrowRight = previous page (RTL)", await page_pos(pg) == p0)
+        fr = pg.frame_locator("#viewer iframe")
+        await fr.locator("body").press("ArrowLeft"); await pg.wait_for_timeout(500)
+        p2 = await page_pos(pg)
+        check("keys work with focus inside the book", p2 is not None and p2 > p0, f"{p0}->{p2}")
+        await pg.keyboard.press("PageUp"); await pg.wait_for_timeout(500)
+        check("PageUp = previous page", await page_pos(pg) == p0)
+        box = await pg.locator("#viewer").bounding_box()
+        cy = box["y"] + box["height"] / 2
+        await pg.mouse.click(box["x"] + box["width"] * 0.1, cy); await pg.wait_for_timeout(500)
+        p3 = await page_pos(pg)
+        check("tap left edge = next page (RTL)", p3 is not None and p3 > p0, f"{p0}->{p3}")
+        await pg.mouse.click(box["x"] + box["width"] * 0.9, cy); await pg.wait_for_timeout(500)
+        check("tap right edge = previous page (RTL)", await page_pos(pg) == p0)
+        h0 = box["height"]
+        await pg.mouse.click(box["x"] + box["width"] * 0.5, cy); await pg.wait_for_timeout(800)
+        h1 = (await pg.locator("#viewer").bounding_box())["height"]
+        check("tap middle = immersive (bars hidden, viewer taller)",
+              not await pg.is_visible(".reader-toolbar") and not await pg.is_visible(".page-nav") and h1 > h0 + 100, f"{h0:.0f}->{h1:.0f}")
+        check("immersive: text still visible", bool(await visible_text(pg)))
+        await pg.keyboard.press("Escape"); await pg.wait_for_timeout(600)
+        check("Escape leaves immersive", await pg.is_visible(".reader-toolbar"))
+        await pg.mouse.click(box["x"] + box["width"] * 0.5, cy); await pg.wait_for_timeout(600)
+        box2 = await pg.locator("#viewer").bounding_box()
+        await pg.mouse.click(box2["x"] + box2["width"] * 0.5, box2["y"] + box2["height"] / 2); await pg.wait_for_timeout(600)
+        check("tap middle again restores bars", await pg.is_visible(".reader-toolbar"))
+        await pg.keyboard.press("Escape"); await pg.wait_for_timeout(500)
+        check("Escape closes the reader", not await pg.is_visible("#reader"))
+        check("desktop navigation: no JS errors", len(errs) == 0, str(errs[:2]))
+        await ctx.close()
+
+        # 7. Mobile navigation: TOC drawer and swipe
+        ext, errs = [], []
+        ctx, pg = await new_ctx(b, url, ext, errs, is_mobile=True, has_touch=True)
+        await pg.set_viewport_size({"width": 390, "height": 844})
+        await open_sample(pg, url, sample)
+        cdp = await ctx.new_cdp_session(pg)
+        panel = pg.locator("#tocPanel")
+        check("mobile: TOC toggle visible", await pg.is_visible("#tocToggle"))
+        check("mobile: drawer starts off-screen", (await panel.bounding_box())["x"] >= 389)
+        await pg.click("#tocToggle"); await pg.wait_for_timeout(400)
+        pb = await panel.bounding_box()
+        check("mobile: drawer opens inside the screen", pb["x"] >= 0 and pb["x"] + pb["width"] <= 391, str(pb))
+        check("mobile: aria-expanded true", await pg.get_attribute("#tocToggle", "aria-expanded") == "true")
+        await pg.click(".toc-link >> nth=1"); await pg.wait_for_timeout(900)
+        check("mobile: TOC link opens chapter and closes drawer",
+              await pg.inner_text("#chapterLabel") == "بخش ۲" and (await panel.bounding_box())["x"] >= 389)
+        await pg.click("#tocToggle"); await pg.wait_for_timeout(400)
+        await pg.mouse.click(20, 420); await pg.wait_for_timeout(400)
+        check("mobile: backdrop closes drawer", (await panel.bounding_box())["x"] >= 389)
+        await pg.click("#tocToggle"); await pg.wait_for_timeout(400)
+        await pg.keyboard.press("Escape"); await pg.wait_for_timeout(400)
+        check("mobile: Escape closes drawer", (await panel.bounding_box())["x"] >= 389 and await pg.is_visible("#reader"))
+        vb = await pg.locator("#viewer").bounding_box()
+        y = vb["y"] + vb["height"] / 2
+        q0 = await page_pos(pg)
+        await swipe(cdp, vb["x"] + 80, vb["x"] + 300, y); await pg.wait_for_timeout(700)
+        q1 = await page_pos(pg)
+        check("swipe right = next page (RTL)", q1 is not None and q0 is not None and q1 > q0, f"{q0}->{q1}")
+        check("swipe does not toggle immersive", await pg.is_visible(".reader-toolbar"))
+        await swipe(cdp, vb["x"] + 300, vb["x"] + 80, y); await pg.wait_for_timeout(700)
+        check("swipe left = previous page (RTL)", await page_pos(pg) == q0)
+        await swipe(cdp, vb["x"] + 190, vb["x"] + 200, y); await pg.wait_for_timeout(500)
+        check("tiny movement is not a swipe", await page_pos(pg) == q0)
+        check("mobile navigation: no JS errors", len(errs) == 0, str(errs[:2]))
         await ctx.close(); await b.close()
 
 def main():

@@ -111,3 +111,18 @@ body.dark .empty-state{background:#202b2570}
 @media(max-width:760px){.reader-setting-label{flex-direction:column;align-items:stretch;gap:2px;font-size:10px}.reader-select{max-width:125px;min-height:32px;padding:3px 5px}.reader-tools{flex-wrap:wrap;justify-content:flex-end}}
 /* Mobile: the reading area must fill the remaining height, otherwise the book viewer collapses to 0px. */
 @media(max-width:700px){.reader-layout{min-height:0}.reading-area{flex:1;min-height:0}}
+
+/* v6.1: TOC toggle and drawer (mobile), immersive reading mode */
+.toc-toggle{display:none}
+.toc-backdrop{display:none}
+.reader.immersive .reader-toolbar,.reader.immersive .page-nav,.reader.immersive .reader-bottom{display:none}
+.reader.immersive .reading-area{padding:8px}
+@media(max-width:700px){
+ .toc-toggle{display:inline-flex;align-items:center;justify-content:center;min-width:38px;height:38px;flex-shrink:0}
+ .toc-panel{display:block;position:fixed;top:0;bottom:0;right:0;z-index:40;width:min(84vw,330px);transform:translateX(105%);transition:transform .22s ease;box-shadow:-12px 0 32px rgba(0,0,0,.18);border-left:0;padding-top:28px}
+ .reader.toc-open .toc-panel{transform:none}
+ .toc-backdrop{display:block;position:fixed;inset:0;z-index:35;background:rgba(10,20,16,.38);opacity:0;pointer-events:none;transition:opacity .22s}
+ .reader.toc-open .toc-backdrop{opacity:1;pointer-events:auto}
+ .reader.immersive .reading-area{padding:4px}
+}
+@media(prefers-reduced-motion:reduce){.toc-panel,.toc-backdrop{transition:none}}

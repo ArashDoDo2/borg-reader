@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v6.0.0. Product goals, roadmap and ideas live in the
+Status: describes the code in `src/` as of v6.1.0. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
 ## 1. Overview
@@ -46,6 +46,16 @@ Target schema v2 and the mandatory migration rules are in spec §8. Rules that a
 - **Import:** validate extension/size → `extractMetadata` (opens with epub.js; listens for `openFailed`, 20 s timeout; waits for background loads before `destroy`) → store record. Errors are `UserError` with a Persian message; nothing is stored on failure.
 - **Open:** restore saved CFI directly (`display(cfi)`), build TOC, then `prepareLocations` in background (load cached locations or generate with 1600 chars/location and save to the book record) so percentages are real.
 - **Navigation state:** `relocated` sets progress, chapter label, `prev` disabled only at `atStart`, `next` disabled at `atEnd`; progress is saved per relocation.
+- **Navigation input (v6.1):** keyboard on the main document plus `rendition.on("keydown"|"touchstart"|"touchend"|"click")`
+  for input inside the book iframe (it does not bubble to the page). Directions are physical and follow the book:
+  for RTL books (`page-progression-direction` or a Persian/Arabic-script language) ArrowLeft, a left-edge tap and a
+  finger swipe to the right go **forward**; LTR books are mirrored. PageDown/Space forward, PageUp back, Escape closes
+  drawer → immersive → reader. Edge zones are 25% of the viewer width each; taps on links or with selected text are
+  ignored; a swipe suppresses the click that follows it.
+- **Immersive mode:** a middle tap toggles `.immersive` on `#reader` (toolbar, page nav and bottom bar hidden) and
+  calls `rendition.resize()` because the viewer changes size without a window resize.
+- **Mobile TOC:** below 700 px the TOC panel becomes a right-side drawer (`.toc-open`), with a backdrop, focus moved
+  into it on open and back to the toggle on close.
 - **Race guard:** `openToken` invalidates async work when the reader is closed or another book opens.
 
 ## 5. Service Worker
@@ -67,11 +77,11 @@ and forces permissions to 644/755 (v5 shipped files with 600 → HTTP 403, ADR 0
 2026-10-18 (ADR 0002).
 
 ## 7. Testing
-`tests/e2e_test.py` serves `src/` under `/borg/`, blocks all non-local requests and runs 27 checks
+`tests/e2e_test.py` serves `src/` under `/borg/`, blocks all non-local requests and runs 53 checks
 (import, render, TOC, font in iframe, paging, progress, bookmark, persistence, offline, corrupt file,
-missing JSZip, mobile layout). Checks assert visibility (non-zero viewer height), not just DOM presence.
+missing JSZip, mobile layout, keyboard, edge taps, immersive mode, mobile TOC drawer, swipe via CDP touch events). Checks assert visibility (non-zero viewer height), not just DOM presence.
 
 ## 8. Known gaps
-- TOC is hidden below 700 px width (no mobile TOC yet).
+- Reader toolbar is crowded on phones (settings panel planned).
 - Single bookmark per book; no sepia theme; no text alignment setting.
 - Not yet tested on real Android/iPad devices or large real-world Persian EPUBs.

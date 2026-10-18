@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="6.0.0">
+  <meta name="app-version" content="6.1.0">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="assets/icon-192.png">
@@ -65,6 +65,7 @@
   <section id="reader" class="reader hidden" aria-label="کتاب‌خوان">
     <div class="reader-toolbar">
       <button id="closeReader" class="secondary-button" type="button">← بازگشت به کتابخانه</button>
+      <button id="tocToggle" class="icon-button toc-toggle" type="button" aria-label="فهرست کتاب" aria-expanded="false" aria-controls="tocPanel">☰</button>
       <div id="readerTitle" class="reader-title">کتاب</div>
       <div class="reader-tools">
         <label class="reader-setting-label" for="readerFont">فونت
@@ -87,7 +88,8 @@
       </div>
     </div>
     <div class="reader-layout">
-      <aside class="toc-panel">
+      <div id="tocBackdrop" class="toc-backdrop" aria-hidden="true"></div>
+      <aside id="tocPanel" class="toc-panel" aria-label="فهرست کتاب" tabindex="-1">
         <h3>فهرست کتاب</h3>
         <div id="tocList" class="toc-list"><p class="muted">در حال بارگذاری…</p></div>
         <div class="reader-progress"><div class="progress-track"><span id="progressBar"></span></div><small id="progressText">۰٪</small></div>
@@ -105,7 +107,7 @@
   </section>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <footer><span>بُرگ · نسخهٔ ۶.۰.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۶.۱.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

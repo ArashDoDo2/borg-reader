@@ -274,6 +274,11 @@
     // The book is rendered in an iframe; load the bundled font there too.
     rendition.hooks.content.register(contents => contents.addStylesheet(READER_FONTS_URL));
     applyReaderStyles();
+    // Input inside the book iframe does not reach the main document; epub.js re-emits it on the rendition.
+    rendition.on("keydown", handleReaderKey);
+    rendition.on("touchstart", onTouchStart);
+    rendition.on("touchend", onTouchEnd);
+    rendition.on("click", onReaderClick);
     rendition.on("relocated", async location => {
       if (token !== openToken || !location?.start) return;
       const pct = percentFor(location.start.cfi, location.start.percentage);
@@ -305,7 +310,7 @@
     if (token !== openToken) return;
     const toc = nav.toc || [];
     $("tocList").innerHTML = toc.length ? toc.map((item, i) => `<button class="toc-link" type="button" data-href="${esc(item.href)}">${esc(item.label || `بخش ${i+1}`)}</button>`).join("") : '<p class="muted">فهرست فصل‌ها در این EPUB وجود ندارد.</p>';
-    $("tocList").querySelectorAll("[data-href]").forEach(btn => btn.addEventListener("click", () => rendition && rendition.display(btn.dataset.href)));
+    $("tocList").querySelectorAll("[data-href]").forEach(btn => btn.addEventListener("click", () => { closeToc(false); if (rendition) rendition.display(btn.dataset.href); }));
     $("bookmarkButton").textContent = saved?.bookmark ? "★ نشانک ذخیره‌شده" : "☆ نشانک";
     prepareLocations(record, token);
   }
@@ -323,11 +328,105 @@
       } catch (_) {}
     }
     openToken++;
+    $("reader").classList.remove("toc-open", "immersive");
+    $("tocToggle").setAttribute("aria-expanded", "false");
     $("reader").classList.add("hidden");
     document.body.style.overflow = "";
     if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
     bookInstance = null; rendition = null; currentBook = null;
   }
+  // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
+  const SWIPE_MIN_PX = 50, EDGE_ZONE = 0.25;
+  let touchStart = null, suppressClickUntil = 0;
+  function bookIsRtl() {
+    try {
+      const meta = ((bookInstance && (bookInstance.packaging || bookInstance.package)) || {}).metadata || {};
+      if (meta.direction === "rtl") return true;
+      if (meta.direction === "ltr") return false;
+      return /^(fa|ar|he|ur|ps|ku)/i.test(meta.language || "fa");
+    } catch (_) { return true; }
+  }
+  function goForward() { if (rendition) rendition.next(); }
+  function goBack() { if (rendition) rendition.prev(); }
+  // Physical directions: in an RTL book the left side of the page is "forward".
+  function goLeft() { if (bookIsRtl()) goForward(); else goBack(); }
+  function goRight() { if (bookIsRtl()) goBack(); else goForward(); }
+  function readerOpen() { return !$("reader").classList.contains("hidden"); }
+  function openToc() {
+    $("reader").classList.add("toc-open");
+    $("tocToggle").setAttribute("aria-expanded", "true");
+    const first = $("tocList").querySelector("button");
+    setTimeout(() => (first || $("tocPanel")).focus({ preventScroll: true }), 50);
+  }
+  function closeToc(returnFocus) {
+    if (!$("reader").classList.contains("toc-open")) return;
+    $("reader").classList.remove("toc-open");
+    $("tocToggle").setAttribute("aria-expanded", "false");
+    if (returnFocus) $("tocToggle").focus({ preventScroll: true });
+  }
+  function setImmersive(on) {
+    const reader = $("reader");
+    if (reader.classList.contains("immersive") === on) return;
+    reader.classList.toggle("immersive", on);
+    if (on) showToast("برای نمایش دوبارهٔ نوارها، وسط صفحه را لمس کن.");
+    // The viewer changed size without a window resize, so re-paginate explicitly.
+    requestAnimationFrame(() => { try { if (rendition) rendition.resize(); } catch (_) {} });
+  }
+  function handleReaderKey(e) {
+    if (!readerOpen() || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
+    const tag = (e.target && e.target.tagName) || "";
+    if (/^(INPUT|SELECT|TEXTAREA)$/.test(tag)) return;
+    if (tag === "BUTTON" && (e.key === " " || e.key === "Enter")) return;
+    let handled = true;
+    switch (e.key) {
+      case "ArrowLeft": goLeft(); break;
+      case "ArrowRight": goRight(); break;
+      case "PageDown": goForward(); break;
+      case "PageUp": goBack(); break;
+      case " ": if (e.shiftKey) goBack(); else goForward(); break;
+      case "Escape":
+        if ($("reader").classList.contains("toc-open")) closeToc(true);
+        else if ($("reader").classList.contains("immersive")) setImmersive(false);
+        else closeReader();
+        break;
+      default: handled = false;
+    }
+    if (handled) e.preventDefault();
+  }
+  function onTouchStart(e) {
+    const t = e.changedTouches && e.changedTouches[0];
+    touchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
+  }
+  function onTouchEnd(e) {
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!touchStart || !t) return;
+    const dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y, dt = Date.now() - touchStart.time;
+    touchStart = null;
+    if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 800) {
+      suppressClickUntil = Date.now() + 500;
+      // Finger moving right turns to the next page in an RTL book, like a Persian paper book.
+      if (dx > 0) goLeft(); else goRight();
+    }
+  }
+  function onReaderClick(e, contents) {
+    if (Date.now() < suppressClickUntil) return;
+    if (e.target && e.target.closest && e.target.closest("a, button, input, select, textarea, audio, video, label")) return;
+    try {
+      const win = (contents && contents.window) || e.view;
+      if (win && String(win.getSelection()).trim()) return;
+    } catch (_) {}
+    const frame = e.view && e.view.frameElement;
+    const box = $("viewer").getBoundingClientRect();
+    if (!frame || !box.width) return;
+    const ratio = (frame.getBoundingClientRect().left + e.clientX - box.left) / box.width;
+    if (ratio < EDGE_ZONE) goLeft();
+    else if (ratio > 1 - EDGE_ZONE) goRight();
+    else setImmersive(!$("reader").classList.contains("immersive"));
+  }
+  $("tocToggle").addEventListener("click", () => { if ($("reader").classList.contains("toc-open")) closeToc(true); else openToc(); });
+  $("tocBackdrop").addEventListener("click", () => closeToc(true));
+  document.addEventListener("keydown", handleReaderKey);
+
   function setReaderTheme() {
     isReaderDark = !isReaderDark;
     applyReaderStyles();
