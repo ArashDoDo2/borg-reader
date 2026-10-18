@@ -1,6 +1,5 @@
-# Test, then deploy through cPanel Git Version Control:
-#   push to staging -> https://parsun.com/borg-test/
-#   push to main    -> https://parsun.com/borg/
+# Test, then deploy through cPanel Git Version Control (single branch, ADR 0007):
+#   push to main -> https://parsun.com/borg/
 # Secrets (Settings > Secrets and variables > Actions): CPANEL_TOKEN (Git Version Control only), CPANEL_USER, CPANEL_HOST.
 name: test-and-deploy
 

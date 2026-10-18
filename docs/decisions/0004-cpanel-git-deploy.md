@@ -1,5 +1,7 @@
 # 0004 — Deploy with cPanel Git Version Control
 
+Note: the staging branch and manual deploy clicks were replaced by ADR 0007 (GitHub Actions, `main` only).
+
 Status: accepted (2026-10-18)
 
 ## Context

@@ -1,0 +1,52 @@
+# Reader engine notes — pitfalls and the fixes in place
+
+The reader is epub.js 0.3.93 (vendored, unmodified) rendering each spine item in a sandboxed iframe, paginated
+with CSS columns. Most bugs so far came from three sources: Safari/WebKit, epub.js RTL handling, and malformed
+Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/app.js`) → test that guards it.
+
+## Safari / WebKit
+- **Blank book page on iPad/Safari (TOC visible)** → WebKit's `Range#getBoundingClientRect()` over RTL multi-column
+  content made epub.js size the iframe ~500,000 px wide, which Safari cannot paint. → `patchTextWidth("rects")`
+  overrides `ePub.Contents.prototype.textWidth` with the union of `getClientRects()`; identical results in Chromium.
+  → `tests/webkit_probe.py` (CI job `webkit-probe`) reports frame width per variant.
+- **Edge taps do nothing on iPhone/iPad** → iOS Safari does not fire `click` on plain text inside the iframe. →
+  `onTouchEnd` recognises a tap (<10 px, <500 ms) and calls `handleTap`; the follow-up synthetic click is swallowed
+  for 700 ms (no double turn). → e2e edge-tap checks; verified with mobile Chromium touch emulation.
+- **"Saving book failed" in some Safari modes** → IndexedDB refuses Blobs. → `put()` falls back to storing an
+  ArrayBuffer (`fileBuffer`); `fileOf()` rebuilds a File.
+- The about:srcdoc "Blocked script execution" console message is expected (scripts in books are disabled).
+- WebKit cannot be run in the agent's container; use the CI `webkit-probe` job and read its annotations.
+
+## epub.js
+- **Direction**: if the spine has no `page-progression-direction`, epub.js uses `defaultDirection` (stock "ltr").
+  An RTL body inside an LTR container puts the chapter start off-screen: TOC jumps land on the chapter's *last*
+  page and prev/next go the wrong way. → `detectBookDirection()` decides `bookDir` once per open: declared
+  direction → Arabic-script vs Latin letter count over the first ≤8 spine items (language tags lie: a Persian book
+  tagged `en` exists) → language tag → RTL. `bookDir` feeds `defaultDirection`, the theme's body `direction`, the
+  `rendered` hook, and `bookIsRtl()` (edge taps, swipes, arrow keys). → e2e section 14 ("no-direction book",
+  "English book is laid out LTR"). Note `section.load()` resolves to the `<html>` element, not a Document.
+- **Text "jumps" when a chapter loads** → first paint used the fallback font, then the reader font stylesheet and
+  theme re-flowed it. → a `spine.hooks.serialize` hook injects `<style id="borg-veil">html{visibility:hidden}</style>`;
+  a content hook removes it after `reader-fonts.css` loads and `document.fonts.ready` (700 ms cap, 1.5 s safety).
+  The hook must be registered **after `book.opened`**, otherwise epub.js's own resource-substitution hook
+  overwrites `section.output`. → e2e "chapter veil is lifted".
+- Input inside the iframe does not bubble: use `rendition.on("keydown"|"touchstart"|"touchend"|"click")`. Those
+  events are passive: `preventDefault()` only for events from the main document.
+- Escape is layered (selection bar → popups → search → settings → TOC drawer → immersive → close reader).
+- Hooks: `rendition.hooks.content` runs per loaded chapter (fonts, half-space fix, digits, footnote/image
+  handlers). `openToken` guards every async step against a reader that was closed or replaced.
+
+## Persian EPUB content
+- **Half-spaces shown as joined words** → some books use U+200F (RLM) where ZWNJ (U+200C) belongs. → `fixHalfSpaces`
+  replaces RLM-between-letters with ZWNJ at display time; `normalizeForSearch` also unifies ی/ي/ى and ک/ك.
+- Fonts: Vazirmatn (default), Shabnam, Parastoo, Noto Naskh Arabic, Amiri (all OFL, local). Sahel/Samim were
+  removed because they look like Vazir. Fonts are injected into each iframe via `reader-fonts.css`.
+- Footnotes: EPUB3 `epub:type="noteref"` and classic `#fn` links open a popup instead of navigating.
+- TOC: nested entries are listed up to 3 levels; labels use `dir="auto"` + `text-align:start`, so English aligns left and Persian right.
+- Metadata is often wrong (language, missing direction, missing publisher): never trust a single field.
+
+## Testing tips
+- Real books for manual checks: the owner's Persian book (RLM half-spaces, no direction, `lang=en`) and an
+  English Economist EPUB (calibre, nested NCX). Neither is committed (copyright); fixtures are generated in tests.
+- Measure, don't eyeball: frame width, `elementFromPoint` inside the viewer box, heading position, computed
+  `direction`. A frame-by-frame `requestAnimationFrame` recorder was used to prove the veil fix.

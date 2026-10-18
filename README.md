@@ -1,27 +1,34 @@
 # بُرگ (Borg)
 
-کتاب‌خوان فارسی EPUB به‌صورت PWA؛ راست‌به‌چپ، آفلاین، و بدون ارسال کتاب به سرور.
-نسخهٔ منتشرشده: https://parsun.com/borg/ — نسخهٔ آزمایشی: https://parsun.com/borg-test/
+کتاب‌خوان EPUB فارسی‌محور به‌صورت PWA: آفلاین، راست‌به‌چپ (و چپ‌به‌راست برای کتاب‌های لاتین)، با حساب کاربری اختیاری
+برای همگام‌سازی کتاب‌ها و پیشرفت مطالعه و یک کتابخانهٔ عمومی با تأیید مدیر.
+نسخهٔ منتشرشده: https://parsun.com/borg/
+
+## امکانات اصلی
+- کتابخانهٔ محلی (IndexedDB)، قفسه‌ها، وضعیت مطالعه، آمار و هدف روزانه
+- خواننده: صفحه‌بندی یا پیمایش، یک/دو ستون، چند فونت فارسی، تم‌ها، لمس لبه و کشیدن، حالت تمام‌صفحه
+- هایلایت، یادداشت، نشانک، جستجو در کتاب، پانویس بازشو، معنی/کپی واژه، کارت نقل‌قول، خواندن با صدا
+- حساب کاربری با دعوت‌نامه، کتابخانهٔ ابری، همگام‌سازی پیشرفت و یادداشت‌ها
+- کتابخانهٔ عمومی: صفحهٔ کتاب، مطالعهٔ آنلاین بدون افزودن، فیلتر نویسنده و دسته، پنل مدیریت
 
 ## ساختار
-- `src/` — فایل‌هایی که روی سرور منتشر می‌شوند (HTML/CSS/JS، epub.js، JSZip و فونت Vazirmatn به‌صورت محلی).
-- `tests/` — آزمون‌های خودکار Playwright و فایل‌های EPUB نمونه.
-- `scripts/` — انتشار در cPanel، آزمون دود سرور، ساخت ZIP.
-- `docs/` — معماری، تصمیم‌ها (ADR) و سند محصول.
+- `src/` — همهٔ فایل‌هایی که منتشر می‌شوند؛ `src/api/` سرویس PHP.
+- `tests/` — آزمون‌های API و end-to-end (Playwright) و نمونه‌های EPUB.
+- `scripts/` — انتشار در cPanel و آزمون دود.
+- `docs/` — معماری، وضعیت پروژه، نکات موتور خواننده و تصمیم‌ها (ADR).
 
 ## اجرای آزمون‌ها
 ```bash
-pip install playwright && python3 -m playwright install chromium
+pip install playwright && python3 -m playwright install chromium   # php هم لازم است
+python3 tests/api_test.py
 python3 tests/e2e_test.py
 ```
 
-## روال انتشار
-1. تغییرات روی شاخهٔ `staging` push شوند و آزمون‌ها سبز باشند.
-2. cPanel ← Git Version Control ← Manage ← Pull or Deploy: شاخهٔ `staging` را checkout، «Update from Remote» و سپس «Deploy HEAD Commit». نتیجه در `/borg-test/` منتشر می‌شود.
-3. `scripts/smoke-test.sh https://parsun.com/borg-test/ <نسخه>` و بررسی دستی روی گوشی.
-4. ادغام `staging` در `main`، همان مراحل با شاخهٔ `main` (انتشار در `/borg/`)، آزمون دود، و tag نسخه.
-
-بازگشت: checkout tag نسخهٔ قبل روی شاخهٔ `main` با `CACHE_NAME` بالاتر، و Deploy دوباره. دادهٔ کاربران (IndexedDB) دست نمی‌خورد.
+## انتشار
+فقط شاخهٔ `main`. با هر push، GitHub Actions آزمون‌ها را اجرا می‌کند و در صورت موفقیت از طریق cPanel منتشر می‌کند
+و آزمون دود می‌گیرد. پیش از push نسخه را در `app-version` و پانویس `index.html` و `CACHE_NAME` در
+`service-worker.js` بالا ببرید. جزئیات: `CLAUDE.md` و `docs/architecture.md`.
 
 ## مجوزها
-epub.js (BSD-2-Clause)، JSZip (MIT یا GPLv3)، Vazirmatn (SIL OFL 1.1) — فایل مجوز هرکدام کنار خودش در `src/assets/` است.
+epub.js (BSD-2-Clause)، JSZip (MIT یا GPLv3)، فونت‌های Vazirmatn، شبنم، پرستو، Noto Naskh Arabic و Amiri (SIL OFL 1.1) —
+فایل مجوز هرکدام کنار خودش در `src/assets/` است.

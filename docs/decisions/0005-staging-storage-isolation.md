@@ -1,6 +1,6 @@
 # 0005 — Staging uses its own IndexedDB database
 
-Status: accepted (2026-10-18)
+Status: superseded by ADR 0007 (staging dropped 2026-10-18); the `-test` suffix code remains but is unused
 
 ## Context
 `/borg/` and `/borg-test/` share the origin `parsun.com`, therefore the same IndexedDB. A staging build that

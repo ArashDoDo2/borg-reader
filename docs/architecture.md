@@ -1,6 +1,7 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v7.1.0. Product goals, roadmap and ideas live in the
+Status: describes the code in `src/` as of v8.1.4 (2026-10-19). Project status and open items: `docs/context/status.md`;
+reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
 ## 1. Overview
@@ -10,8 +11,9 @@ Since v7 an optional PHP API (`src/api/`) adds accounts, cloud library, progress
 ```
 index.html ──> assets/js/app.js ──> epub.js (+ JSZip) ──> book rendered in a sandboxed iframe
                      │                                        └─ reader-fonts.css injected (Vazirmatn)
-                     ├─> IndexedDB  (books, progress)
-                     ├─> localStorage (reader prefs, theme)
+                     ├─> IndexedDB  (books, progress, annotations, shelves)
+                     ├─> localStorage (reader prefs, theme, reading stats, device id)
+                     ├─> src/api/ (PHP, optional: accounts, sync, catalog)
                      └─> service-worker.js (offline app shell)
 ```
 
@@ -19,26 +21,35 @@ index.html ──> assets/js/app.js ──> epub.js (+ JSZip) ──> book rende
 | File | Role |
 |---|---|
 | `src/index.html` | Library + reader UI; loads vendor scripts then `app.js`. Holds `<meta name="app-version">`. |
-| `src/assets/js/app.js` | All app logic (single IIFE): import, metadata, library, reader, progress, bookmark, settings, SW registration. |
+| `src/assets/js/app.js` | All app logic (single IIFE): import, metadata, library, shelves, reader, navigation, annotations, TTS, search, settings, account/sync, catalog, admin, SW registration. |
 | `src/assets/vendor/jszip.min.js` | JSZip 3.10.1. Must load **before** epub.js (epub.js needs it to open an EPUB from an ArrayBuffer). |
 | `src/assets/vendor/epub.min.js` | epub.js 0.3.93. Paginated rendition, `spread: auto`. Scripts inside EPUBs are not enabled. |
-| `src/assets/fonts/Vazirmatn-Variable.woff2` | UI and book font, weights 100–900. |
-| `src/assets/css/reader-fonts.css` | `@font-face` injected into every book iframe via `rendition.hooks.content` (absolute URL). |
+| `src/assets/fonts/` | Vazirmatn (UI + default book font), Shabnam, Parastoo, Noto Naskh Arabic, Amiri (OFL; license files alongside). |
+| `src/assets/css/reader-fonts.css` | `@font-face` for the book fonts + `.tts-hl`; injected into every book iframe via `rendition.hooks.content` (absolute URL). |
+| `src/api/` | PHP API (§9). |
 | `src/service-worker.js` | Offline shell, cache versioned by `CACHE_NAME`. |
 | `src/offline.html` | Last-resort page when nothing is cached. |
 
 ## 3. Data model (browser)
-IndexedDB database `ketabkhane-db`, `DB_VERSION = 1` (name kept for data continuity, ADR 0003;
-staging uses `ketabkhane-db-test`, ADR 0005):
+IndexedDB database `ketabkhane-db`, `DB_VERSION = 3` (v2/7.2 annotations, v3/7.3 shelves; name kept for data
+continuity, ADR 0003; the unused staging path would use `ketabkhane-db-test`, ADR 0005):
 
 | Store | Key | Fields |
 |---|---|---|
 | `books` | `id` (UUID) | `title`, `author`, `cover` (data URL), `file` (Blob), `size`, `addedAt`, `locations` (cached epub.js locations, JSON), `contentHash` (SHA-256, v6.2; filled lazily for older books); v8.1 optional `publisher`, `published` (`YYYY-MM-DD` or free text), `language` read from the EPUB `<dc:publisher>`/`<dc:date>`/`<dc:language>`, plus `metaExt` (already read) and `metaExtPush` (still to send to the server) |
-| `progress` | `bookId` | `cfi`, `percentage`, `updatedAt`, `bookmark` (single CFI) |
+| `progress` | `bookId` | `cfi`, `percentage`, `updatedAt` (the v1 single `bookmark` was migrated into `annotations`) |
+| `annotations` | `uid` (index `bookId`) | `type` (bookmark/highlight/note), `cfi`, `quote`, `note`, `color`, timestamps, sync flags |
+| `shelves` | `uid` | `name`, `position`, `updatedAt`, `deleted` |
 
-localStorage: `ketabkhane-reader-preferences` → `{font, lineHeight, fontSize, theme, align, librarySort}`; `ketab-theme` → `light|dark`.
+Books also carry `serverId`, `catalogStatus`, reading `status` and `shelves` when synced. When a browser refuses to
+store Blobs, `file` is null and `fileBuffer` (ArrayBuffer) + `fileName` are stored instead (`fileOf()`).
 
-Target schema v2 and the mandatory migration rules are in spec §8. Rules that apply now:
+localStorage: `ketabkhane-reader-preferences` → `{font, lineHeight, fontSize, theme (light/sepia/dark/black/auto),
+align, librarySort, libraryFilter, dailyGoal, margin, para, flow, spread, digits, taps, wake, ttsRate, ttsVoice}`;
+`ketab-theme`; `borg-reading-days`/`-other`/`-pushed` (stats); `borg-device-id`; `borg-debug` (diagnostics only,
+read by the WebKit probe; empty for real users).
+
+Migration rules:
 - Never delete/recreate the database; bump `DB_VERSION` and migrate step by step in `onupgradeneeded`.
 - A migration must be tested on real data from the previous version and must leave old data intact on failure.
 
@@ -48,7 +59,7 @@ Target schema v2 and the mandatory migration rules are in spec §8. Rules that a
 - **Navigation state:** `relocated` sets progress, chapter label, `prev` disabled only at `atStart`, `next` disabled at `atEnd`; progress is saved per relocation.
 - **Navigation input (v6.1):** keyboard on the main document plus `rendition.on("keydown"|"touchstart"|"touchend"|"click")`
   for input inside the book iframe (it does not bubble to the page). Directions are physical and follow the book:
-  for RTL books (`page-progression-direction` or a Persian/Arabic-script language) ArrowLeft, a left-edge tap and a
+  for RTL books (`bookDir`, see §4b / ADR 0008) ArrowLeft, a left-edge tap and a
   finger swipe to the right go **forward**; LTR books are mirrored. PageDown/Space forward, PageUp back, Escape closes
   drawer → immersive → reader. Edge zones are 25% of the viewer width each; taps on links or with selected text are
   ignored; a swipe suppresses the click that follows it.
@@ -81,6 +92,21 @@ Target schema v2 and the mandatory migration rules are in spec §8. Rules that a
   category; the admin catalog editor is a dialog (title, author, description, category, publisher, date, language).
 - **Race guard:** `openToken` invalidates async work when the reader is closed or another book opens.
 
+## 4b. Reader engine (v8)
+Details and history of each workaround: `docs/context/reader-engine-notes.md`.
+- **Open sequence:** read file → `ePub(bytes)` → `detectBookDirection()` sets `bookDir` (ADR 0008) →
+  `patchTextWidth("rects")` (Safari fix) → `renderTo("viewer", {flow, spread, defaultDirection: bookDir})` →
+  serialize hook adds the load veil (after `book.opened`) → content hooks (`onBookContent`: half-space fix,
+  Persian digits, footnote/image click handlers; fonts stylesheet then veil removal) → theme (`applyReaderStyles`).
+- **Navigation:** `goLeft/goRight` map to forward/back through `bookIsRtl()`. Taps are recognised on `touchend`
+  (iOS) and on `click` (mouse) through one `handleTap()`; edge zones 25%, middle tap toggles immersive.
+- **Reading features:** TTS (`speechSynthesis`, sentence queue with `.tts-hl` highlight, follows pages),
+  footnote popups, word lookup / copy / quote card from the selection bar, highlights in 4 colours, notes,
+  multiple bookmarks, in-book search with Persian normalisation, image viewer, wake lock, layout options
+  (margin, paragraph spacing, paged/scrolled, single/two columns), 9 font choices, Persian digits option.
+- **TOC:** nested entries up to 3 levels (`.toc-sub`), labels `dir="auto"`. The header label currently shows
+  «بخش N» (spine index), not the TOC title.
+
 ## 5. Service Worker
 - Install: pre-cache `APP_SHELL` (every file in `src/` the app needs, including vendor, font and `offline.html`).
 - Navigation requests: network first, cached copy (then `index.html`, then `offline.html`) when offline.
@@ -90,32 +116,53 @@ Target schema v2 and the mandatory migration rules are in spec §8. Rules that a
 - Books are **not** in the SW cache; they live in IndexedDB.
 
 ## 6. Deployment
-Host: shared cPanel, HTTPS. Repository cloned by cPanel Git Version Control outside `public_html`.
-`.cpanel.yml` runs `scripts/cpanel-deploy.sh`, which copies `src/` to:
-- branch `main` → `~/public_html/borg/` (production)
-- branch `staging` → `~/public_html/borg-test/` (staging)
-
-and forces permissions to 644/755 (v5 shipped files with 600 → HTTP 403, ADR 0004).
-`scripts/smoke-test.sh` verifies a deployment over HTTP. The legacy `/reader/` path was removed on
-2026-10-18 (ADR 0002).
+Host: shared cPanel (`parsun.com`, user `parsunco`), HTTPS. Single branch `main` (ADR 0007).
+1. `git push origin main` triggers `.github/workflows/deploy.yml`.
+2. Job `test`: `tests/api_test.py` + `tests/e2e_test.py` (Chromium). Failures are printed as `::error`
+   annotations (readable with `gh api repos/ArashDoDo2/borg-reader/check-runs/<job-id>/annotations`).
+   Job `webkit-probe` (`tests/webkit_probe.py`, `continue-on-error`) reports Safari-engine measurements as `::warning`.
+3. Job `deploy` (needs `test`): cPanel UAPI `VersionControl/update` then `VersionControlDeployment/create` on the
+   clone `/home/parsunco/repositories/borg-reader`. `.cpanel.yml` runs `scripts/cpanel-deploy.sh`, which rsyncs
+   `src/` into `~/public_html/borg/` and forces 644/755 (v5 lesson: 600 → HTTP 403, ADR 0004).
+4. `scripts/smoke-test.sh https://parsun.com/borg/ <version>` retries for ~1 minute until the new
+   `app-version` is served.
+Secrets (`CPANEL_TOKEN`, `CPANEL_USER`, `CPANEL_HOST`) are GitHub Actions secrets set by the owner. The server
+config with DB credentials and `setup_key` is `/home/parsunco/borg-config/config.php` (never in the repo).
+Versioning: bump `app-version` meta, footer text in `index.html` and `CACHE_NAME` in `service-worker.js`.
+Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is untouched; migrations are additive).
 
 ## 7. Testing
-`tests/e2e_test.py` serves `src/` under `/borg/`, blocks all non-local requests and runs ~200 checks
-(import, render, TOC, font in iframe, paging, progress, bookmark, persistence, offline, corrupt file,
-missing JSZip, mobile layout, keyboard, edge taps, immersive mode, mobile TOC drawer, swipe via CDP touch events). Checks assert visibility (non-zero viewer height), not just DOM presence.
+- `tests/api_test.py` (105 checks): PHP built-in server + SQLite via `BORG_CONFIG`; auth, CSRF, rate limits,
+  upload/dedupe, permissions, progress, annotations, shelves, stats, catalog moderation, admin, migrations.
+- `tests/e2e_test.py` (~215 checks): serves `src/` under `/borg/` with `php -S` and a SQLite config, blocks every
+  non-local request. Covers import, render, TOC, fonts in the iframe, paging, progress, annotations, settings,
+  persistence, offline, corrupt files, mobile layout, keyboard, edge taps, swipe (CDP touch), immersive mode,
+  accounts/sync between two browsers, catalog/admin, v8 reading features, v8.1 catalog page and preview, and
+  section 14: direction detection (no-direction Persian book, English book), nested TOC, load veil.
+  Checks assert visibility (geometry), not DOM presence. Use `poll()` (CSP forbids `wait_for_function`).
+- `tests/webkit_probe.py`: opens a sample in WebKit (iPad viewport) under rendering variants and reports frame
+  width and what is under the viewer; diagnostics, not a gate (see open item in `docs/context/status.md`).
 
 ## 8. Known gaps
-- Single bookmark per book (multiple bookmarks need IndexedDB schema v2).
-- Not yet tested on real Android/iPad devices or large real-world Persian EPUBs.
+- No WebKit/Safari gate in CI yet; iOS behaviour is verified by the owner on devices after release.
+- Header shows «بخش N» rather than the chapter title.
+- Direction detection follows the majority script; no manual per-book override.
+- Very large books: locations generation and direction detection run on open; not profiled on 50 MB+ files.
 
 ## 9. Backend (v7)
 - **Stack:** PHP 8.1+ (production runs 8.4), PDO, MySQL/MariaDB in production, SQLite in tests. No framework, no Composer.
 - **Entry:** `src/api/index.php?r=<route>`; `src/api/lib/` is denied by `.htaccess` and guarded by `BORG_API`.
+- **Routes:** `health setup register login logout me password invites` (index.php); `library library-meta
+  library-remove upload-init upload-chunk upload-complete book-file book-cover book-meta progress annotations
+  shelves stats catalog catalog-submit catalog-pending catalog-review catalog-remove catalog-add` (books.php);
+  `admin-stats users user-update user-reset-password user-delete invite-revoke catalog-all catalog-update
+  books-all book-delete settings` (admin.php).
 - **Config:** `/home/<user>/borg-config/config.php` (outside the web root; `BORG_CONFIG` overrides in tests):
   `db_dsn`, `db_user`, `db_pass`, `setup_key`, optional `storage_dir` (default `~/borg-storage`), `max_book_bytes`,
   `catalog_requires_approval` (default true), `session_days`.
 - **Schema:** created/migrated automatically on first request (`schema_migrations`); DDL is portable via `{AI}`/`{TXT}`.
-  Tables: users, sessions, invites, login_attempts, books (unique `sha256`), user_books, catalog, progress, uploads.
+  Migrations: 1 users, sessions, invites, login_attempts, books (unique `sha256`), user_books, catalog, progress,
+  uploads; 2 annotations, settings; 3 user_books status/shelves/meta_updated_at, shelves, reading_days.
   Migration 4 adds `books.publisher` (≤300), `books.published` (≤40, free-text date/year from EPUB metadata) and
   `catalog.category` (≤80), all `NOT NULL DEFAULT ''`. `health` reports `schema_version`.
 - **Auth:** invite-only. First admin via `setup` (needs `setup_key`, only while no users exist). Session token in an
