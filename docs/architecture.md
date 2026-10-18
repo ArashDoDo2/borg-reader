@@ -205,7 +205,7 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   library-remove upload-init upload-chunk upload-complete book-file book-cover book-meta book-replace progress annotations
   shelves stats catalog catalog-submit catalog-pending catalog-review catalog-remove catalog-add` (books.php);
   `admin-stats users user-update user-reset-password user-delete invite-revoke catalog-all catalog-update
-  books-all book-delete settings` (admin.php).
+  books-all book-delete settings client-error errors errors-clear` (admin.php).
 - **Config:** `/home/<user>/borg-config/config.php` (outside the web root; `BORG_CONFIG` overrides in tests):
   `db_dsn`, `db_user`, `db_pass`, `setup_key`, optional `storage_dir` (default `~/borg-storage`), `max_book_bytes`,
   `catalog_requires_approval` (default true), `session_days`.
@@ -214,6 +214,9 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   uploads; 2 annotations, settings; 3 user_books status/shelves/meta_updated_at, shelves, reading_days.
   Migration 4 adds `books.publisher` (≤300), `books.published` (≤40, free-text date/year from EPUB metadata) and
   `catalog.category` (≤80), all `NOT NULL DEFAULT ''`. `health` reports `schema_version`.
+  Migration 5 (v8.4) adds `client_errors` (id, created_at, user_id `0` = anonymous, app_version ≤20, kind ≤20, message ≤500,
+  source ≤300, stack ≤4000, url_path ≤300, user_agent ≤300, count, fingerprint = SHA-256 of kind+message+source+app_version,
+  last_seen), indexed on (fingerprint, created_at) and last_seen.
 - **Auth:** invite-only. First admin via `setup` (needs `setup_key`, only while no users exist). Session token in an
   HttpOnly/Secure/SameSite=Lax cookie scoped to the app path; DB stores only its SHA-256. Mutating routes need the
   per-session CSRF token in `X-CSRF-Token`; JSON routes reject non-JSON bodies. Login/register/setup are rate limited.
@@ -246,6 +249,19 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   `{book, migrated_users, catalog_moved}`. Clients should push re-anchored annotations after this call (fresh timestamps)
   so they win over the bumped server copies; `library` no longer lists the old id, so normal sync drops it and
   downloads the new one.
+- **Client error reports (v8.4):** `POST client-error {items: [...]}` (1–20 items, body ≤128 KB). Anonymous visitors
+  need no CSRF but are limited to 30 requests/hour per IP; a logged-in session must send `X-CSRF-Token` (403 otherwise)
+  and is limited to 120 requests/hour per user (429 `rate_limited`). Item keys: `kind` (`[a-z][a-z0-9_-]{0,19}`, else
+  `other`), `message` (required; empty → item skipped), `source`, `stack`, `path`, `app_version`, `user_agent` (falls back
+  to the request header), `count` (1–100). Server-side every text is stripped of control characters, URL query
+  strings/fragments, e-mails, `token=`/`csrf=`/`password=`/… values and long hex/token-like runs, then truncated to the
+  column limit; `path` keeps only the URL path. Same fingerprint on the same UTC day → `count += n`, `last_seen = now`
+  instead of a new row. Table capped at `client_errors_max` rows (config, default 5000; oldest `last_seen` deleted).
+  Response `{accepted, skipped}`. Admin: `GET errors` (`version`, `kind`, `page`, `per` ≤100) returns groups by
+  fingerprint, newest `last_seen` first: `{errors: [{id, fingerprint, kind, app_version, message, source, stack,
+  url_path, user_agent, count (sum), first_seen, last_seen, users, anonymous}], total, page, per, versions, kinds}`;
+  `POST errors-clear` with `{all: true}`, `{fingerprint}` or `{id}` → `{deleted}`. `admin-stats` has `client_errors`
+  (number of groups).
 - **Validation:** optional string fields that are present but not a string/number → 400 `bad_<field>`; over the
   length limit → 400 `too_long_<field>`.
 
@@ -265,5 +281,16 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   annotations until the swap is done.
 - Progress is pushed 4 s after the last page turn. Deleting a synced book removes it from the account (confirmation).
 - Without an account or offline, everything works locally exactly as before.
+- v8.4 error reports: `reportError(kind, err, context)` (top of `app.js`) queues window `error` / `unhandledrejection`
+  events (same-origin only) and selected caught failures (`epub` openFailed/displayError/import metadata, `sync`
+  upload/download/replace/meta/annotations, `storage`, `import`, `reader`, `cleanup`, `api`, `sw`). Not reported:
+  offline, `AbortError`, `UserError`, API 401/403/404/409/413/429. Identical kind+message+source are merged (`count`);
+  max 50 queued, kept in memory and localStorage `borg-error-queue` (+ `STORAGE_SUFFIX`). Sent in batches of 20 to
+  `client-error` 30 s after the first new report, on `visibilitychange` → hidden / `pagehide` (fetch `keepalive`, ≤60 KB;
+  not `sendBeacon`, which cannot carry the CSRF header) and on `online`; skipped offline; a 429 pauses sending for
+  15 min. Items carry app version (meta), kind, message, context as `source` (or file:line:col), trimmed stack,
+  `location.pathname`, user agent — never book text, file names, titles or query strings. Admin panel «خطاهای کاربران»
+  lists the groups (filter by version, «نمایش بیشتر» paging, expandable details, clear one / clear all) and the stats
+  row shows «خطای کاربران».
 - Share target (`share-target`, POST multipart) is handled by the Service Worker: files are parked in the
   `borg-share` cache and imported by the page on `?shared=1`. Desktop "open with" uses `launchQueue`.

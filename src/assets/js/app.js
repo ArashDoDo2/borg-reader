@@ -11,6 +11,87 @@
   let bookDir = "rtl"; // reading direction of the open book, decided by detectBookDirection()
   let fontSize = 100, toastTimer;
   const READER_PREFS_KEY = "ketabkhane-reader-preferences" + STORAGE_SUFFIX;
+
+  // ======================= v8.4 error reports to the admin («خطاهای کاربران») =======================
+  // Real failures (uncaught errors, unhandled rejections, EPUB/sync/storage failures) are queued in memory and
+  // localStorage, deduplicated, and sent in batches to api/?r=client-error. Never book text, query strings or e-mails.
+  const ERR_QUEUE_KEY = "borg-error-queue" + STORAGE_SUFFIX;
+  const ERR_MAX_QUEUE = 50, ERR_BATCH = 20, ERR_FLUSH_MS = 30000;
+  const ERR_API = new URL("api/?r=client-error", document.baseURI).href;
+  const APP_VERSION = (document.querySelector('meta[name="app-version"]') || {}).content || "";
+  let errQueue = (() => { try { const q = JSON.parse(localStorage.getItem(ERR_QUEUE_KEY) || "[]"); return Array.isArray(q) ? q.slice(-ERR_MAX_QUEUE) : []; } catch (_) { return []; } })();
+  let errFlushing = false, errBlockedUntil = 0, errTimer = null;
+  function errSave() {
+    try { if (errQueue.length) localStorage.setItem(ERR_QUEUE_KEY, JSON.stringify(errQueue)); else localStorage.removeItem(ERR_QUEUE_KEY); } catch (_) {}
+  }
+  // Same scrubbing as the server: URL query strings/fragments, e-mails and long token-like strings.
+  function errScrub(s, max) {
+    return String(s == null ? "" : s)
+      .replace(/((?:https?|blob|file):\/\/[^\s?#"'<>()]*)[?#][^\s"'<>()]*?(?=:\d+:\d+|:\d+\b|[\s"'<>()]|$)/gi, "$1")
+      .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
+      .replace(/\b[A-Fa-f0-9]{32,}\b/g, "[token]")
+      .trim().slice(0, max);
+  }
+  /** Expected outcomes are not reported: offline, aborted, auth/permission/not-found/conflict/rate-limit API answers. */
+  function errReportable(err) {
+    if (!navigator.onLine) return false;
+    if (err && (err.name === "AbortError" || (err.constructor && err.constructor.name === "UserError"))) return false;
+    if (err && typeof err.status === "number" && typeof err.code === "string") return ![401, 403, 404, 409, 413, 429].includes(err.status);
+    return true;
+  }
+  function reportError(kind, err, context) {
+    try {
+      if (!errReportable(err)) return;
+      let message = "", stack = "";
+      if (err && typeof err === "object") {
+        const api = typeof err.status === "number" && typeof err.code === "string" ? `API ${err.status} ${err.code}: ` : "";
+        const name = err.name && err.name !== "Error" ? err.name + ": " : "";
+        message = api + name + (err.message || (api || name ? "" : (() => { try { return JSON.stringify(err); } catch (_) { return String(err); } })()));
+        stack = typeof err.stack === "string" ? err.stack : "";
+      } else message = String(err);
+      const item = {
+        kind, message: errScrub(message, 500) || "(بدون پیام)", source: errScrub(context || "", 300), stack: errScrub(stack, 4000),
+        path: location.pathname.slice(0, 300), app_version: APP_VERSION, user_agent: navigator.userAgent.slice(0, 300), count: 1,
+      };
+      const same = errQueue.find(x => x.kind === item.kind && x.message === item.message && x.source === item.source);
+      if (same) same.count = Math.min(100, (same.count || 1) + 1);
+      else { errQueue.push(item); if (errQueue.length > ERR_MAX_QUEUE) errQueue.splice(0, errQueue.length - ERR_MAX_QUEUE); }
+      errSave();
+      if (!errTimer) errTimer = setTimeout(() => { errTimer = null; flushErrors(false); }, ERR_FLUSH_MS);
+    } catch (_) { /* reporting must never break the app */ }
+  }
+  async function flushErrors(keepalive) {
+    if (errFlushing || !errQueue.length || !navigator.onLine || Date.now() < errBlockedUntil) return;
+    let csrf = null;
+    try { csrf = account && account.csrf; } catch (_) { /* account not initialised yet */ }
+    const batch = errQueue.slice(0, ERR_BATCH);
+    // keepalive requests are limited to 64 KB in total.
+    while (keepalive && batch.length > 1 && JSON.stringify({ items: batch }).length > 60000) batch.pop();
+    const headers = { "Content-Type": "application/json" };
+    if (csrf) headers["X-CSRF-Token"] = csrf;
+    errFlushing = true;
+    try {
+      const res = await fetch(ERR_API, { method: "POST", headers, credentials: "same-origin", cache: "no-store", keepalive: !!keepalive, body: JSON.stringify({ items: batch }) });
+      if (res.status === 429) errBlockedUntil = Date.now() + 15 * 60000;
+      else if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 403)) { // 403 = stale CSRF: keep and retry later
+        errQueue = errQueue.filter(x => !batch.includes(x)); errSave();
+      }
+    } catch (_) { /* network: keep the queue */ }
+    finally { errFlushing = false; }
+    if (errQueue.length && !errTimer && Date.now() >= errBlockedUntil) errTimer = setTimeout(() => { errTimer = null; flushErrors(false); }, ERR_FLUSH_MS);
+  }
+  window.addEventListener("error", e => {
+    if (!e || (!e.error && (!e.message || e.message === "Script error."))) return; // opaque cross-origin errors
+    if (e.filename && !e.filename.startsWith(location.origin)) return; // extensions, injected scripts
+    let file = "";
+    try { file = e.filename ? new URL(e.filename).pathname : ""; } catch (_) {}
+    reportError("error", e.error || e.message, file ? `${file}:${e.lineno || 0}:${e.colno || 0}` : "");
+  });
+  window.addEventListener("unhandledrejection", e => reportError("rejection", e && e.reason, "unhandledrejection"));
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flushErrors(true); });
+  window.addEventListener("pagehide", () => flushErrors(true));
+  window.addEventListener("online", () => flushErrors(false));
+  if (errQueue.length) errTimer = setTimeout(() => { errTimer = null; flushErrors(false); }, 5000);
   const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100, theme: "light", align: "justify", librarySort: "added", libraryFilter: "all", dailyGoal: 20,
     margin: "m", para: "m", flow: "paginated", spread: "auto", digits: false, taps: true, wake: true, ttsRate: 1, ttsVoice: "" };
   const READER_THEMES = { light: ["#fffdf7", "#252923"], sepia: ["#f4ecd8", "#5b4636"], dark: ["#1f2623", "#e6ece7"], black: ["#000000", "#d4d4d4"] };
@@ -254,7 +335,7 @@
   function scheduleMetaPush() {
     if (!account || !navigator.onLine) return;
     clearTimeout(metaTimer);
-    metaTimer = setTimeout(() => { syncLibraryMeta(null).catch(err => console.warn("Meta sync failed:", err)); }, 2000);
+    metaTimer = setTimeout(() => { syncLibraryMeta(null).catch(err => { console.warn("Meta sync failed:", err); reportError("sync", err, "library-meta"); }); }, 2000);
   }
   async function saveShelf(rec) {
     rec.updatedAt = Date.now(); rec.dirty = true;
@@ -452,6 +533,7 @@
     } catch (err) {
       console.error("Metadata extraction failed:", err);
       if (err instanceof UserError) throw err;
+      reportError("epub", err, "import:metadata");
       throw new UserError("این فایل EPUB قابل خواندن نیست یا خراب است.");
     } finally {
       if (temp) { try { temp.destroy(); } catch (_) {} }
@@ -545,6 +627,7 @@
         await put("books", record);
       } catch (err) {
         console.error("Saving book failed:", err);
+        if (!(err && err.name === "QuotaExceededError")) reportError("storage", err, "import:save");
         throw new UserError(err && err.name === "QuotaExceededError"
           ? "فضای ذخیره‌سازی مرورگر کافی نیست."
           : "ذخیره کتاب در مرورگر انجام نشد.");
@@ -557,7 +640,7 @@
       showToast(cleaned ? `کتاب به کتابخانه اضافه شد؛ ${faNum(cleaned)} مورد حذف شد` : "کتاب به کتابخانه همین دستگاه اضافه شد.");
     } catch (err) {
       // Expected outcomes (duplicate, broken file, …) are UserErrors and are not logged as app errors.
-      if (!(err instanceof UserError)) console.error(err);
+      if (!(err instanceof UserError)) { console.error(err); reportError("import", err, "import"); }
       showToast(err instanceof UserError ? err.message : "افزودن کتاب انجام نشد.");
     } finally {
       resetInputs();
@@ -807,6 +890,7 @@
     bookInstance = ePub(epubBytes);
     bookInstance.on("openFailed", err => {
       console.error("EPUB openFailed:", err);
+      reportError("epub", err, "reader:openFailed");
       if (token === openToken) showToast("این فایل EPUB قابل خواندن نیست یا خراب است.");
     });
     bookDir = await detectBookDirection(bookInstance);
@@ -875,6 +959,7 @@
     });
     rendition.on("displayError", (err) => {
       console.error("EPUB displayError:", err);
+      reportError("epub", err, "reader:displayError");
       showToast("نمایش این کتاب ناموفق بود. خطای دقیق در Console ثبت شده است.");
     });
     rendition.on("rendered", () => {
@@ -1814,10 +1899,10 @@
       return;
     }
     const card = e.target.closest("[data-open]");
-    if (card) openReader(card.dataset.open).catch(err => { console.error(err); showToast("بازکردن کتاب ناموفق بود."); });
+    if (card) openReader(card.dataset.open).catch(err => { console.error(err); reportError("reader", err, "openReader"); showToast("بازکردن کتاب ناموفق بود."); });
   };
   const onLibraryKey = e => {
-    if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-open]")) { e.preventDefault(); openReader(e.target.dataset.open).catch(err => { console.error(err); showToast("بازکردن کتاب ناموفق بود."); }); }
+    if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-open]")) { e.preventDefault(); openReader(e.target.dataset.open).catch(err => { console.error(err); reportError("reader", err, "openReader"); showToast("بازکردن کتاب ناموفق بود."); }); }
   };
   ["bookGrid", "continueShelf"].forEach(id => { $(id).addEventListener("click", onLibraryClick); $(id).addEventListener("keydown", onLibraryKey); });
   $("libraryFilters").addEventListener("click", e => {
@@ -2087,7 +2172,7 @@
         if (!b.cleanPending || !b.serverId) continue;
         replacedOld.add(b.serverId); // never re-download the old server copy
         try { const nb = await replaceOnServer(b); if (nb) { bySha.set(nb.sha256, nb); byId.set(nb.id, nb); } }
-        catch (err) { console.warn("Book replace failed:", b.title, err); }
+        catch (err) { console.warn("Book replace failed:", b.title, err); reportError("sync", err, "sync:book-replace"); }
       }
       local = await getAllBooks();
       const localSha = new Set();
@@ -2124,13 +2209,13 @@
       for (const b of toUpload) {
         setSyncStatus(`در حال آپلود «${b.title}» (${(++done).toLocaleString("fa-IR")} از ${toUpload.length.toLocaleString("fa-IR")})…`);
         try { const sb = await uploadBook(b); await put("books", { ...b, serverId: sb.id }); byId.set(sb.id, sb); }
-        catch (err) { console.warn("Upload failed:", b.title, err); }
+        catch (err) { console.warn("Upload failed:", b.title, err); reportError("sync", err, "sync:upload"); }
       }
       const missing = server.filter(sb => !localSha.has(sb.sha256) && !replacedOld.has(sb.id));
       done = 0;
       for (const sb of missing) {
         setSyncStatus(`در حال دریافت «${sb.title}» (${(++done).toLocaleString("fa-IR")} از ${missing.length.toLocaleString("fa-IR")})…`);
-        try { await downloadBook(sb); } catch (err) { console.warn("Download failed:", sb.title, err); }
+        try { await downloadBook(sb); } catch (err) { console.warn("Download failed:", sb.title, err); reportError("sync", err, "sync:download"); }
       }
       // Reading progress: newest timestamp wins, in both directions.
       local = await getAllBooks();
@@ -2152,6 +2237,7 @@
     } catch (err) {
       setSyncStatus(err instanceof ApiFail && err.status === 401 ? "" : "همگام‌سازی انجام نشد");
       console.warn("Sync failed:", err);
+      reportError("sync", err, "sync");
     } finally {
       syncing = false;
       renderLibrary();
@@ -2238,7 +2324,7 @@
   function scheduleAnnotationPush() {
     if (!account || !navigator.onLine) return;
     clearTimeout(annTimer);
-    annTimer = setTimeout(() => { syncAnnotations().catch(err => console.warn("Annotation sync failed:", err)); }, 2500);
+    annTimer = setTimeout(() => { syncAnnotations().catch(err => { console.warn("Annotation sync failed:", err); reportError("sync", err, "annotations"); }); }, 2500);
   }
   /** Debounced push of one book's progress while reading. */
   function scheduleProgressPush(localBookId) {
@@ -2464,7 +2550,7 @@
     const b = catalogBooks.find(x => x.id === id);
     if (!b) return;
     const btn = $("detailRead");
-    if (btn.dataset.local) { openReader(btn.dataset.local).catch(err => { console.error(err); showToast("بازکردن کتاب ناموفق بود."); }); return; }
+    if (btn.dataset.local) { openReader(btn.dataset.local).catch(err => { console.error(err); reportError("reader", err, "openReader"); showToast("بازکردن کتاب ناموفق بود."); }); return; }
     const label = btn.textContent;
     btn.disabled = true; btn.textContent = "در حال دریافت…";
     try {
@@ -2474,6 +2560,7 @@
                                file, size: blob.size, language: b.language || "" });
     } catch (err) {
       console.warn("Online reading failed:", err);
+      reportError("api", err, "catalog:read-online");
       showToast(err instanceof ApiFail ? apiMessage(err) : "بازکردن کتاب ناموفق بود.");
     } finally { btn.disabled = false; btn.textContent = label; }
   }
@@ -2604,7 +2691,9 @@
       $("adminStats").innerHTML = [
         [fa(stats.active_users) + " / " + fa(stats.users), "کاربر فعال"], [fa(stats.books), "کتاب روی سرور"], [mb(stats.storage_bytes) + " MB", "فضای کتاب‌ها"],
         [fa(stats.catalog_approved), "در کتابخانهٔ عمومی"], [fa(stats.catalog_pending), "در انتظار تأیید"], [fa(stats.open_invites), "دعوت‌نامهٔ باز"],
-      ].map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
+        [fa(stats.client_errors || 0), "خطای کاربران", stats.client_errors ? " stat-errors" : ""],
+      ].map(([v, l, c]) => `<div class="stat${c || ""}"><b>${v}</b><span>${l}</span></div>`).join("");
+      loadErrors(true);
       $("settingApproval").checked = !!settings.catalog_requires_approval;
       $("catalogAdminList").innerHTML = catalogAll.books.filter(b => b.status !== "pending").map(b => `<div class="admin-item">
           <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="status-chip ${b.status === "approved" ? "" : "off"}">${STATUS_FA[b.status] || b.status}</span>${catOf(b) ? ` <span class="status-chip cat-chip">${esc(catOf(b))}</span>` : ""}
@@ -2641,6 +2730,48 @@
             <button class="secondary-button" type="button" data-user-act="delete">حذف</button></span>`}</div>`).join("");
     } catch (err) { $("pendingList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; }
   }
+  // v8.4: client error reports, grouped by fingerprint (newest first), filter by app version.
+  let errPage = 1;
+  const fmtDateTime = s => new Date(s * 1000).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" });
+  async function loadErrors(reset) {
+    if (reset) errPage = 1;
+    const version = $("errorsVersion").value;
+    let r;
+    try { r = await api("errors", { query: `&page=${errPage}&per=30${version ? `&version=${encodeURIComponent(version)}` : ""}` }); }
+    catch (err) { $("errorsList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; return; }
+    const fa = n => Number(n).toLocaleString("fa-IR");
+    const sel = $("errorsVersion"), keep = sel.value;
+    sel.innerHTML = '<option value="">همهٔ نسخه‌ها</option>' + r.versions.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+    sel.value = r.versions.includes(keep) ? keep : "";
+    $("errorsCount").textContent = fa(r.total);
+    $("errorsCount").classList.toggle("off", r.total > 0);
+    const html = r.errors.map(e => `<div class="admin-item err-item" data-err-fp="${esc(e.fingerprint)}">
+        <details class="err-details"><summary><strong class="err-msg" dir="auto">${esc(e.message)}</strong>
+          <span class="status-chip">${esc(e.kind)}</span>${e.app_version ? ` <span class="status-chip cat-chip" dir="ltr">${esc(e.app_version)}</span>` : ""}
+          <span class="muted small err-count">× ${fa(e.count)} · آخرین بار ${fmtDateTime(e.last_seen)}</span></summary>
+          <div class="err-meta muted small">
+            <div>اولین بار ${fmtDateTime(e.first_seen)} · ${e.users ? `${fa(e.users)} کاربر` : ""}${e.users && e.anonymous ? " + " : ""}${e.anonymous ? "بازدیدکنندهٔ ناشناس" : ""}</div>
+            ${e.source ? `<div>منبع: <code dir="ltr">${esc(e.source)}</code></div>` : ""}
+            ${e.url_path ? `<div>صفحه: <code dir="ltr">${esc(e.url_path)}</code></div>` : ""}
+            ${e.user_agent ? `<div>مرورگر: <code dir="ltr">${esc(e.user_agent)}</code></div>` : ""}
+            ${e.stack ? `<pre class="err-stack" dir="ltr">${esc(e.stack)}</pre>` : ""}
+          </div></details>
+        <button class="secondary-button" type="button" data-err-clear="${esc(e.fingerprint)}">پاک کردن</button></div>`).join("");
+    if (errPage === 1) $("errorsList").innerHTML = html || '<p class="muted">خطایی ثبت نشده است.</p>';
+    else $("errorsList").insertAdjacentHTML("beforeend", html);
+    $("errorsMore").hidden = errPage * r.per >= r.total;
+  }
+  $("errorsVersion").addEventListener("change", () => loadErrors(true));
+  $("errorsRefresh").addEventListener("click", () => loadErrors(true));
+  $("errorsMore").addEventListener("click", () => { errPage++; loadErrors(false); });
+  $("errorsClearAll").addEventListener("click", () => {
+    if (!confirm("همهٔ خطاهای ثبت‌شده پاک شوند؟")) return;
+    adminAction("errors-clear", { all: true }, "خطاها پاک شد.");
+  });
+  $("errorsList").addEventListener("click", e => {
+    const btn = e.target.closest("[data-err-clear]");
+    if (btn) adminAction("errors-clear", { fingerprint: btn.dataset.errClear }, "خطا پاک شد.");
+  });
   $("pendingList").addEventListener("click", async e => {
     const btn = e.target.closest("[data-review]");
     if (!btn) return;
@@ -3057,7 +3188,7 @@
         setCleanProgress(i, ids.length, `در حال پاک‌سازی ${faNum(i + 1)} از ${faNum(ids.length)}: «${b ? b.title : ""}»`);
         await sleep(0);
         try { const n = await applyCleanToBook(ids[i], rules); removed += n; if (n) booksDone++; }
-        catch (err) { console.error("Cleanup failed:", err); showToast(err && err.name === "QuotaExceededError" ? "فضای ذخیره‌سازی مرورگر کافی نیست." : "پاک‌سازی یکی از کتاب‌ها انجام نشد."); }
+        catch (err) { console.error("Cleanup failed:", err); if (err && err.name !== "QuotaExceededError") reportError("cleanup", err, "cleanup:apply"); showToast(err && err.name === "QuotaExceededError" ? "فضای ذخیره‌سازی مرورگر کافی نیست." : "پاک‌سازی یکی از کتاب‌ها انجام نشد."); }
       }
     } finally { cleanBusy = false; $("cleanApply").disabled = false; setCleanProgress(0, null); renderCleanRules(); }
     resetCleanResults(`${faNum(removed)} مورد از ${faNum(booksDone)} کتاب حذف شد.`);
@@ -3167,6 +3298,6 @@
     $("updateReload").addEventListener("click", () => location.reload());
     window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js").then(reg => {
       document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
-    }).catch(err => console.warn("Service worker registration failed", err)));
+    }).catch(err => { console.warn("Service worker registration failed", err); reportError("sw", err, "service-worker"); }));
   }
 })();

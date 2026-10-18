@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FIX = ROOT / "tests" / "fixtures"
 SETUP_KEY = "test-setup-key-0123456789abcdef"
+ERR_CAP = 25  # small client_errors cap so the table-size limit can be tested
 results = []
 
 def check(name, ok, info=""):
@@ -28,7 +29,7 @@ def start_php(tmp):
     cfg = tmp / "config.php"
     cfg.write_text("<?php return " + json.dumps({
         "db_dsn": dsn, "db_user": os.environ.get("BORG_TEST_DB_USER"), "db_pass": os.environ.get("BORG_TEST_DB_PASS"),
-        "setup_key": SETUP_KEY, "storage_dir": str(tmp / "storage"),
+        "setup_key": SETUP_KEY, "storage_dir": str(tmp / "storage"), "client_errors_max": ERR_CAP,
     }).replace("{", "[").replace("}", "]").replace('":', '" =>') + ";\n")
     port = free_port()
     env = dict(os.environ, BORG_CONFIG=str(cfg))
@@ -194,12 +195,96 @@ def run_replace(base, tmp, admin, user):
     st, r = user.call("POST", "book-replace", {"old_book_id": "x", "new_book_id": b_new})
     check("book-replace bad id -> 400", st == 400)
 
+def run_errors(base, admin, user):
+    """v8.4 client error reports: anonymous + logged-in submit, dedupe, scrubbing, rate limits, admin list/clear, cap."""
+    anon = Client(base)
+    item = lambda msg, **kw: {"kind": "error", "message": msg, "source": "https://h.io/borg/assets/js/app.js:10:5", "app_version": "8.4.0",
+                              "stack": "Error: x\n    at f (https://h.io/borg/assets/js/app.js:10:5)", "path": "/borg/", **kw}
+    st, r = anon.call("POST", "client-error", {"items": [item("anon boom")]})
+    check("anonymous visitor can report an error (no CSRF)", st == 200 and r.get("accepted") == 1, str(r))
+    st, r = user.call("POST", "client-error", {"items": [item("user boom", kind="sync")]}, csrf=False)
+    check("logged-in report without CSRF -> 403", st == 403)
+    st, r = user.call("POST", "client-error", {"items": [item("user boom", kind="sync")]})
+    check("logged-in user reports with CSRF", st == 200 and r.get("accepted") == 1, str(r))
+    st, r = anon.call("POST", "client-error", {"items": [item("anon boom"), item("anon boom", count=3)]})
+    st2, L = admin.call("GET", "errors")
+    g = [e for e in L.get("errors", []) if e["message"] == "anon boom"]
+    check("same fingerprint on the same day increments count (1 + 1 + 3)", st == 200 and len(g) == 1 and g[0]["count"] == 5 and g[0]["anonymous"], str(g))
+    u = [e for e in L.get("errors", []) if e["message"] == "user boom"]
+    check("logged-in report is attributed to a user", len(u) == 1 and u[0]["users"] == 1 and not u[0]["anonymous"] and u[0]["kind"] == "sync", str(u))
+    secret = {"kind": "Weird Kind!", "app_version": "8.4.0<script>", "message": "fail for a@b.io " + "متن خطا " * 80,
+              "source": "https://h.io/borg/api/?r=login&token=abc:1:2", "path": "/borg/reader?book=secret#frag",
+              "stack": "at f (app.js:1:2)\n" * 300, "user_agent": "Mozilla/5.0 " * 40}
+    st, r = anon.call("POST", "client-error", {"items": [secret, {"message": ""}, "junk", {"message": "csrf=" + "f" * 64 + " sid: 1234567890abcdef"}]})
+    check("invalid items skipped, valid ones accepted", st == 200 and r.get("accepted") == 2 and r.get("skipped") == 2, str(r))
+    st, L = admin.call("GET", "errors")
+    e = [x for x in L["errors"] if x["message"].startswith("fail for")]
+    e = e[0] if e else {}
+    check("fields truncated to their limits", len(e.get("message", "")) == 500 and len(e.get("stack", "")) == 4000 and len(e.get("user_agent", "")) == 300, str({k: len(str(v)) for k, v in e.items()}))
+    check("e-mail, query string and fragment stripped; kind/version sanitised",
+          "a@b.io" not in e.get("message", "") and "[email]" in e.get("message", "") and e.get("url_path") == "/borg/reader"
+          and "token" not in e.get("source", "") and "?" not in e.get("source", "") and e.get("source", "").endswith(":1:2")
+          and e.get("kind") == "other" and e.get("app_version") == "8.4.0script", str({k: e.get(k) for k in ("kind", "app_version", "source", "url_path")}))
+    t = [x for x in L["errors"] if x["message"].startswith("csrf=")]
+    check("token-like values redacted", t and "f" * 32 not in t[0]["message"] and "1234567890abcdef" not in t[0]["message"], str(t)[:200])
+    st, _ = anon.call("POST", "client-error", {"items": [item(f"m{i}") for i in range(21)]})
+    check("more than 20 items -> 400", st == 400)
+    st, _ = anon.call("POST", "client-error", {"items": "nope"})
+    check("items must be a list -> 400", st == 400)
+    st, _ = anon.call("POST", "client-error", raw=b"message=x", ctype="application/x-www-form-urlencoded")
+    check("client-error rejects non-JSON bodies", st == 415)
+    st, _ = anon.call("GET", "client-error")
+    check("client-error is POST only", st == 405)
+    # Filters
+    st, L = admin.call("GET", "errors", query="&kind=sync")
+    check("errors filter by kind", st == 200 and [x["message"] for x in L["errors"]] == ["user boom"] and "sync" in L["kinds"], str(L)[:200])
+    st, L = admin.call("GET", "errors", query="&version=0.0.1")
+    check("errors filter by version", st == 200 and L["errors"] == [] and L["total"] == 0 and "8.4.0" in L["versions"])
+    st, L = admin.call("GET", "errors", query="&per=1&page=2")
+    st0, L0 = admin.call("GET", "errors")
+    check("errors paginated, newest last_seen first", st == 200 and len(L["errors"]) == 1 and L["total"] == L0["total"] >= 4
+          and L["errors"][0]["id"] == L0["errors"][1]["id"] and all(a["last_seen"] >= b["last_seen"] for a, b in zip(L0["errors"], L0["errors"][1:])))
+    st, r = admin.call("GET", "admin-stats")
+    check("admin-stats counts error groups", st == 200 and r.get("client_errors") == L0["total"], str(r))
+    # Non-admins
+    st, _ = user.call("GET", "errors")
+    st2, _ = anon.call("GET", "errors")
+    st3, _ = user.call("POST", "errors-clear", {"all": True})
+    st4, _ = anon.call("POST", "errors-clear", {"all": True})
+    check("non-admin / anonymous cannot list or clear errors", st == 403 and st2 == 401 and st3 == 403 and st4 == 401)
+    st, _ = admin.call("POST", "errors-clear", {"all": True}, csrf=False)
+    check("errors-clear needs CSRF", st == 403)
+    st, _ = admin.call("POST", "errors-clear", {})
+    check("errors-clear without a target -> 400", st == 400)
+    fp = g[0]["fingerprint"] if g else ""
+    st, r = admin.call("POST", "errors-clear", {"fingerprint": fp})
+    st2, L = admin.call("GET", "errors")
+    check("admin clears one error group by fingerprint", st == 200 and r["deleted"] == 1 and not [x for x in L["errors"] if x["fingerprint"] == fp])
+    one_id = L["errors"][0]["id"]
+    st, r = admin.call("POST", "errors-clear", {"id": one_id})
+    st2, L2 = admin.call("GET", "errors")
+    check("admin clears one error by id", st == 200 and r["deleted"] == 1 and L2["total"] == L["total"] - 1)
+    # Table cap (ERR_CAP rows): the oldest rows are deleted
+    for k in range(2):
+        st, r = user.call("POST", "client-error", {"items": [item(f"cap {k}-{i}") for i in range(20)]})
+    st2, L = admin.call("GET", "errors", query="&per=100")
+    msgs = [x["message"] for x in L["errors"]]
+    check(f"table capped at {ERR_CAP} rows, newest kept", st == 200 and L["total"] == ERR_CAP and "cap 1-19" in msgs and "user boom" not in msgs, f"{L['total']} {msgs[-3:]}")
+    st, r = admin.call("POST", "errors-clear", {"all": True})
+    st2, L = admin.call("GET", "errors")
+    check("admin clears all errors", st == 200 and r["deleted"] == ERR_CAP and L["total"] == 0 and L["errors"] == [])
+    # Rate limit: anonymous 30 requests/hour per IP (this run already sent 6, rejected ones count too)
+    codes = [anon.call("POST", "client-error", {"items": [item("rl")]})[0] for _ in range(25)]
+    check("anonymous reports rate limited per IP (30/hour)", codes[:24] == [200] * 24 and codes[24] == 429, str(codes))
+    st, _ = user.call("POST", "client-error", {"items": [item("still ok")]})
+    check("logged-in user has a separate (per-user) limit", st == 200)
+
 def run(base, tmp):
     PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
     anon = Client(base)
     st, h = anon.call("GET", "health")
     check("health ok, configured, needs setup", st == 200 and h["configured"] and h["database"] and h["needs_setup"], json.dumps(h)[:200])
-    check("migration 4 applied (schema_version >= 4)", h.get("schema_version", 0) >= 4, str(h.get("schema_version")))
+    check("migration 5 applied (schema_version >= 5)", h.get("schema_version", 0) >= 5, str(h.get("schema_version")))
     st, r = anon.call("GET", "me"); check("me without session -> null user", st == 200 and r["user"] is None)
     st, _ = anon.call("GET", "library"); check("library requires login", st == 401)
 
@@ -493,6 +578,7 @@ def run(base, tmp):
     check("admin cannot delete self", st == 400)
 
     run_replace(base, tmp, admin, user)
+    run_errors(base, admin, user)
 
     st, r = anon.call("GET", "nope")
     check("unknown route 404", st == 404)

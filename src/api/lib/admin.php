@@ -21,9 +21,110 @@ function delete_book_everywhere(int $bookId): void {
     gc_book($bookId);
 }
 
+// ---------- v8.4 client error reports ----------
+/** Remove control chars, URL query strings/fragments, e-mails, token-like strings and secrets; trim to $max. */
+function scrub_report(string $s, int $max): string {
+    $s = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $s) ?? '';
+    $s = preg_replace('~((?:https?|blob|file)://[^\s?#"\'<>()]*)[?#][^\s"\'<>()]*?(?=:\d+:\d+|:\d+\b|[\s"\'<>()]|$)~iu', '$1', $s) ?? '';
+    $s = preg_replace('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}/iu', '[email]', $s) ?? '';
+    $s = preg_replace('/\b(token|csrf|password|passwd|secret|sid|setup_key|invite)(["\']?\s*[=:]\s*)["\']?[^\s"\'&,;]+/iu', '$1$2[redacted]', $s) ?? '';
+    $s = preg_replace('/\b[A-Fa-f0-9]{32,}\b/', '[token]', $s) ?? '';
+    $s = preg_replace('/\b[A-Za-z0-9_\-]{40,}\b/', '[token]', $s) ?? '';
+    return mb_substr(trim($s), 0, $max);
+}
+function report_str(array $it, string $k): string { return isset($it[$k]) && is_scalar($it[$k]) ? (string)$it[$k] : ''; }
+/** Store one report: dedupe by fingerprint within the same (UTC) day. Returns false when the item is skipped. */
+function store_client_error(array $it, int $userId): bool {
+    $message = scrub_report(report_str($it, 'message'), 500);
+    if ($message === '') return false;
+    $kind = strtolower(trim(report_str($it, 'kind')));
+    if (!preg_match('/^[a-z][a-z0-9_-]{0,19}$/', $kind)) $kind = 'other';
+    $version = substr(preg_replace('/[^0-9A-Za-z.+\-]/', '', report_str($it, 'app_version')) ?? '', 0, 20);
+    $source = scrub_report(report_str($it, 'source'), 300);
+    $stack = scrub_report(report_str($it, 'stack'), 4000);
+    $path = parse_url(report_str($it, 'path') ?: report_str($it, 'url_path'), PHP_URL_PATH);
+    $path = scrub_report(is_string($path) ? $path : '', 300);
+    $ua = report_str($it, 'user_agent') ?: (string)($_SERVER['HTTP_USER_AGENT'] ?? '');
+    $ua = mb_substr(trim(preg_replace('/[\x00-\x1F\x7F]/u', '', $ua) ?? ''), 0, 300);
+    $n = isset($it['count']) && is_numeric($it['count']) ? max(1, min(100, (int)$it['count'])) : 1;
+    $fp = hash('sha256', $kind . "\n" . $message . "\n" . $source . "\n" . $version);
+    $now = time(); $day = $now - ($now % 86400);
+    $row = one('SELECT id FROM client_errors WHERE fingerprint = ? AND created_at >= ? ORDER BY id DESC LIMIT 1', [$fp, $day]);
+    if ($row) {
+        q('UPDATE client_errors SET count = count + ?, last_seen = ? WHERE id = ?', [$n, $now, $row['id']]);
+    } else {
+        q('INSERT INTO client_errors (created_at, user_id, app_version, kind, message, source, stack, url_path, user_agent, count, fingerprint, last_seen)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [$now, $userId, $version, $kind, $message, $source, $stack, $path, $ua, $n, $fp, $now]);
+    }
+    return true;
+}
+function cap_client_errors(): void {
+    $cap = max(1, (int)config()['client_errors_max']);
+    if ((int)one('SELECT COUNT(*) AS n FROM client_errors')['n'] <= $cap) return;
+    $edge = one("SELECT id, last_seen FROM client_errors ORDER BY last_seen DESC, id DESC LIMIT 1 OFFSET $cap");
+    if ($edge) q('DELETE FROM client_errors WHERE last_seen < ? OR (last_seen = ? AND id <= ?)', [$edge['last_seen'], $edge['last_seen'], $edge['id']]);
+}
+
 function handle_admin_route(string $route): bool {
     global $method;
     switch ($route) {
+        case 'client-error':
+            // Anonymous visitors may report (strict per-IP limit); logged-in users must send the CSRF token.
+            method('POST');
+            if ((int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 131072) fail(413, 'too_large', 'Report too large.');
+            $s = current_session();
+            if ($s) { require_user(true); rate_limit('cerr-user|' . $s['id'], 120, 3600); }
+            else rate_limit('cerr-ip|' . client_ip(), 30, 3600);
+            $items = body_json()['items'] ?? null;
+            if (!is_array($items) || !$items || !array_is_list($items)) fail(400, 'bad_items', 'items must be a non-empty list.');
+            if (count($items) > 20) fail(400, 'too_many_items', 'At most 20 items per request.');
+            $ok = 0;
+            foreach ($items as $it) if (is_array($it) && store_client_error($it, $s ? (int)$s['id'] : 0)) $ok++;
+            if ($ok) cap_client_errors();
+            json_out(200, ['accepted' => $ok, 'skipped' => count($items) - $ok]);
+
+        case 'errors':
+            method('GET');
+            require_admin();
+            $where = []; $args = [];
+            foreach (['version' => 'app_version', 'kind' => 'kind'] as $p => $col) {
+                if (isset($_GET[$p]) && is_string($_GET[$p]) && $_GET[$p] !== '') { $where[] = "$col = ?"; $args[] = mb_substr($_GET[$p], 0, 20); }
+            }
+            $w = $where ? 'WHERE ' . implode(' AND ', $where) : '';
+            $per = max(1, min(100, (int)($_GET['per'] ?? 50)));
+            $page = max(1, (int)($_GET['page'] ?? 1));
+            $off = ($page - 1) * $per;
+            $groups = all("SELECT fingerprint, MAX(id) AS id, SUM(count) AS total, MAX(last_seen) AS last_seen, MIN(created_at) AS first_seen,
+                             COUNT(DISTINCT CASE WHEN user_id > 0 THEN user_id END) AS users, MIN(user_id) AS min_user
+                           FROM client_errors $w GROUP BY fingerprint ORDER BY last_seen DESC, id DESC LIMIT $per OFFSET $off", $args);
+            $detail = [];
+            if ($groups) {
+                $ids = array_map(fn($g) => (int)$g['id'], $groups);
+                foreach (all('SELECT * FROM client_errors WHERE id IN (' . implode(',', $ids) . ')') as $r) $detail[(int)$r['id']] = $r;
+            }
+            $col = fn(string $c) => array_values(array_filter(array_column(all("SELECT DISTINCT $c FROM client_errors ORDER BY $c DESC"), $c), fn($v) => $v !== ''));
+            json_out(200, [
+                'errors' => array_map(function ($g) use ($detail) {
+                    $r = $detail[(int)$g['id']];
+                    return ['id' => (int)$r['id'], 'fingerprint' => $g['fingerprint'], 'kind' => $r['kind'], 'app_version' => $r['app_version'],
+                        'message' => $r['message'], 'source' => $r['source'], 'stack' => (string)$r['stack'], 'url_path' => $r['url_path'],
+                        'user_agent' => $r['user_agent'], 'count' => (int)$g['total'], 'first_seen' => (int)$g['first_seen'],
+                        'last_seen' => (int)$g['last_seen'], 'users' => (int)$g['users'], 'anonymous' => (int)$g['min_user'] === 0];
+                }, $groups),
+                'total' => (int)one("SELECT COUNT(DISTINCT fingerprint) AS n FROM client_errors $w", $args)['n'],
+                'page' => $page, 'per' => $per, 'versions' => $col('app_version'), 'kinds' => $col('kind'),
+            ]);
+
+        case 'errors-clear':
+            method('POST');
+            require_admin(true);
+            $d = body_json();
+            if (!empty($d['all'])) $n = q('DELETE FROM client_errors')->rowCount();
+            elseif (isset($d['fingerprint']) && is_string($d['fingerprint']) && preg_match('/^[a-f0-9]{64}$/', $d['fingerprint'])) $n = q('DELETE FROM client_errors WHERE fingerprint = ?', [$d['fingerprint']])->rowCount();
+            elseif (isset($d['id'])) $n = q('DELETE FROM client_errors WHERE id = ?', [int_param($d['id'])])->rowCount();
+            else fail(400, 'missing_target', 'Give all, id or fingerprint.');
+            json_out(200, ['deleted' => $n]);
+
         case 'admin-stats':
             method('GET');
             require_admin();
@@ -36,6 +137,7 @@ function handle_admin_route(string $route): bool {
                 'catalog_approved' => $n("SELECT COUNT(*) AS n FROM catalog WHERE status = 'approved'"),
                 'catalog_pending' => $n("SELECT COUNT(*) AS n FROM catalog WHERE status = 'pending'"),
                 'open_invites' => $n('SELECT COUNT(*) AS n FROM invites WHERE used_by IS NULL AND expires_at > ' . time()),
+                'client_errors' => $n('SELECT COUNT(DISTINCT fingerprint) AS n FROM client_errors'),
             ]);
 
         case 'users':

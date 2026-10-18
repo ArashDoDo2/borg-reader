@@ -441,3 +441,17 @@ body.dark .clean-broad{background:#3d3220;color:#f0d9a8}
 .clean-snips{margin:6px 0 0;padding:0 18px 0 0;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:3px;overflow-wrap:anywhere}
 .clean-snips mark{background:#f6d48a;color:#3b2a06;border-radius:3px;padding:0 2px}
 @media(max-width:700px){.clean-open{flex:1 1 auto;padding:10px 12px}.clean-dialog{padding:20px 16px}}
+
+/* v8.4 error reports */
+.stat.stat-errors b{color:#b3412e}
+#errorsCount:empty{display:none}
+.errors-tools{margin-bottom:10px}
+.errors-tools .admin-input{flex:0 1 200px;min-width:140px}
+.err-item{align-items:flex-start}
+.err-details{flex:1;min-width:0}
+.err-details summary{cursor:pointer;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.err-msg{overflow-wrap:anywhere;font-weight:600}
+.err-meta{display:flex;flex-direction:column;gap:4px;margin-top:8px;overflow-wrap:anywhere}
+.err-meta code{font-size:11px}
+.err-stack{margin:4px 0 0;padding:8px 10px;max-height:220px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:10px;font-size:11px;white-space:pre-wrap;word-break:break-word;text-align:left}
+#errorsMore{margin-top:10px}
