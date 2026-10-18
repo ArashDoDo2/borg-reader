@@ -998,10 +998,20 @@
     // Not returned to epub.js (never block rendering on fonts); every reveal looks the veil up in the live document.
     const liftVeil = c => { try { const d = c && c.document; if (d) d.querySelectorAll("style#borg-veil").forEach(v => v.remove()); } catch (_) {} };
     rendition.hooks.content.register(contents => {
-      diag("veilHook");
-      const reveal = () => { diag("veilLiftMs", Date.now() - diagT0); liftVeil(contents); if (token === openToken) hideOpening(); };
+      diag("veilHook"); const veilStart = Date.now();
+      const reveal = () => { diag("veilLiftMs", Date.now() - diagT0); diag("veilMs", Date.now() - veilStart); liftVeil(contents); if (token === openToken) hideOpening(); };
       const safety = setTimeout(reveal, 1500); // never leave a page hidden
-      Promise.resolve(contents.addStylesheet(READER_FONTS_URL))
+      // WebKit never fires the <link> load event inside the book iframe, so addStylesheet() can hang: also poll
+      // for the stylesheet object itself (capped at 600 ms) instead of waiting for the 1.5 s safety.
+      const cssApplied = new Promise(r => {
+        const t0 = Date.now();
+        (function poll() {
+          let ok = false;
+          try { const l = contents.document && contents.document.querySelector(`link[href="${READER_FONTS_URL}"]`); ok = !!(l && l.sheet); } catch (_) {}
+          if (ok || Date.now() - t0 > 600) r(); else setTimeout(poll, 25);
+        })();
+      });
+      Promise.race([Promise.resolve(contents.addStylesheet(READER_FONTS_URL)), cssApplied])
         .then(() => { diag("fontsCssMs", Date.now() - diagT0); return new Promise(r => { const d = contents.document; if (d && d.body) void d.body.offsetHeight; const w = contents.window; (w && w.requestAnimationFrame ? w.requestAnimationFrame.bind(w) : setTimeout)(r); }); })
         .then(() => { const d = contents.document; return Promise.race([d && d.fonts ? d.fonts.ready : null, new Promise(r => setTimeout(r, 700))]); })
         .catch(() => {})

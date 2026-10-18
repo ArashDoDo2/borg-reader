@@ -35,7 +35,13 @@ Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/ap
   **WebKit (8.4.1):** the veil was never removed in WebKit (cause not pinned down: reveal looked it up in the
   document captured when the hook ran). Now the veil style carries `animation: borg-unveil 0s 1.5s forwards` so CSS
   alone lifts it, the hook no longer returns its promise to epub.js, and `liftVeil()` queries the live
-  `contents.document` (also on every `rendered`). Guarded by `tests/webkit_e2e.py` ("chapter veil is lifted").
+  `contents.document` (also on every `rendered`). Guarded by `tests/webkit_e2e.py` ("chapter veil is lifted"). Diagnostics (8.5.0, `diag()` with borg-debug
+  `{"stats":1}`) showed the real cause of the delay: in WebKit `contents.addStylesheet()` never resolves (no
+  `load` event for the link in the srcdoc iframe), so every chapter waited for the 1.5 s safety. Since 8.5.1 the hook
+  also polls for `link.sheet` (cap 600 ms).
+- **Playwright WebKit taps**: `page.touchscreen.tap` produced no touch/click events at all inside the book iframe
+  (CI, iPad/iPhone emulation), while Chromium emulation works. The WebKit tap checks are non-gating
+  (`WEBKIT_TAP_GATE=1` makes them gate) until confirmed on a real device.
 - Input inside the iframe does not bubble: use `rendition.on("keydown"|"touchstart"|"touchend"|"click")`. Those
   events are passive: `preventDefault()` only for events from the main document.
 - Escape is layered (selection bar → popups → search → settings → TOC drawer → immersive → close reader).
