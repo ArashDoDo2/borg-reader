@@ -132,13 +132,30 @@
       req.onerror = () => reject(req.error);
     });
   }
-  function put(store, value) {
+  function putRaw(store, value) {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(store, "readwrite");
       tx.objectStore(store).put(value);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
+  }
+  // Some WebKit/Safari modes cannot store Blobs in IndexedDB; fall back to an ArrayBuffer copy of the book.
+  async function put(store, value) {
+    try {
+      await putRaw(store, value);
+    } catch (err) {
+      if (store !== "books" || !(value && value.file instanceof Blob)) throw err;
+      const buf = await value.file.arrayBuffer();
+      await putRaw(store, { ...value, file: null, fileBuffer: buf, fileName: value.file.name || "book.epub" });
+    }
+  }
+  /** The book file as a Blob/File, whichever way it was stored. */
+  function fileOf(rec) {
+    if (!rec) return null;
+    if (rec.file instanceof Blob) return rec.file;
+    if (rec.fileBuffer) return new File([rec.fileBuffer], rec.fileName || "book.epub", { type: "application/epub+zip" });
+    return null;
   }
   function remove(store, key) {
     return new Promise((resolve, reject) => {
@@ -433,8 +450,8 @@
     for (const b of books) {
       if (b.size !== size) continue;
       let h = b.contentHash;
-      if (!h && b.file) {
-        h = await sha256(await b.file.arrayBuffer());
+      if (!h && fileOf(b)) {
+        h = await sha256(await fileOf(b).arrayBuffer());
         if (h) { try { await put("books", { ...b, contentHash: h }); } catch (_) {} }
       }
       if (h === hash) return b;
@@ -555,7 +572,9 @@
     $("prevPage").disabled = true; $("nextPage").disabled = false;
     showProgress(0);
     if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
-    const epubBytes = await record.file.arrayBuffer();
+    const bookFile = fileOf(record);
+    if (!bookFile) { showToast("فایل این کتاب روی دستگاه پیدا نشد."); return; }
+    const epubBytes = await bookFile.arrayBuffer();
     if (token !== openToken) return;
     bookInstance = ePub(epubBytes);
     bookInstance.on("openFailed", err => {
@@ -1540,13 +1559,13 @@
 
   // ---------- Sync ----------
   async function ensureHash(b) {
-    if (b.contentHash || !b.file) return b;
-    const h = await sha256(await b.file.arrayBuffer());
+    if (b.contentHash || !fileOf(b)) return b;
+    const h = await sha256(await fileOf(b).arrayBuffer());
     if (h) { b = { ...b, contentHash: h }; await put("books", b); }
     return b;
   }
   async function uploadBook(b) {
-    const data = await b.file.arrayBuffer();
+    const data = await fileOf(b).arrayBuffer();
     let r = await api("upload-init", { method: "POST", body: {
       sha256: b.contentHash, size: data.byteLength, title: b.title || "بدون عنوان", author: b.author || "", cover: b.cover || undefined,
     } });
@@ -1932,12 +1951,13 @@
   async function repairMetadata() {
     let changed = false;
     for (const b of await getAllBooks()) {
-      if (b.metaChecked || !b.file) continue;
+      if (b.metaChecked || !fileOf(b)) continue;
       const rec = { ...b, metaChecked: true };
       const weak = !b.cover || !b.author || b.author === UNKNOWN_AUTHOR || looksLikeFilename(b.title);
       if (weak) {
         try {
-          const file = b.file instanceof File ? b.file : new File([b.file], "book.epub", { type: "application/epub+zip" });
+          const raw = fileOf(b);
+          const file = raw instanceof File ? raw : new File([raw], "book.epub", { type: "application/epub+zip" });
           const fromName = file.name.replace(/\.epub$/i, "");
           const m = await extractMetadata(file);
           if (m.title && m.title !== fromName && (looksLikeFilename(b.title) || b.title === fromName)) rec.title = m.title;
