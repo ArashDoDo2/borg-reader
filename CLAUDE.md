@@ -2,7 +2,7 @@
 
 Persian-first EPUB reader: an offline-capable PWA (static files, no build step) plus an optional PHP 8 API
 for invite-only accounts, cloud sync and a moderated public catalog. Live at https://parsun.com/borg/.
-Current version: see `<meta name="app-version">` in `src/index.html` (8.2.0 when this file was last updated).
+Current version: see `<meta name="app-version">` in `src/index.html` (8.3.0 when this file was last updated).
 
 Owner and final decision-maker: Arash Naderpour. Work only inside the agreed scope; no refactors, extra files
 or deletions beyond what was asked. When something is ambiguous, ask instead of guessing.

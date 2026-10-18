@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-19, version **8.2.0** (live at https://parsun.com/borg/).
+Last updated: 2026-10-19, version **8.3.0** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -11,7 +11,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 - Server: shared cPanel host `parsun.com`, user `parsunco`, PHP 8.4, MySQL. Config in
   `/home/parsunco/borg-config/config.php`; book files in `~/borg-storage`; repo clone in
   `/home/parsunco/repositories/borg-reader`.
-- Tests: API 105 checks, e2e ~215 checks (Chromium), WebKit probe (Safari engine, informational) — all green.
+- Tests: API 133 checks, e2e ~215 checks (Chromium), WebKit probe (Safari engine, informational) — all green.
 
 ## Version history (what each release added)
 | Version | Highlights |
@@ -37,13 +37,11 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.1.5 | Drawn SVG toolbar icons, larger touch targets on mobile (its tests failed; it reached production through the CI race fixed in 8.1.6) |
 | 8.1.6 | Desktop TOC toggle hidden again; CI deploys only when the tested commit is still the branch head |
 | 8.2.0 | Chapter title in the header (from the TOC, active TOC entry), whole-book seek bar with preview and time left in book, «برگشت به صفحهٔ قبل» chip after any jump (`jumpTo()`), first-run page-turn guide |
+| 8.3.0 | Text cleanup «پاک‌سازی متن» (library toolbar): phrase rules + Telegram preset, preview, edits the EPUB file, re-anchors highlights, auto-clean on import; API `book-replace` moves library/progress/annotations (admin: catalog + other users) |
 
 ## Open items (not started unless the owner says so)
-0. **Next up (approved): text cleanup («پاک‌سازی متن»)** — owner's choices: edit the EPUB file itself, rules apply to
-   all books, remove only the matched phrase, no original kept, auto-apply on import with a «N مورد حذف شد» notice,
-   admin cleanup also replaces the public-catalog file (and, by default, other users' copies). Preview of every match
-   before changing existing books; reject too-broad rules; re-anchor highlights by quote; server "book replaced" step
-   that moves progress/annotations/shelves to the new file.
+0. Text cleanup shipped in 8.3.0. Limits: a phrase split across formatting tags is not matched; the
+   "too broad" override is per rule, not per book; server swap path is covered by API tests, not e2e.
 - Known epub.js bug: TOC hrefs that go up a folder (`../text/c1.xhtml` from `nav/`) fail with "No Section Found".
 2. **Safari tests in CI**: turn `tests/webkit_probe.py` into real WebKit checks (open book, text painted, edge taps,
    TOC). Proposed, awaiting approval. The probe already runs in CI but only reports.
