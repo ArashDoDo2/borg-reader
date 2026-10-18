@@ -698,6 +698,10 @@ async def run(url):
         await poll(lambda: _count_gt(pg, "#bookSearchResults button", 0), 10000)
         check("search matches old-style spelling (ى + RLM) with a standard query", await pg.locator("#bookSearchResults button").count() >= 1)
         await pg.keyboard.press("Escape"); await pg.wait_for_timeout(200)
+        pic = await pg.evaluate("""()=>{const d=document.querySelector('#viewer iframe').contentDocument,i=d.getElementById('pic'),p=i.parentElement;
+          const r=i.getBoundingClientRect(),q=p.getBoundingClientRect();return {cls:i.classList.contains('borg-blockimg'),disp:d.defaultView.getComputedStyle(i).display,
+          off:Math.round(Math.abs((r.left+r.right)/2-(q.left+q.right)/2))}}""")
+        check("v8.6: an image alone in its paragraph is centred as a block", pic["cls"] and pic["disp"] == "block" and pic["off"] <= 2, str(pic))
         await fr.locator("#pic").click(); await pg.wait_for_timeout(500)
         check("tapping an image opens the viewer", await pg.is_visible("#imageViewer") and bool(await pg.get_attribute("#imageViewerImg", "src")))
         await pg.keyboard.press("Escape"); await pg.wait_for_timeout(300)
@@ -1095,10 +1099,24 @@ async def run(url):
         check("v8.2 English: seek bar runs left-to-right", sk["dir"] == "ltr" and sk["cdir"] == "ltr" and not sk["dis"], str(sk))
         await E_.click("#tocToggle"); await E_.wait_for_timeout(500)
         await E_.locator("#tocList .toc-sub").click(); await E_.wait_for_timeout(2000)
-        lg = await E_.evaluate(LABEL_GEOM)
-        check("v8.2 English: nested TOC jump shows the (long) article title, cut with an ellipsis inside the header",
-              await E_.inner_text("#chapterLabel") == long_t and lg["inside"] and lg["cut"] and lg["ov"] == "ellipsis" and lg["dir"] == "auto"
-              and await E_.is_visible("#prevPage") and await E_.is_visible("#nextPage"), str(lg))
+        # v8.6: on phones the chapter title is the toolbar's second line; the page-nav row is only kept for screen readers.
+        lg = await E_.evaluate("""()=>{const l=document.getElementById('readerChapter'),t=document.querySelector('.reader-toolbar'),n=document.querySelector('.page-nav');
+          const r=l.getBoundingClientRect(),q=t.getBoundingClientRect(),nb=n.getBoundingClientRect(),ti=document.getElementById('readerTitle').getBoundingClientRect();
+          return {text:l.textContent,dir:l.getAttribute('dir'),inside:r.left>=q.left-1&&r.right<=q.right+1&&r.top>=q.top&&r.bottom<=q.bottom+1&&r.height>0,
+            below:r.top>=ti.bottom-2,cut:l.scrollWidth>l.clientWidth+1,ov:getComputedStyle(l).textOverflow,navH:nb.height,
+            navBtns:!!document.getElementById('prevPage')&&!!document.getElementById('nextPage')}}""")
+        check("v8.6 English (phone): nested TOC jump shows the long article title under the book title in the toolbar, cut with an ellipsis",
+              await E_.inner_text("#chapterLabel") == long_t and lg["text"] == long_t and lg["inside"] and lg["below"] and lg["cut"] and lg["ov"] == "ellipsis" and lg["dir"] == "auto", str(lg))
+        check("v8.6 phone: prev/next row gives its height to the book (kept in the DOM)", lg["navH"] <= 1 and lg["navBtns"], str(lg))
+        tb = await E_.evaluate("""()=>{const c=document.getElementById('closeReader').getBoundingClientRect(),h=document.querySelector('.reader-heading').getBoundingClientRect(),
+          bm=document.getElementById('bookmarkButton'),br=bm.getBoundingClientRect();
+          const btns=[...document.querySelectorAll('.reader-toolbar>button,.reader-tools>button')].filter(b=>b.offsetParent).map(b=>{const r=b.getBoundingClientRect();return Math.min(r.width,r.height)});
+          return {cw:c.width,ch:c.height,label:document.getElementById('closeReader').getAttribute('aria-label'),hw:h.width,minBtn:Math.min(...btns),
+            bw:br.width,bh:br.height,bmName:bm.textContent.trim(),pressed:bm.getAttribute('aria-pressed')}}""")
+        check("v8.6 phone: back is an icon button (44 px, labelled), the title gets the space, toolbar targets ≥ 44 px",
+              tb["cw"] <= 48 and tb["ch"] >= 44 and tb["label"] == "بازگشت به کتابخانه" and tb["hw"] >= 90 and tb["minBtn"] >= 44, str(tb))
+        check("v8.6 phone: bookmark is a 44 px star button with an accessible name and aria-pressed",
+              tb["bw"] >= 44 and tb["bh"] >= 44 and "نشانک" in tb["bmName"] and tb["pressed"] in ("true", "false"), str(tb))
         check("v8.2 English: active TOC entry is the nested article", await E_.evaluate(ACTIVE) == [[long_t, "true"]], str(await E_.evaluate(ACTIVE)))
         check("v8.2 English mobile: no horizontal overflow", await E_.evaluate("document.documentElement.scrollWidth<=innerWidth"))
         check("v8.2 English: no JS errors", len(errsE) == 0, str(errsE[:3]))
