@@ -74,7 +74,7 @@ function handle_admin_route(string $route): bool {
             if ((int)($_SERVER['CONTENT_LENGTH'] ?? 0) > 131072) fail(413, 'too_large', 'Report too large.');
             $s = current_session();
             if ($s) { require_user(true); rate_limit('cerr-user|' . $s['id'], 120, 3600); }
-            else rate_limit('cerr-ip|' . client_ip(), 30, 3600);
+            else rate_limit('cerr-ip|' . client_ip(), max(1, (int)config()['client_errors_ip_per_hour']), 3600);
             $items = body_json()['items'] ?? null;
             if (!is_array($items) || !$items || !array_is_list($items)) fail(400, 'bad_items', 'items must be a non-empty list.');
             if (count($items) > 20) fail(400, 'too_many_items', 'At most 20 items per request.');

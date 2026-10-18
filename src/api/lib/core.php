@@ -32,6 +32,7 @@ function config(): array {
         'max_book_bytes' => 100 * 1024 * 1024,
         'catalog_requires_approval' => true,
         'session_days' => 60,
+        'client_errors_ip_per_hour' => 30, // anonymous client-error requests per IP per hour
         'client_errors_max' => 5000, // rows kept in client_errors (oldest deleted beyond this)
     ];
     return $cfg = $c;

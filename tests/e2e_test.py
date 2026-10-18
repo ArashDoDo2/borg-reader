@@ -35,7 +35,8 @@ class PhpServer:
         mount.symlink_to(Path(src).resolve(), target_is_directory=True)
         cfg = self.tmp / "config.php"
         cfg.write_text("<?php return ['db_dsn' => " + json.dumps("sqlite:" + str(self.tmp / "db.sqlite")) +
-                       ", 'setup_key' => " + json.dumps(SETUP_KEY) + ", 'storage_dir' => " + json.dumps(str(self.tmp / "storage")) + "];\n")
+                       ", 'setup_key' => " + json.dumps(SETUP_KEY) + ", 'storage_dir' => " + json.dumps(str(self.tmp / "storage")) +
+                       ", 'client_errors_ip_per_hour' => 10000];\n")  # every test browser is anonymous from 127.0.0.1
         s = socket.socket(); s.bind(("127.0.0.1", 0)); self.port = s.getsockname()[1]; s.close()
         env = dict(os.environ, BORG_CONFIG=str(cfg), PHP_CLI_SERVER_WORKERS="6")
         self.proc = subprocess.Popen(["php", "-S", f"127.0.0.1:{self.port}", "-t", str(self.tmp / "www")],

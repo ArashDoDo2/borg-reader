@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-19, version **8.3.0** (live at https://parsun.com/borg/).
+Last updated: 2026-10-19, version **8.4.0** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -11,7 +11,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 - Server: shared cPanel host `parsun.com`, user `parsunco`, PHP 8.4, MySQL. Config in
   `/home/parsunco/borg-config/config.php`; book files in `~/borg-storage`; repo clone in
   `/home/parsunco/repositories/borg-reader`.
-- Tests: API 133 checks, e2e ~215 checks (Chromium), WebKit probe (Safari engine, informational) — all green.
+- Tests: API 159 checks, e2e ~215 checks (Chromium), WebKit probe (Safari engine, informational) — all green.
 
 ## Version history (what each release added)
 | Version | Highlights |
@@ -38,12 +38,13 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.1.6 | Desktop TOC toggle hidden again; CI deploys only when the tested commit is still the branch head |
 | 8.2.0 | Chapter title in the header (from the TOC, active TOC entry), whole-book seek bar with preview and time left in book, «برگشت به صفحهٔ قبل» chip after any jump (`jumpTo()`), first-run page-turn guide |
 | 8.3.0 | Text cleanup «پاک‌سازی متن» (library toolbar): phrase rules + Telegram preset, preview, edits the EPUB file, re-anchors highlights, auto-clean on import; API `book-replace` moves library/progress/annotations (admin: catalog + other users) |
+| 8.4.0 | WebKit (Safari) e2e tests gate the deploy (iPad, iPhone, desktop); TOC hrefs relative to the nav file resolved (epub.js "No Section Found"); client error reporting to the admin («خطاهای کاربران», API migration 5) |
 
 ## Open items (not started unless the owner says so)
 0. Text cleanup shipped in 8.3.0. Limits: a phrase split across formatting tags is not matched; the
    "too broad" override is per rule, not per book; server swap path is covered by API tests, not e2e.
-- Fixed (v8.4, not yet released): TOC hrefs that go up a folder (`../text/c1.xhtml` from `nav/`) failed with "No Section Found".
-2. **Safari tests in CI** (v8.4, not yet released): `tests/webkit_e2e.py` runs in the CI job `webkit` and gates the deploy
+- Fixed (v8.4.0): TOC hrefs that go up a folder (`../text/c1.xhtml` from `nav/`) failed with "No Section Found".
+2. **Safari tests in CI** (v8.4.0): `tests/webkit_e2e.py` runs in the CI job `webkit` and gates the deploy
    (open book, text laid out, touch edge taps, TOC, veil, seek bar, back chip). The probe now runs only when it fails.
 3. **Real-device confirmation** still pending from the owner: iPad shows text (8.0.4), iPhone edge taps (8.0.5).
 4. Later candidates (owner chose reading features first): error reporting to the admin, upload progress/resume,
