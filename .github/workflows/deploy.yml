@@ -68,7 +68,16 @@ jobs:
           if [ -z "$CPANEL_TOKEN" ] || [ -z "$CPANEL_USER" ] || [ -z "$CPANEL_HOST" ]; then
             echo "::error::CPANEL_TOKEN, CPANEL_USER and CPANEL_HOST secrets are required"; exit 1
           fi
+      # The server always pulls the branch head. Deploy only if that head is the commit these tests ran on;
+      # otherwise a newer run (queued behind this one) will test and deploy it. Never ship untested code.
+      - name: Check this commit is still the branch head
+        id: head
+        run: |
+          HEAD_SHA=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
+          if [ "$HEAD_SHA" = "$GITHUB_SHA" ]; then echo "current=true" >> "$GITHUB_OUTPUT"
+          else echo "current=false" >> "$GITHUB_OUTPUT"; echo "::notice::Superseded by $HEAD_SHA; skipping deploy (its own run will deploy it)."; fi
       - name: Pull branch on the server
+        if: steps.head.outputs.current == 'true'
         run: |
           set -euo pipefail
           resp=$(curl -sS --fail-with-body -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
@@ -76,6 +85,7 @@ jobs:
             --data-urlencode "repository_root=${REPO_ROOT}" --data-urlencode "branch=${BRANCH}" -G)
           echo "$resp" | python3 -c 'import json,sys; r=json.load(sys.stdin); print("status", r.get("status"), r.get("errors")); sys.exit(0 if r.get("status")==1 else 1)'
       - name: Deploy HEAD commit
+        if: steps.head.outputs.current == 'true'
         run: |
           set -euo pipefail
           resp=$(curl -sS --fail-with-body -H "Authorization: cpanel ${CPANEL_USER}:${CPANEL_TOKEN}" \
@@ -83,14 +93,10 @@ jobs:
             --data-urlencode "repository_root=${REPO_ROOT}" -G)
           echo "$resp" | python3 -c 'import json,sys; r=json.load(sys.stdin); print("status", r.get("status"), r.get("errors")); sys.exit(0 if r.get("status")==1 else 1)'
       - name: Smoke test
+        if: steps.head.outputs.current == 'true'
         run: |
           if [ "$BRANCH" = "main" ]; then URL="https://parsun.com/borg/"; else URL="https://parsun.com/borg-test/"; fi
           VERSION=$(sed -n 's/.*name="app-version" content="\([^"]*\)".*/\1/p' src/index.html | head -1)
-          # The server pulls the branch head; if a newer commit landed meanwhile, expect that commit's version.
-          if git fetch -q --depth=1 origin "$BRANCH" && [ "$(git rev-parse FETCH_HEAD)" != "$GITHUB_SHA" ]; then
-            VERSION=$(git show FETCH_HEAD:src/index.html | sed -n 's/.*name="app-version" content="\([^"]*\)".*/\1/p' | head -1)
-            echo "Newer commit on $BRANCH; expecting version $VERSION"
-          fi
           # cPanel deployment runs asynchronously; give it a moment, then retry.
           for i in 1 2 3 4 5 6; do
             sleep 10

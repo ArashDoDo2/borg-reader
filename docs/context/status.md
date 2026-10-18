@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-19, version **8.1.5** (live at https://parsun.com/borg/).
+Last updated: 2026-10-19, version **8.1.6** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -34,7 +34,8 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.1.2 | Chapters hidden until font and theme are applied (no text "jump" on load) |
 | 8.1.3 | Per-book reading direction (English books LTR) detected from text; nested TOC entries |
 | 8.1.4 | Direction-aware TOC/notes/title text (English labels left-aligned) |
-| 8.1.5 | Drawn SVG toolbar icons, larger touch targets on mobile; CI smoke test tolerates a newer commit |
+| 8.1.5 | Drawn SVG toolbar icons, larger touch targets on mobile (its tests failed; it reached production through the CI race fixed in 8.1.6) |
+| 8.1.6 | Desktop TOC toggle hidden again; CI deploys only when the tested commit is still the branch head |
 
 ## Open items (not started unless the owner says so)
 1. **Chapter name in the reader header** instead of «بخش N» (label currently counts spine files). Proposed, awaiting approval.

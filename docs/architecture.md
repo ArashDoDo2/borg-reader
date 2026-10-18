@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.1.5 (2026-10-19). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.1.6 (2026-10-19). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -121,7 +121,9 @@ Host: shared cPanel (`parsun.com`, user `parsunco`), HTTPS. Single branch `main`
 2. Job `test`: `tests/api_test.py` + `tests/e2e_test.py` (Chromium). Failures are printed as `::error`
    annotations (readable with `gh api repos/ArashDoDo2/borg-reader/check-runs/<job-id>/annotations`).
    Job `webkit-probe` (`tests/webkit_probe.py`, `continue-on-error`) reports Safari-engine measurements as `::warning`.
-3. Job `deploy` (needs `test`): cPanel UAPI `VersionControl/update` then `VersionControlDeployment/create` on the
+3. Job `deploy` (needs `test`): first checks that the tested commit is still the head of `main`; if a newer
+   commit was pushed meanwhile it skips (the newer run, queued behind it, tests and deploys that commit) — the server
+   always pulls the branch head, so this is what guarantees only tested code is deployed. Then cPanel UAPI `VersionControl/update` then `VersionControlDeployment/create` on the
    clone `/home/parsunco/repositories/borg-reader`. `.cpanel.yml` runs `scripts/cpanel-deploy.sh`, which rsyncs
    `src/` into `~/public_html/borg/` and forces 644/755 (v5 lesson: 600 → HTTP 403, ADR 0004).
 4. `scripts/smoke-test.sh https://parsun.com/borg/ <version>` retries for ~1 minute until the new

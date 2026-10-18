@@ -371,6 +371,6 @@ body.dark .cat-chip{background:#3d3524;color:#e5c58b}
 .toc-link.toc-sub.active{color:var(--green2)}
 
 /* v8.1.5: drawn toolbar icons (font glyphs rendered tiny on some phones) */
-.icon-button{display:inline-flex;align-items:center;justify-content:center}
+.icon-button:not(.toc-toggle){display:inline-flex;align-items:center;justify-content:center} /* .toc-toggle stays hidden on desktop */
 .icon-button .ico{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
 .settings-toggle{font-weight:700;font-size:16px}
