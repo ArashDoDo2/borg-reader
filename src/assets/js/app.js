@@ -574,6 +574,159 @@
     $("progressBar").style.width = `${pct}%`;
     $("progressText").textContent = `${pct.toLocaleString("fa-IR")}٪`;
   }
+  // ---- v8.2 nav: chapter title from the TOC, whole-book seek bar ----
+  // tocFlat: the flattened TOC as rendered (same order as the .toc-link buttons).
+  let tocFlat = [], seekDragging = false, seekNavigating = false, sectionLocs = new Map();
+  const faNum = n => Number(n).toLocaleString("fa-IR");
+  function normHref(h) {
+    let s = String(h || "").split("#")[0].split("?")[0];
+    try { s = decodeURIComponent(s); } catch (_) {}
+    const out = [];
+    s.replace(/\\/g, "/").split("/").forEach(p => { if (!p || p === ".") return; if (p === "..") out.pop(); else out.push(p); });
+    return out.join("/");
+  }
+  // TOC hrefs may be relative to the nav document, spine hrefs to the package: compare as path suffixes.
+  const sameFile = (a, b) => !!a && !!b && (a === b || a.endsWith("/" + b) || b.endsWith("/" + a));
+  function setTocEntries(flat) {
+    tocFlat = flat.map(({ it, depth }, i) => {
+      const href = String(it.href || ""), hash = href.indexOf("#");
+      let frag = hash >= 0 ? href.slice(hash + 1) : "";
+      try { frag = decodeURIComponent(frag); } catch (_) {}
+      return { i, depth, label: (it.label || "").trim() || `بخش ${i + 1}` /* same text as the TOC button */, file: normHref(href), frag };
+    });
+  }
+  // The TOC entry for a position: same file; among #fragment entries the last one whose target is at or before
+  // the position (callers pass the end of the visible page; only when that chapter is loaded), otherwise the deepest
+  // whole-file entry, otherwise the first.
+  function tocEntryFor(index, cfi) {
+    if (!tocFlat.length || index == null || !bookInstance) return null;
+    let item = null;
+    try { item = bookInstance.spine.get(index); } catch (_) {}
+    if (!item) return null;
+    const file = normHref(item.href), matches = tocFlat.filter(e => sameFile(e.file, file));
+    if (!matches.length) return null;
+    const whole = matches.filter(e => !e.frag);
+    const fallback = whole.length ? whole.reduce((a, e) => (e.depth > a.depth ? e : a)) : matches[0];
+    const frags = matches.filter(e => e.frag);
+    if (frags.length && cfi && rendition) {
+      try {
+        const contents = (rendition.getContents() || []).find(c => c.sectionIndex === index);
+        const doc = contents && contents.document;
+        if (doc) {
+          const cmp = new ePub.CFI();
+          let best = null;
+          for (const e of frags) {
+            const el = doc.getElementById(e.frag);
+            if (el && cmp.compare(contents.cfiFromNode(el), cfi) <= 0) best = e;
+          }
+          if (best) return best;
+        }
+      } catch (_) {}
+    }
+    return fallback;
+  }
+  function chapterTitle(index, cfi) {
+    const e = tocEntryFor(index, cfi);
+    return e ? e.label : (index != null ? `بخش ${faNum(index + 1)}` : "مطالعه");
+  }
+  function scrollTocToActive() {
+    const act = $("tocList").querySelector(".toc-link.active"), panel = $("tocPanel");
+    if (!act || !panel.clientHeight) return;
+    const r = act.getBoundingClientRect(), p = panel.getBoundingClientRect();
+    if (r.top < p.top || r.bottom > p.bottom) panel.scrollTop += r.top - p.top - panel.clientHeight / 3;
+  }
+  function updateChapter(location) {
+    const st = location && location.start, en = location && location.end;
+    // "Position" is the page shown: a #fragment heading visible on this page (e.g. after a TOC jump) already counts.
+    const entry = st ? tocEntryFor(st.index, en && en.index === st.index && en.cfi ? en.cfi : st.cfi) : null;
+    const label = entry ? entry.label : (st && st.index != null ? `بخش ${faNum(st.index + 1)}` : "مطالعه");
+    $("chapterLabel").textContent = label;
+    $("chapterLabel").title = label;
+    let changed = false;
+    $("tocList").querySelectorAll(".toc-link[data-href]").forEach((b, i) => {
+      const on = !!entry && entry.i === i;
+      if (b.classList.contains("active") !== on) changed = true;
+      b.classList.toggle("active", on);
+      if (on) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
+    });
+    // Desktop: the TOC is always visible, keep the current chapter in view.
+    if (changed && window.matchMedia("(min-width: 701px)").matches) scrollTocToActive();
+  }
+  function locationsReady() {
+    try { return !!(bookInstance && bookInstance.locations && bookInstance.locations.length() > 0); } catch (_) { return false; }
+  }
+  function resetSeek() {
+    const r = $("bookSeek");
+    r.disabled = true; r.value = "0"; r.dir = bookIsRtl() ? "rtl" : "ltr";
+    r.setAttribute("aria-valuetext", "در حال محاسبهٔ صفحه‌ها…");
+    $("seekInfo").textContent = "در حال محاسبهٔ صفحه‌ها…";
+    $("seekPreview").hidden = true;
+    seekDragging = false; seekNavigating = false; sectionLocs = new Map();
+  }
+  function enableSeek() {
+    sectionLocs = new Map();
+    // Locations per spine item (from the CFI's itemref step), used to turn the chapter's page count into a book estimate.
+    (bookInstance.locations._locations || []).forEach(c => {
+      const m = /^epubcfi\(\/\d+\/(\d+)/.exec(String(c));
+      if (m) { const idx = Number(m[1]) / 2 - 1; sectionLocs.set(idx, (sectionLocs.get(idx) || 0) + 1); }
+    });
+    $("bookSeek").disabled = false;
+  }
+  function setSeekValueText(pct) { $("bookSeek").setAttribute("aria-valuetext", `${faNum(pct)} درصد از کتاب`); }
+  function updateSeek(location) {
+    if (!locationsReady() || !location?.start?.cfi) return;
+    const L = bookInstance.locations;
+    let p = 0;
+    try { p = Math.max(0, Math.min(1, L.percentageFromCfi(location.start.cfi) || 0)); } catch (_) { return; }
+    if (!seekDragging && !seekNavigating) { $("bookSeek").value = String(Math.round(p * 1000)); setSeekValueText(Math.round(p * 100)); }
+    // Book time left: remaining locations × pages per location (measured in this chapter) × the reader's seconds per page.
+    let min = 0;
+    try {
+      const total = L.length(), cur = Math.max(0, L.locationFromCfi(location.start.cfi) || 0);
+      const disp = location.start.displayed, inSection = sectionLocs.get(location.start.index) || 0;
+      const ratio = disp && disp.total && inSection ? Math.max(0.1, Math.min(10, disp.total / inSection)) : 1;
+      min = Math.ceil(Math.max(0, total - cur - 1) * ratio * secPerPage / 60);
+    } catch (_) {}
+    const head = `٪${faNum(Math.round(p * 100))} از کتاب`;
+    $("seekInfo").textContent = location.atEnd ? `${head} · آخرین صفحهٔ کتاب` : `${head} · حدود ${faNum(Math.max(1, min))} دقیقه تا پایان کتاب`;
+  }
+  function showSeekPreview() {
+    const r = $("bookSeek"), pv = $("seekPreview");
+    if (!locationsReady()) return;
+    const p = Number(r.value) / 1000;
+    let title = "";
+    try { const cfi = bookInstance.locations.cfiFromPercentage(p); title = chapterTitle(new ePub.CFI(cfi).spinePos, cfi); } catch (_) {}
+    pv.textContent = `${title ? title + " · " : ""}٪${faNum(Math.round(p * 100))}`;
+    setSeekValueText(Math.round(p * 100));
+    pv.hidden = false;
+    const wrap = r.parentElement.getBoundingClientRect(), rr = r.getBoundingClientRect();
+    const frac = r.dir === "rtl" ? 1 - p : p, thumb = 8;
+    const x = rr.left - wrap.left + thumb + frac * Math.max(0, rr.width - 2 * thumb), w = pv.offsetWidth;
+    pv.style.left = `${Math.max(w / 2, Math.min(wrap.width - w / 2, x))}px`;
+  }
+  function endSeekDrag() { seekDragging = false; $("seekPreview").hidden = true; }
+  $("bookSeek").addEventListener("input", () => { seekDragging = true; showSeekPreview(); });
+  $("bookSeek").addEventListener("change", () => {
+    endSeekDrag();
+    if (!rendition || !locationsReady()) return;
+    let cfi = null;
+    try { cfi = bookInstance.locations.cfiFromPercentage(Number($("bookSeek").value) / 1000); } catch (_) {}
+    if (!cfi) return;
+    const token = openToken;
+    seekNavigating = true; // keep the thumb where the reader put it (arrow keys step from there)
+    Promise.resolve(rendition.display(cfi)).catch(err => console.warn("Seek failed:", err))
+      .then(() => new Promise(r => setTimeout(r, 300))).then(() => {
+        if (token !== openToken || !rendition) return;
+        seekNavigating = false;
+        // Small steps (arrow keys) often stay on the same page: keep the thumb unless the page is clearly elsewhere.
+        try {
+          const loc = rendition.currentLocation(), want = Number($("bookSeek").value);
+          const got = Math.round(bookInstance.locations.percentageFromCfi(loc.start.cfi) * 1000);
+          if (Math.abs(got - want) > 20) updateSeek(loc);
+        } catch (_) {}
+      });
+  });
+  ["pointerup", "pointercancel", "blur"].forEach(ev => $("bookSeek").addEventListener(ev, endSeekDrag));
   // Online previews of catalog books (ids "preview-N") are never stored: last line of defence for every write path.
   const isPreviewId = id => typeof id === "string" && id.startsWith("preview-");
   async function saveProgress(bookId, cfi, pct, bookmark) {
@@ -594,10 +747,12 @@
         if (latest) await put("books", { ...latest, locations: book.locations.save() });
       }
       if (token !== openToken || !rendition) return;
+      enableSeek();
       const loc = rendition.currentLocation();
       if (loc?.start?.cfi) {
         const pct = percentFor(loc.start.cfi);
         showProgress(pct);
+        updateSeek(loc);
         if (currentBook && !currentBook.preview) await saveProgress(currentBook.id, loc.start.cfi, pct);
       }
     } catch (err) {
@@ -622,6 +777,7 @@
     $("tocList").innerHTML = '<p class="muted">در حال ساخت فهرست…</p>';
     $("viewer").innerHTML = "";
     $("chapterLabel").textContent = "شروع مطالعه";
+    tocFlat = []; resetSeek();
     $("prevPage").disabled = true; $("nextPage").disabled = false;
     showProgress(0);
     if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
@@ -636,6 +792,7 @@
     });
     bookDir = await detectBookDirection(bookInstance);
     if (token !== openToken) return;
+    $("bookSeek").dir = bookIsRtl() ? "rtl" : "ltr"; // RTL books fill the seek bar from the right
     patchTextWidth(DEBUG.tw || "rects"); // Safari/iPad fix: stock measurement inflates RTL column width to ~500k px → blank page
     rendition = bookInstance.renderTo("viewer", {
       width: "100%", height: "100%", flow: readerPrefs.flow === "scrolled" ? "scrolled-doc" : "paginated",
@@ -679,12 +836,13 @@
       if (token !== openToken || !location?.start) return;
       const pct = percentFor(location.start.cfi, location.start.percentage);
       showProgress(pct);
-      $("chapterLabel").textContent = location.start.index != null ? `بخش ${Number(location.start.index + 1).toLocaleString("fa-IR")}` : "مطالعه";
+      updateChapter(location);
       $("prevPage").disabled = !!location.atStart;
       if (!pendingSelection) hideSelectionBar();
       updateBookmarkButton();
       markActivity();
       updateTimeLeft(location);
+      updateSeek(location);
       onTtsRelocated(location);
       if (location.atEnd && currentBook && !currentBook.preview && currentBook.status !== "finished") {
         setBookMeta(currentBook.id, { status: "finished" }).then(r => { if (r) { currentBook = r; showToast("تبریک! این کتاب را تمام کردی."); } });
@@ -721,6 +879,8 @@
     (function walk(items, depth) { (items || []).forEach(it => { flat.push({ it, depth }); if (depth < 2) walk(it.subitems, depth + 1); }); })(toc, 0);
     $("tocList").innerHTML = flat.length ? flat.map(({ it, depth }, i) => `<button class="toc-link${depth ? " toc-sub toc-d" + depth : ""}" type="button" dir="auto" data-href="${esc(it.href)}">${esc((it.label || "").trim() || `بخش ${i+1}`)}</button>`).join("") : '<p class="muted">فهرست فصل‌ها در این EPUB وجود ندارد.</p>';
     $("tocList").querySelectorAll("[data-href]").forEach(btn => btn.addEventListener("click", () => { closeToc(false); if (rendition) rendition.display(btn.dataset.href); }));
+    setTocEntries(flat);
+    try { updateChapter(rendition.currentLocation()); } catch (_) {}
     await renderBookAnnotations();
     updateBookmarkButton();
     prepareLocations(record, token);
@@ -791,8 +951,9 @@
   function openToc() {
     $("reader").classList.add("toc-open");
     $("tocToggle").setAttribute("aria-expanded", "true");
-    const first = $("tocList").querySelector("button");
-    setTimeout(() => (first || $("tocPanel")).focus({ preventScroll: true }), 50);
+    const first = $("tocList").querySelector(".toc-link.active") || $("tocList").querySelector("button");
+    scrollTocToActive();
+    setTimeout(() => { scrollTocToActive(); (first || $("tocPanel")).focus({ preventScroll: true }); }, 50);
   }
   function closeToc(returnFocus) {
     if (!$("reader").classList.contains("toc-open")) return;
