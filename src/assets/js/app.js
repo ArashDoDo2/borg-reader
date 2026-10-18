@@ -911,19 +911,22 @@
     const veilBook = bookInstance;
     veilBook.opened.then(() => veilBook.spine.hooks.serialize.register((output, section) => {
       const html = typeof section.output === "string" ? section.output : output;
-      if (typeof html === "string") section.output = html.replace(/<head(\s[^>]*)?>/i, m => `${m}<style id="borg-veil">html{visibility:hidden}</style>`);
+      // The CSS animation lifts the veil by itself after 1.5 s even if no script ever runs (it stuck forever in WebKit).
+      if (typeof html === "string") section.output = html.replace(/<head(\s[^>]*)?>/i, m => `${m}<style id="borg-veil">html{visibility:hidden;animation:borg-unveil 0s 1.5s forwards}@keyframes borg-unveil{to{visibility:visible}}</style>`);
     })).catch(() => {});
     rendition.hooks.content.register(onBookContent);
     // The book is rendered in an iframe; load the bundled font there too, then lift the veil.
+    // Not returned to epub.js (never block rendering on fonts); every reveal looks the veil up in the live document.
+    const liftVeil = c => { try { const d = c && c.document; if (d) d.querySelectorAll("style#borg-veil").forEach(v => v.remove()); } catch (_) {} };
     rendition.hooks.content.register(contents => {
-      const doc = contents.document, reveal = () => { const v = doc && doc.getElementById("borg-veil"); if (v) v.remove(); };
-      const safety = setTimeout(reveal, 1500); // never leave a page hidden
-      return contents.addStylesheet(READER_FONTS_URL)
-        .then(() => new Promise(r => { void doc.body.offsetHeight; (contents.window.requestAnimationFrame || setTimeout)(r); }))
-        .then(() => Promise.race([doc.fonts ? doc.fonts.ready : null, new Promise(r => setTimeout(r, 700))]))
+      const safety = setTimeout(() => liftVeil(contents), 1500); // never leave a page hidden
+      Promise.resolve(contents.addStylesheet(READER_FONTS_URL))
+        .then(() => new Promise(r => { const d = contents.document; if (d && d.body) void d.body.offsetHeight; const w = contents.window; (w && w.requestAnimationFrame ? w.requestAnimationFrame.bind(w) : setTimeout)(r); }))
+        .then(() => { const d = contents.document; return Promise.race([d && d.fonts ? d.fonts.ready : null, new Promise(r => setTimeout(r, 700))]); })
         .catch(() => {})
-        .then(() => { clearTimeout(safety); reveal(); });
+        .then(() => { clearTimeout(safety); liftVeil(contents); });
     });
+    rendition.on("rendered", () => setTimeout(() => { try { rendition.getContents().forEach(liftVeil); } catch (_) {} }, 1600));
     applyReaderStyles();
     // Input inside the book iframe does not reach the main document; epub.js re-emits it on the rendition.
     rendition.on("keydown", handleReaderKey);

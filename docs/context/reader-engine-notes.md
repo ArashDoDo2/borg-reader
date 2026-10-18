@@ -32,6 +32,10 @@ Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/ap
   a content hook removes it after `reader-fonts.css` loads and `document.fonts.ready` (700 ms cap, 1.5 s safety).
   The hook must be registered **after `book.opened`**, otherwise epub.js's own resource-substitution hook
   overwrites `section.output`. → e2e "chapter veil is lifted".
+  **WebKit (8.4.1):** the veil was never removed in WebKit (cause not pinned down: reveal looked it up in the
+  document captured when the hook ran). Now the veil style carries `animation: borg-unveil 0s 1.5s forwards` so CSS
+  alone lifts it, the hook no longer returns its promise to epub.js, and `liftVeil()` queries the live
+  `contents.document` (also on every `rendered`). Guarded by `tests/webkit_e2e.py` ("chapter veil is lifted").
 - Input inside the iframe does not bubble: use `rendition.on("keydown"|"touchstart"|"touchend"|"click")`. Those
   events are passive: `preventDefault()` only for events from the main document.
 - Escape is layered (selection bar → popups → search → settings → TOC drawer → immersive → close reader).

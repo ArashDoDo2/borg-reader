@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-19, version **8.4.0** (live at https://parsun.com/borg/).
+Last updated: 2026-10-19, version **8.4.1** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -38,7 +38,8 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.1.6 | Desktop TOC toggle hidden again; CI deploys only when the tested commit is still the branch head |
 | 8.2.0 | Chapter title in the header (from the TOC, active TOC entry), whole-book seek bar with preview and time left in book, «برگشت به صفحهٔ قبل» chip after any jump (`jumpTo()`), first-run page-turn guide |
 | 8.3.0 | Text cleanup «پاک‌سازی متن» (library toolbar): phrase rules + Telegram preset, preview, edits the EPUB file, re-anchors highlights, auto-clean on import; API `book-replace` moves library/progress/annotations (admin: catalog + other users) |
-| 8.4.0 | WebKit (Safari) e2e tests gate the deploy (iPad, iPhone, desktop); TOC hrefs relative to the nav file resolved (epub.js "No Section Found"); client error reporting to the admin («خطاهای کاربران», API migration 5) |
+| 8.4.0 | WebKit (Safari) e2e tests gate the deploy (iPad, iPhone, desktop); TOC hrefs relative to the nav file resolved (epub.js "No Section Found"); client error reporting to the admin («خطاهای کاربران», API migration 5) | — not deployed: the new WebKit gate failed (veil never lifted in WebKit; taps failed)
+| 8.4.1 | Veil fix for Safari: self-expiring CSS animation (1.5 s) + removal from the live document; production 8.1.2–8.3.0 likely showed blank chapters on Safari |
 
 ## Open items (not started unless the owner says so)
 0. Text cleanup shipped in 8.3.0. Limits: a phrase split across formatting tags is not matched; the
