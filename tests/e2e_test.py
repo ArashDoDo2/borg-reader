@@ -1694,6 +1694,37 @@ async def run(url):
             except Exception: pass
         check("v8.6.2 links: no JS errors", not [e for e in errsL if "example.com" not in e], str(errsL[:3]))
         await ctxL.close(); shutil.rmtree(tmpl, ignore_errors=True)
+        # 24. v8.6.3: mouse wheel / trackpad turns pages (one page per gesture), can be switched off
+        errsW, extW = [], []
+        ctxW, WP = await new_ctx(b, url, extW, errsW)
+        await WP.set_viewport_size({"width": 1280, "height": 800})
+        await WP.goto(url); await WP.wait_for_timeout(1000)
+        await WP.set_input_files("#epubInput", sample); await WP.wait_for_timeout(2500)
+        await WP.click("#bookGrid .book-card"); await WP.wait_for_timeout(3000)
+        SL = "()=>{const c=document.querySelector('#viewer .epub-container');return c?Math.round(c.scrollLeft):null}"
+        PW = "()=>{const c=document.querySelector('#viewer .epub-container');return c?c.clientWidth:0}"
+        vb = await WP.locator("#viewer").bounding_box()
+        await WP.mouse.move(vb["x"] + vb["width"] / 2, vb["y"] + vb["height"] / 2)
+        s0 = await WP.evaluate(SL); pw = await WP.evaluate(PW)
+        await WP.mouse.wheel(0, 120); await WP.wait_for_timeout(900)
+        s1 = await WP.evaluate(SL)
+        check("v8.6.3: one wheel notch down turns exactly one page forward", s0 is not None and abs(abs(s1 - s0) - pw) <= 2, f"{s0} → {s1} (page {pw})")
+        for _ in range(12):
+            await WP.mouse.wheel(0, 8); await WP.wait_for_timeout(16)
+        await WP.wait_for_timeout(900)
+        s2 = await WP.evaluate(SL)
+        check("v8.6.3: a trackpad burst of tiny deltas turns only one page", abs(abs(s2 - s1) - pw) <= 2, f"{s1} → {s2}")
+        await WP.mouse.wheel(0, -120); await WP.wait_for_timeout(900)
+        s3 = await WP.evaluate(SL)
+        check("v8.6.3: wheel up goes back one page", abs(s3 - s1) <= 2, f"{s2} → {s3} (expected {s1})")
+        await open_settings(WP)
+        await WP.click("#prefWheel"); await WP.wait_for_timeout(300)
+        await WP.keyboard.press("Escape"); await WP.wait_for_timeout(400)
+        await WP.mouse.move(vb["x"] + vb["width"] / 2, vb["y"] + vb["height"] / 2)
+        await WP.mouse.wheel(0, 120); await WP.wait_for_timeout(900)
+        check("v8.6.3: with the setting off the wheel does not turn pages", abs((await WP.evaluate(SL)) - s3) <= 2)
+        check("v8.6.3 wheel: no JS errors", len(errsW) == 0, str(errsW[:3]))
+        await ctxW.close()
         await b.close()
 
 def main():

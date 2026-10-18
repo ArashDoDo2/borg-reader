@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.6.2 (2026-10-19). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.6.3 (2026-10-19). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -136,7 +136,7 @@ Details and history of each workaround: `docs/context/reader-engine-notes.md`.
   `patchTextWidth("rects")` (Safari fix) → `renderTo("viewer", {flow, spread, defaultDirection: bookDir})` →
   serialize hook adds the load veil (after `book.opened`) → content hooks (`onBookContent`: half-space fix,
   Persian digits, footnote/image click handlers; fonts stylesheet then veil removal) → theme (`applyReaderStyles`).
-- **Navigation:** `goLeft/goRight` map to forward/back through `bookIsRtl()`. Taps are recognised on `touchend`
+- **Navigation:** `goLeft/goRight` map to forward/back through `bookIsRtl()`. Mouse wheel/trackpad (8.6.3, `onReaderWheel`, listeners on the book document and `#viewer`): summed deltas ≥ 40 px turn one page, then locked until 250 ms of quiet; vertical = forward/back, horizontal = physical; off in scrolled flow or with pref `wheel: false`. Taps are recognised on `touchend`
   (iOS) and on `click` (mouse) through one `handleTap()`; edge zones 25%, middle tap toggles immersive.
 - **Reading features:** TTS (`speechSynthesis`, sentence queue with `.tts-hl` highlight, follows pages),
   footnote popups, word lookup / copy / quote card from the selection bar, highlights in 4 colours, notes,

@@ -93,7 +93,7 @@
   window.addEventListener("online", () => flushErrors(false));
   if (errQueue.length) errTimer = setTimeout(() => { errTimer = null; flushErrors(false); }, 5000);
   const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100, theme: "light", align: "justify", librarySort: "added", libraryFilter: "all", dailyGoal: 20,
-    margin: "m", para: "m", flow: "paginated", spread: "auto", digits: false, taps: true, wake: true, ttsRate: 1, ttsVoice: "" };
+    margin: "m", para: "m", flow: "paginated", spread: "auto", digits: false, taps: true, wheel: true, wake: true, ttsRate: 1, ttsVoice: "" };
   const READER_THEMES = { light: ["#fffdf7", "#252923"], sepia: ["#f4ecd8", "#5b4636"], dark: ["#1f2623", "#e6ece7"], black: ["#000000", "#d4d4d4"] };
   const darkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
   function effectiveTheme() {
@@ -158,7 +158,7 @@
     pressed("[data-flow]", "flow", readerPrefs.flow || "paginated");
     pressed("[data-spread]", "spread", readerPrefs.spread || "auto");
     const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
-    chk("prefDigits", readerPrefs.digits); chk("prefTaps", readerPrefs.taps !== false); chk("prefWake", readerPrefs.wake !== false);
+    chk("prefDigits", readerPrefs.digits); chk("prefTaps", readerPrefs.taps !== false); chk("prefWheel", readerPrefs.wheel !== false); chk("prefWake", readerPrefs.wake !== false);
     const viewer = document.getElementById("viewer");
     if (viewer) viewer.style.setProperty("--viewer-margin", { s: "0px", m: "2.5%", l: "7%" }[readerPrefs.margin] || "2.5%");
     document.querySelectorAll("[data-align]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.align === readerPrefs.align)));
@@ -1262,6 +1262,25 @@
       if (dx > 0) goLeft(); else goRight();
     }
   }
+  // Mouse wheel / trackpad turns pages in paginated mode. Deltas are summed (trackpads send dozens of tiny events)
+  // and one gesture turns at most one page: after a turn, further wheel events are ignored until 250 ms of quiet.
+  const wheelState = { sum: 0, sumX: 0, lockUntil: 0, quietTimer: null, locked: false };
+  function onReaderWheel(e) {
+    if (readerPrefs.wheel === false || readerPrefs.flow === "scrolled" || !rendition || e.ctrlKey) return;
+    if (settingsOpen() || searchOpen() || $("reader").classList.contains("toc-open")) return;
+    if (e.cancelable) e.preventDefault();
+    const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
+    clearTimeout(wheelState.quietTimer);
+    wheelState.quietTimer = setTimeout(() => { wheelState.locked = false; wheelState.sum = 0; wheelState.sumX = 0; }, 250);
+    if (wheelState.locked) return;
+    wheelState.sum += e.deltaY * unit; wheelState.sumX += e.deltaX * unit;
+    const ax = Math.abs(wheelState.sumX), ay = Math.abs(wheelState.sum);
+    if (Math.max(ax, ay) < 40) return;
+    wheelState.locked = true; diag("wheelTurn");
+    if (ay >= ax) { if (wheelState.sum > 0) goForward(); else goBack(); }
+    else { if (wheelState.sumX > 0) goRight(); else goLeft(); } // two-finger swipe: content follows the fingers
+    wheelState.sum = 0; wheelState.sumX = 0;
+  }
   function onReaderClick(e, contents) {
     diag("click");
     if (Date.now() < suppressClickUntil) return;
@@ -1291,6 +1310,8 @@
   $("tocToggle").addEventListener("click", () => { if ($("reader").classList.contains("toc-open")) closeToc(true); else openToc(); });
   $("tocBackdrop").addEventListener("click", () => closeToc(true));
   document.addEventListener("keydown", handleReaderKey);
+  // Wheel over the margins/bars around the book (inside the book the iframe listener in onBookContent handles it).
+  $("viewer").addEventListener("wheel", onReaderWheel, { passive: false });
   document.addEventListener("keydown", () => { if (currentBook) markActivity(); });
 
   // ---- «برگشت به جای قبلی» (v8.2): a jump (not a page turn) remembers where the reader was ----
@@ -1441,6 +1462,7 @@
   document.querySelectorAll("[data-spread]").forEach(b => b.addEventListener("click", () => { if (readerPrefs.spread !== b.dataset.spread) setPref("spread", b.dataset.spread, "reopen"); }));
   $("prefDigits").addEventListener("change", e => setPref("digits", e.target.checked, "reopen"));
   $("prefTaps").addEventListener("change", e => setPref("taps", e.target.checked));
+  $("prefWheel").addEventListener("change", e => setPref("wheel", e.target.checked));
   $("prefWake").addEventListener("change", e => { setPref("wake", e.target.checked); updateWakeLock(); });
   if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener("change", () => { if (readerPrefs.theme === "auto") applyReaderStyles(); });
 
@@ -1575,6 +1597,7 @@
     try { fixHalfSpaces(doc); } catch (_) {}
     try { markBlockImages(doc); } catch (_) {}
     if (readerPrefs.digits) { try { toPersianDigits(doc); } catch (_) {} }
+    doc.addEventListener("wheel", onReaderWheel, { passive: false });
     // Capture phase: runs before epub.js' own link handling, so footnotes open in place instead of jumping.
     doc.addEventListener("click", e => {
       const a = e.target.closest && e.target.closest("a[href]");
