@@ -90,7 +90,7 @@ async def open_sample(pg, url, sample):
     await pg.set_input_files("#epubInput", sample); await pg.wait_for_timeout(1800)
     await pg.click(".book-card"); await pg.wait_for_timeout(2500)
 
-def make_epub(path, title, ident, author, publisher="", date=""):
+def make_epub(path, title, ident, author, publisher="", date="", direction="rtl", lang="fa"):
     """A small two-chapter Persian EPUB like the fixtures, with optional publisher and date metadata."""
     import zipfile
     extra = (f"<dc:publisher>{publisher}</dc:publisher>" if publisher else "") + (f"<dc:date>{date}</dc:date>" if date else "")
@@ -98,7 +98,7 @@ def make_epub(path, title, ident, author, publisher="", date=""):
         z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
         D = zipfile.ZIP_DEFLATED
         z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>', D)
-        z.writestr("OEBPS/content.opf", f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">{ident}</dc:identifier><dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><dc:language>fa</dc:language>{extra}<meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine page-progression-direction="rtl"><itemref idref="c1"/><itemref idref="c2"/></spine></package>', D)
+        z.writestr("OEBPS/content.opf", f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">{ident}</dc:identifier><dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><dc:language>{lang}</dc:language>{extra}<meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine{f' page-progression-direction="{direction}"' if direction else ''}><itemref idref="c1"/><itemref idref="c2"/></spine></package>', D)
         z.writestr("OEBPS/nav.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>فهرست</title></head><body><nav epub:type="toc"><ol><li><a href="c1.xhtml">فصل اول</a></li><li><a href="c2.xhtml">فصل دوم</a></li></ol></nav></body></html>', D)
         for i, n in ((1, "اول"), (2, "دوم")):
             p = "".join(f"<p>این پاراگراف شماره {k} از فصل {n} در کتاب {title} است.</p>" for k in range(40))
@@ -918,6 +918,28 @@ async def run(url):
         check("v8.1 catalog: no JS errors", len(errsI) == 0, str(errsI[:3]))
         await ctxI.close()
         import shutil; shutil.rmtree(tmpd, ignore_errors=True)
+
+        # 14. v8.1.1: a Persian book with no page-progression-direction (and a wrong lang) still opens TOC chapters at their first page
+        tmpd = Path(tempfile.mkdtemp(prefix="borg-e2e-dir-"))
+        nodir = make_epub(tmpd / "nodir.epub", "کتاب بی‌جهت", "test-nodir", "نویسنده", direction=None, lang="en")
+        errsD, extD = [], []
+        ctxD, D_ = await new_ctx(b, url, extD, errsD)
+        await D_.set_viewport_size({"width": 1600, "height": 900})
+        await D_.goto(url); await D_.wait_for_timeout(1200)
+        await D_.set_input_files("#epubInput", nodir); await D_.wait_for_timeout(2500)
+        await D_.click("#bookGrid .book-card"); await D_.wait_for_timeout(3000)
+        H1_VISIBLE = """(t)=>{const f=document.querySelector('#viewer iframe');if(!f)return false;const r=f.getBoundingClientRect();
+          const box=document.querySelector('#viewer').getBoundingClientRect();const h=[...f.contentDocument.querySelectorAll('h1')].find(x=>x.textContent.includes(t));
+          if(!h)return false;const x=h.getBoundingClientRect();return x.right+r.left>box.left&&x.left+r.left<box.right}"""
+        check("no-direction book: first chapter opens at its start", await D_.evaluate(H1_VISIBLE, "فصل اول"))
+        await D_.locator("#tocList >> text=فصل دوم").first.click(); await D_.wait_for_timeout(2000)
+        check("no-direction book: TOC jump shows the chapter heading", await D_.evaluate(H1_VISIBLE, "فصل دوم"))
+        t0 = await visible_text(D_)
+        await D_.click("#nextPage"); await D_.wait_for_timeout(1200); t1 = await visible_text(D_)
+        await D_.click("#prevPage"); await D_.wait_for_timeout(1200)
+        check("no-direction book: next moves forward and prev comes back", t1 and t1 != t0 and await D_.evaluate(H1_VISIBLE, "فصل دوم"), f"{t0!r} → {t1!r}")
+        check("v8.1.1 direction: no JS errors", len(errsD) == 0, str(errsD[:3]))
+        await ctxD.close(); shutil.rmtree(tmpd, ignore_errors=True)
         await b.close()
 
 def main():

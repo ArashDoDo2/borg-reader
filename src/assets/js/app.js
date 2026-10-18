@@ -637,7 +637,9 @@
     rendition = bookInstance.renderTo("viewer", {
       width: "100%", height: "100%", flow: readerPrefs.flow === "scrolled" ? "scrolled-doc" : "paginated",
       spread: readerPrefs.spread === "none" ? "none" : "auto", manager: "default",
-      ...(DEBUG.method ? { method: DEBUG.method } : {}), ...(DEBUG.direction ? { defaultDirection: DEBUG.direction } : {}),
+      ...(DEBUG.method ? { method: DEBUG.method } : {}), // Many Persian EPUBs omit page-progression-direction (some even claim lang="en"); without RTL here the
+      // chapter start sits off-screen and TOC jumps land on the chapter's last page. A book's own direction still wins.
+      defaultDirection: DEBUG.direction || "rtl",
     });
     rendition.hooks.content.register(onBookContent);
     // The book is rendered in an iframe; load the bundled font there too.
