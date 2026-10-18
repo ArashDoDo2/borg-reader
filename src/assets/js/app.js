@@ -34,9 +34,10 @@
       case "arial": return "Arial, Tahoma, sans-serif";
       case "serif": return "Georgia, 'Times New Roman', serif";
       case "sans-serif": return "sans-serif";
-      case "sahel": return '"Sahel", "Vazirmatn", Tahoma, sans-serif';
       case "shabnam": return '"Shabnam", "Vazirmatn", Tahoma, sans-serif';
-      case "samim": return '"Samim", "Vazirmatn", Tahoma, sans-serif';
+      case "parastoo": return '"Parastoo", "Vazirmatn", Tahoma, serif';
+      case "naskh": return '"Noto Naskh Arabic", "Vazirmatn", serif';
+      case "amiri": return '"Amiri", "Vazirmatn", serif';
       default: return '"Vazirmatn", Tahoma, Arial, sans-serif';
     }
   }
