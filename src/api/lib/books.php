@@ -56,6 +56,55 @@ function gc_book(int $bookId): void {
     q('DELETE FROM books WHERE id = ?', [$bookId]);
 }
 
+/**
+ * Move one user's library entry for $old to $new (book-replace). Returns false when the user does not have $old.
+ * user_books: status/shelves/meta_updated_at come from the newer of the two rows (old wins a tie), added_at from old.
+ * progress: newer updated_at wins. annotations: re-pointed to $new (uid is unique per user, so no clashes) and their
+ * updated_at is bumped past "now" so clients pulling `annotations?since=` see the new book_id.
+ */
+function move_user_book(int $uid, int $old, int $new): bool {
+    $o = one('SELECT * FROM user_books WHERE user_id = ? AND book_id = ?', [$uid, $old]);
+    if (!$o) return false;
+    $n = one('SELECT * FROM user_books WHERE user_id = ? AND book_id = ?', [$uid, $new]);
+    if (!$n) {
+        q('INSERT INTO user_books (user_id, book_id, added_at, status, shelves, meta_updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+          [$uid, $new, (int)$o['added_at'], $o['status'], $o['shelves'], (int)$o['meta_updated_at']]);
+    } else {
+        $src = (int)$o['meta_updated_at'] >= (int)$n['meta_updated_at'] ? $o : $n;
+        q('UPDATE user_books SET added_at = ?, status = ?, shelves = ?, meta_updated_at = ? WHERE user_id = ? AND book_id = ?',
+          [(int)$o['added_at'], $src['status'], $src['shelves'], (int)$src['meta_updated_at'], $uid, $new]);
+    }
+    $po = one('SELECT * FROM progress WHERE user_id = ? AND book_id = ?', [$uid, $old]);
+    if ($po) {
+        $pn = one('SELECT updated_at FROM progress WHERE user_id = ? AND book_id = ?', [$uid, $new]);
+        if (!$pn) {
+            q('UPDATE progress SET book_id = ? WHERE user_id = ? AND book_id = ?', [$new, $uid, $old]);
+        } else {
+            if ((int)$po['updated_at'] > (int)$pn['updated_at']) {
+                q('UPDATE progress SET cfi = ?, percentage = ?, updated_at = ? WHERE user_id = ? AND book_id = ?',
+                  [$po['cfi'], (int)$po['percentage'], (int)$po['updated_at'], $uid, $new]);
+            }
+            q('DELETE FROM progress WHERE user_id = ? AND book_id = ?', [$uid, $old]);
+        }
+    }
+    $nowMs = (int)(microtime(true) * 1000);
+    q('UPDATE annotations SET book_id = ?, updated_at = CASE WHEN updated_at < ? THEN ? ELSE updated_at + 1 END WHERE user_id = ? AND book_id = ?',
+      [$new, $nowMs, $nowMs, $uid, $old]);
+    q('DELETE FROM user_books WHERE user_id = ? AND book_id = ?', [$uid, $old]);
+    return true;
+}
+/** Fill empty metadata (and a missing cover) of the replacement book from the book it replaces. */
+function copy_missing_meta(array $old, array $new): void {
+    $cols = [];
+    foreach (['title', 'author', 'language', 'publisher', 'published'] as $k) {
+        $nv = trim((string)($new[$k] ?? '')); $ov = (string)($old[$k] ?? '');
+        if (($nv === '' || ($k === 'title' && $nv === 'بدون عنوان')) && trim($ov) !== '') $cols[$k] = $ov;
+    }
+    if ((int)$new['has_cover'] !== 1 && (int)$old['has_cover'] === 1 && is_file(cover_path((int)$old['id']))
+        && @copy(cover_path((int)$old['id']), cover_path((int)$new['id']))) $cols['has_cover'] = 1;
+    update_book_cols((int)$new['id'], $cols);
+}
+
 /** Structural EPUB check that never extracts anything (zip-bomb safe). */
 function validate_epub(string $path): void {
     if (class_exists('ZipArchive')) {
@@ -285,6 +334,42 @@ function handle_books_route(string $route): bool {
             q('DELETE FROM progress WHERE user_id = ? AND book_id = ?', [$s['id'], $bookId]);
             gc_book($bookId);
             json_out(200, ['ok' => true]);
+
+        case 'book-replace':
+            // A cleaned copy (new file, uploaded with the normal upload flow) replaces a book in the caller's library.
+            // Admins replacing a catalog book also move the catalog entry and every other user's copy.
+            method('POST');
+            $s = require_user(true);
+            $d = body_json();
+            $oldId = int_param($d['old_book_id'] ?? '');
+            $newId = int_param($d['new_book_id'] ?? '');
+            if ($oldId === $newId) fail(400, 'same_book', 'Old and new book are the same.');
+            $me = (int)$s['id'];
+            $isAdmin = $s['role'] === 'admin';
+            $old = one('SELECT * FROM books WHERE id = ?', [$oldId]);
+            if (!$old || !($isAdmin || user_has_book($me, $oldId))) fail(404, 'not_found', 'Book not in your library.');
+            $new = one('SELECT * FROM books WHERE id = ?', [$newId]);
+            if (!$new || !user_has_book($me, $newId)) fail(404, 'not_found', 'New book not in your library.');
+            $migrated = 0; $catalogMoved = false;
+            db()->beginTransaction();
+            try {
+                move_user_book($me, $oldId, $newId);
+                if ($isAdmin && one('SELECT 1 AS x FROM catalog WHERE book_id = ?', [$oldId])) {
+                    if (one('SELECT 1 AS x FROM catalog WHERE book_id = ?', [$newId])) q('DELETE FROM catalog WHERE book_id = ?', [$oldId]);
+                    else q('UPDATE catalog SET book_id = ? WHERE book_id = ?', [$newId, $oldId]);
+                    $catalogMoved = true;
+                    foreach (all('SELECT user_id FROM user_books WHERE book_id = ? AND user_id <> ?', [$oldId, $me]) as $r) {
+                        if (move_user_book((int)$r['user_id'], $oldId, $newId)) $migrated++;
+                    }
+                }
+                copy_missing_meta($old, $new);
+                db()->commit();
+            } catch (Throwable $e) {
+                if (db()->inTransaction()) db()->rollBack();
+                throw $e;
+            }
+            gc_book($oldId);
+            json_out(200, ['book' => book_out(one('SELECT * FROM books WHERE id = ?', [$newId])), 'migrated_users' => $migrated, 'catalog_moved' => $catalogMoved]);
 
         case 'progress':
             method('POST');

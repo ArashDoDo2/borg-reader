@@ -82,6 +82,118 @@ def make_big_epub(tmp):
         z.writestr("OEBPS/noise.bin", random.Random(7).randbytes(3 * 1024 * 1024), compress_type=zipfile.ZIP_STORED)
     return p
 
+def make_variant(tmp, name):
+    """A small EPUB with a unique extra file, i.e. a distinct SHA-256 (stands in for a cleaned copy)."""
+    import zipfile
+    p = tmp / f"{name}.epub"
+    src = zipfile.ZipFile(FIX / "sample-fa.epub")
+    with zipfile.ZipFile(p, "w") as z:
+        for info in src.infolist():
+            z.writestr(info, src.read(info.filename), compress_type=zipfile.ZIP_STORED if info.filename == "mimetype" else zipfile.ZIP_DEFLATED)
+        z.writestr("OEBPS/variant.txt", name)
+    return p
+
+def run_replace(base, tmp, admin, user):
+    """book-replace: a cleaned copy replaces a book (own library; admin also moves the catalog and other users)."""
+    PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    st, r = admin.call("POST", "invites", {"note": "replace"})
+    third = Client(base)
+    third.call("POST", "register", {"invite": r["code"], "email": "r@x.io", "password": "password5", "name": "سوم"})
+    lib = lambda c: {b["id"]: b for b in c.call("GET", "library")[1]["books"]}
+    ann = lambda c, since=0: {a["uid"]: a for a in c.call("GET", "annotations", query=f"&since={since}")[1]["annotations"]}
+    now = int(time.time() * 1000)
+
+    # 1. user replaces own book: progress/annotations/status/shelves follow, old one GC'd
+    st, r = upload(user, make_variant(tmp, "a-old"), "کتاب الف", "نویسنده الف", cover=PNG, init_extra={"publisher": "نشر الف", "language": "fa"})
+    a_old = r["book"]["id"]
+    user.call("POST", "progress", {"book_id": a_old, "cfi": "epubcfi(/6/8!/4/2)", "percentage": 42, "updated_at": now})
+    user.call("POST", "annotations", {"items": [{"uid": "repl-a-0001", "book_id": a_old, "type": "highlight", "cfi": "epubcfi(/6/8!/4/2,/1:0,/1:3)", "quote": "متن", "updated_at": now}]})
+    user.call("POST", "library-meta", {"items": [{"book_id": a_old, "status": "reading", "shelves": ["shelf-0001"], "updated_at": now}]})
+    st, r = upload(user, make_variant(tmp, "a-new"), "کتاب الف")
+    a_new = r["book"]["id"]
+    check("cleaned copy uploads as a new book", st == 201 and a_new != a_old, str(r)[:200])
+    st, r = user.call("POST", "book-replace", {"old_book_id": a_old, "new_book_id": a_new})
+    check("book-replace own book", st == 200 and r["book"]["id"] == a_new and r["migrated_users"] == 0 and r["catalog_moved"] is False, str(r)[:300])
+    check("book-replace copies missing metadata and cover from the old book", r.get("book", {}).get("author") == "نویسنده الف"
+          and r["book"]["publisher"] == "نشر الف" and r["book"]["language"] == "fa" and r["book"]["has_cover"], str(r)[:300])
+    L = lib(user)
+    check("library has the new book, not the old", a_new in L and a_old not in L)
+    nb = L.get(a_new, {})
+    check("status, shelves and progress follow the new book", nb.get("status") == "reading" and nb.get("shelves") == ["shelf-0001"]
+          and (nb.get("progress") or {}).get("percentage") == 42 and nb["meta_updated_at"] == now, str(nb)[:300])
+    A = ann(user, now)
+    check("annotation moved to the new book and visible to incremental sync", A.get("repl-a-0001", {}).get("book_id") == a_new, str(A)[:300])
+    st, r = user.call("POST", "progress", {"book_id": a_new, "cfi": "epubcfi(/6/10!/4/2)", "percentage": 50, "updated_at": now + 10})
+    check("progress route works on the moved row", st == 200 and r["progress"]["percentage"] == 50)
+    st, _ = admin.call("GET", "book-file", query=f"&id={a_old}")
+    check("unreferenced old book is garbage-collected", st == 404)
+    st, _ = admin.call("GET", "book-cover", query=f"&id={a_new}")
+    check("cover copied to the new book", st == 200)
+
+    # 2. merge: new book already in the library with its own progress/annotation/meta
+    st, r = upload(user, make_variant(tmp, "b-old"), "کتاب ب"); b_old = r["book"]["id"]
+    st, r = upload(user, make_variant(tmp, "b-new"), "کتاب ب"); b_new = r["book"]["id"]
+    user.call("POST", "progress", {"book_id": b_old, "cfi": "old", "percentage": 10, "updated_at": now})
+    user.call("POST", "progress", {"book_id": b_new, "cfi": "new", "percentage": 70, "updated_at": now + 100})
+    user.call("POST", "annotations", {"items": [
+        {"uid": "repl-b-0001", "book_id": b_old, "type": "bookmark", "cfi": "epubcfi(/6/2!/4/2)", "updated_at": now},
+        {"uid": "repl-b-0002", "book_id": b_new, "type": "bookmark", "cfi": "epubcfi(/6/4!/4/2)", "updated_at": now}]})
+    user.call("POST", "library-meta", {"items": [{"book_id": b_old, "status": "finished", "shelves": [], "updated_at": now + 200},
+                                                 {"book_id": b_new, "status": "want", "shelves": ["shelf-0001"], "updated_at": now + 50}]})
+    st, r = user.call("POST", "book-replace", {"old_book_id": b_old, "new_book_id": b_new})
+    L = lib(user); nb = L.get(b_new, {})
+    check("merge: replace into a book already in the library", st == 200 and b_old not in L and b_new in L, str(r)[:200])
+    check("merge: newer progress kept, newer status/shelves kept", (nb.get("progress") or {}).get("percentage") == 70
+          and nb.get("status") == "finished" and nb.get("shelves") == [], str(nb)[:300])
+    A = ann(user)
+    check("merge: both annotations kept on the new book", A.get("repl-b-0001", {}).get("book_id") == b_new and A.get("repl-b-0002", {}).get("book_id") == b_new)
+
+    # 3. non-admin replacing a catalog book: only their own library moves
+    st, r = upload(admin, make_variant(tmp, "c-old"), "کتاب ج", "نویسنده ج", init_extra={"publisher": "نشر ج"}); c_old = r["book"]["id"]
+    admin.call("POST", "catalog-submit", {"book_id": c_old, "description": "توضیح ج", "category": "رمان"})
+    user.call("POST", "catalog-add", {"book_id": c_old}); third.call("POST", "catalog-add", {"book_id": c_old})
+    third.call("POST", "progress", {"book_id": c_old, "cfi": "epubcfi(/6/6!/4/2)", "percentage": 33, "updated_at": now})
+    third.call("POST", "annotations", {"items": [{"uid": "repl-c-0001", "book_id": c_old, "type": "bookmark", "cfi": "epubcfi(/6/6!/4/2)", "updated_at": now}]})
+    st, r = upload(user, make_variant(tmp, "c-user"), "کتاب ج"); c_user = r["book"]["id"]
+    st, r = user.call("POST", "book-replace", {"old_book_id": c_old, "new_book_id": c_user})
+    check("non-admin replaces a catalog book in own library", st == 200 and r["catalog_moved"] is False and r["migrated_users"] == 0, str(r)[:200])
+    cat = [b["id"] for b in third.call("GET", "catalog")[1]["books"]]
+    L3 = lib(third)
+    check("non-admin replace leaves catalog and other users alone", c_old in cat and c_user not in cat and c_old in L3
+          and (L3[c_old].get("progress") or {}).get("percentage") == 33)
+    check("non-admin: own library switched", c_user in lib(user) and c_old not in lib(user))
+
+    # 4. admin replacing a catalog book: catalog row and other users move
+    st, r = upload(admin, make_variant(tmp, "c-admin"), "کتاب ج"); c_new = r["book"]["id"]
+    st, r = admin.call("POST", "book-replace", {"old_book_id": c_old, "new_book_id": c_new})
+    check("admin replaces a catalog book", st == 200 and r["catalog_moved"] is True and r["migrated_users"] == 1, str(r)[:200])
+    cb = {b["id"]: b for b in third.call("GET", "catalog")[1]["books"]}
+    check("catalog entry now points at the new file (fields kept)", c_new in cb and c_old not in cb and cb[c_new]["description"] == "توضیح ج"
+          and cb[c_new]["category"] == "رمان" and cb[c_new]["publisher"] == "نشر ج" and cb[c_new]["author"] == "نویسنده ج", str(cb)[:300])
+    L3 = lib(third)
+    check("other user's library and progress moved", c_new in L3 and c_old not in L3 and (L3[c_new].get("progress") or {}).get("percentage") == 33)
+    A3 = ann(third, now)
+    check("other user's annotation moved (seen by incremental sync)", A3.get("repl-c-0001", {}).get("book_id") == c_new, str(A3)[:200])
+    st, _ = admin.call("GET", "book-file", query=f"&id={c_old}")
+    check("replaced catalog book garbage-collected", st == 404)
+    check("user's own cleaned copy untouched", c_user in lib(user))
+
+    # 5. validation
+    st, r = user.call("POST", "book-replace", {"old_book_id": a_new, "new_book_id": a_new})
+    check("book-replace same ids -> 400", st == 400 and r.get("error") == "same_book")
+    st, r = user.call("POST", "book-replace", {"old_book_id": 999999, "new_book_id": a_new})
+    check("book-replace missing old book -> 404", st == 404)
+    st, r = user.call("POST", "book-replace", {"old_book_id": a_new, "new_book_id": 999999})
+    check("book-replace missing new book -> 404", st == 404)
+    st, r = third.call("POST", "book-replace", {"old_book_id": a_new, "new_book_id": c_new})
+    check("book-replace old book not in library -> 404", st == 404)
+    st, r = user.call("POST", "book-replace", {"old_book_id": a_new, "new_book_id": c_new})
+    check("book-replace new book not in library -> 404", st == 404 and a_new in lib(user))
+    st, r = user.call("POST", "book-replace", {"old_book_id": a_new, "new_book_id": b_new}, csrf=False)
+    check("book-replace needs CSRF", st == 403 and a_new in lib(user))
+    st, r = user.call("POST", "book-replace", {"old_book_id": "x", "new_book_id": b_new})
+    check("book-replace bad id -> 400", st == 400)
+
 def run(base, tmp):
     PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
     anon = Client(base)
@@ -379,6 +491,8 @@ def run(base, tmp):
     check("admin deletes a user", st == 200 and len(r["users"]) == 2)
     st, _ = admin.call("POST", "user-delete", {"user_id": ids["admin@x.io"]})
     check("admin cannot delete self", st == 400)
+
+    run_replace(base, tmp, admin, user)
 
     st, r = anon.call("GET", "nope")
     check("unknown route 404", st == 404)

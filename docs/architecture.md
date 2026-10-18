@@ -163,7 +163,7 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
 - **Stack:** PHP 8.1+ (production runs 8.4), PDO, MySQL/MariaDB in production, SQLite in tests. No framework, no Composer.
 - **Entry:** `src/api/index.php?r=<route>`; `src/api/lib/` is denied by `.htaccess` and guarded by `BORG_API`.
 - **Routes:** `health setup register login logout me password invites` (index.php); `library library-meta
-  library-remove upload-init upload-chunk upload-complete book-file book-cover book-meta progress annotations
+  library-remove upload-init upload-chunk upload-complete book-file book-cover book-meta book-replace progress annotations
   shelves stats catalog catalog-submit catalog-pending catalog-review catalog-remove catalog-add` (books.php);
   `admin-stats users user-update user-reset-password user-delete invite-revoke catalog-all catalog-update
   books-all book-delete settings` (admin.php).
@@ -192,6 +192,21 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   sent to `upload-complete` override them (used only when the file is new, not on dedupe).
 - **Metadata:** `book-meta` lets the uploader or an admin correct title/author/language/publisher/published/cover;
   each field changes only when its key is present (`title`, if present, must be non-empty).
+- **Book replace (text cleanup):** the client uploads the cleaned EPUB with the normal upload flow (new SHA-256 → new
+  book id, or an existing one on dedupe), then `POST book-replace {old_book_id, new_book_id}` (CSRF). 400 `same_book`
+  if equal; 404 unless `old_book_id` is in the caller's library (admins: exists at all) and `new_book_id` exists and is
+  in the caller's library. In one transaction, for the caller: the `user_books` row moves to the new id (`added_at` from
+  old; `status`/`shelves`/`meta_updated_at` from the row with the newer `meta_updated_at` if both exist), progress moves
+  (newer `updated_at` wins if both exist), annotations are re-pointed (uid is unique per user) with `updated_at` bumped to
+  at least server "now" so `annotations?since=` returns them, and the old library row is removed. If the caller is an
+  admin and the old book has a catalog row, the row is re-pointed to the new book with all its fields (if the new book
+  already has one, that one is kept and the old one deleted) and every other user who has the old book is migrated the
+  same way. A non-admin replacing a catalog book moves only their own library; the catalog keeps the old file. Empty
+  title («بدون عنوان» counts as empty)/author/language/publisher/published and a missing cover of the new book are copied
+  from the old one. Afterwards the old book is garbage-collected if unreferenced. Response:
+  `{book, migrated_users, catalog_moved}`. Clients should push re-anchored annotations after this call (fresh timestamps)
+  so they win over the bumped server copies; `library` no longer lists the old id, so normal sync drops it and
+  downloads the new one.
 - **Validation:** optional string fields that are present but not a string/number → 400 `bad_<field>`; over the
   length limit → 400 `too_long_<field>`.
 
