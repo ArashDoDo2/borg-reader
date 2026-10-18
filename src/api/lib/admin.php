@@ -104,11 +104,11 @@ function handle_admin_route(string $route): bool {
         case 'catalog-all':
             method('GET');
             require_admin();
-            $rows = all('SELECT b.*, c.status, c.description, c.submitted_at, u.display_name AS submitter
+            $rows = all('SELECT b.*, c.status, c.description, c.category, c.submitted_at, u.display_name AS submitter
                          FROM catalog c JOIN books b ON b.id = c.book_id LEFT JOIN users u ON u.id = c.submitted_by
                          ORDER BY c.submitted_at DESC');
             json_out(200, ['books' => array_map(fn($r) => book_out($r) + [
-                'status' => $r['status'], 'description' => $r['description'], 'submitter' => $r['submitter'], 'submitted_at' => (int)$r['submitted_at'],
+                'status' => $r['status'], 'description' => $r['description'], 'category' => (string)$r['category'], 'submitter' => $r['submitter'], 'submitted_at' => (int)$r['submitted_at'],
             ], $rows)]);
 
         case 'catalog-update':
@@ -117,9 +117,15 @@ function handle_admin_route(string $route): bool {
             $d = body_json();
             $bookId = int_param($d['book_id'] ?? '');
             if (!one('SELECT 1 AS x FROM catalog WHERE book_id = ?', [$bookId])) fail(404, 'not_found', 'Book is not in the catalog.');
-            if (array_key_exists('description', $d)) q('UPDATE catalog SET description = ? WHERE book_id = ?', [str_param($d, 'description', 2000, false), $bookId]);
-            if (array_key_exists('title', $d)) q('UPDATE books SET title = ? WHERE id = ?', [str_param($d, 'title', 500), $bookId]);
-            if (array_key_exists('author', $d)) q('UPDATE books SET author = ? WHERE id = ?', [str_param($d, 'author', 300, false), $bookId]);
+            // Each field is updated only when its key is present; everything is validated before anything is written.
+            $desc = array_key_exists('description', $d) ? str_param($d, 'description', 2000, false) : null;
+            $category = opt_str_param($d, 'category', 80);
+            $cols = book_meta_from($d);
+            if (array_key_exists('title', $d)) $cols['title'] = str_param($d, 'title', 500);
+            if (array_key_exists('author', $d)) $cols['author'] = str_param($d, 'author', 300, false);
+            if ($desc !== null) q('UPDATE catalog SET description = ? WHERE book_id = ?', [$desc, $bookId]);
+            if ($category !== null) q('UPDATE catalog SET category = ? WHERE book_id = ?', [$category, $bookId]);
+            update_book_cols($bookId, $cols);
             json_out(200, ['ok' => true]);
 
         case 'books-all':

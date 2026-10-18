@@ -278,7 +278,7 @@
   let lastActivity = 0;
   function markActivity() { lastActivity = Date.now(); }
   setInterval(() => {
-    if (!currentBook || document.visibilityState !== "visible" || Date.now() - lastActivity > 120000) return;
+    if (!currentBook || currentBook.preview || document.visibilityState !== "visible" || Date.now() - lastActivity > 120000) return;
     const days = readJson(DAYS_KEY), k = dayKey();
     days[k] = Math.min(86400, (days[k] || 0) + 15);
     writeJson(DAYS_KEY, days);
@@ -428,7 +428,7 @@
   }
   async function extractMetadata(file) {
     if (!librariesReady()) throw new UserError("کتاب‌خوان کامل بارگذاری نشده است. صفحه را تازه‌سازی کن.");
-    let title = file.name.replace(/\.epub$/i, ""), author = "نویسنده نامشخص", cover = null;
+    let title = file.name.replace(/\.epub$/i, ""), author = "نویسنده نامشخص", cover = null, extra = {};
     let temp = null;
     try {
       temp = ePub(await file.arrayBuffer());
@@ -438,6 +438,7 @@
       const metadata = await temp.loaded.metadata;
       if (metadata.title) title = metadata.title;
       if (metadata.creator) author = metadata.creator;
+      extra = extraMeta(metadata);
       try {
         const coverUrl = await temp.coverUrl();
         if (coverUrl) {
@@ -454,7 +455,24 @@
     } finally {
       if (temp) { try { temp.destroy(); } catch (_) {} }
     }
-    return { title, author, cover };
+    return { title, author, cover, ...extra };
+  }
+  // Optional EPUB metadata kept on the book record and sent to the server (limits match the API).
+  const META_LIMITS = { publisher: 300, published: 40, language: 20 };
+  function cleanMeta(v, max) { return String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, max); }
+  function extraMeta(m) {
+    m = m || {};
+    let published = cleanMeta(m.pubdate, 40);
+    // "2019-05-01T00:00:00Z" -> "2019-05-01"; a plain year stays as it is.
+    const iso = /^(\d{4}(?:-\d{2}(?:-\d{2})?)?)T/.exec(published);
+    if (iso) published = iso[1];
+    return { publisher: cleanMeta(m.publisher, 300), published, language: cleanMeta(m.language, 20) };
+  }
+  /** The optional fields of a record that have a value, ready for an API body. */
+  function metaBody(rec) {
+    const out = {};
+    for (const [k, max] of Object.entries(META_LIMITS)) { const v = cleanMeta(rec && rec[k], max); if (v) out[k] = v; }
+    return out;
   }
   function blobToDataUrl(blob) {
     return new Promise((resolve, reject) => {
@@ -518,6 +536,7 @@
       const record = {
         id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         title: metadata.title, author: metadata.author, cover: metadata.cover,
+        publisher: metadata.publisher || "", published: metadata.published || "", language: metadata.language || "", metaExt: true,
         file: file, size: file.size, addedAt: Date.now(), contentHash
       };
       try {
@@ -540,7 +559,7 @@
       resetInputs();
     }
   }
-  let openToken = 0;
+  let openToken = 0, previewPos = null;
   function percentFor(cfi, fallback) {
     try {
       if (bookInstance && bookInstance.locations && bookInstance.locations.length() > 0 && cfi) {
@@ -554,7 +573,10 @@
     $("progressBar").style.width = `${pct}%`;
     $("progressText").textContent = `${pct.toLocaleString("fa-IR")}٪`;
   }
+  // Online previews of catalog books (ids "preview-N") are never stored: last line of defence for every write path.
+  const isPreviewId = id => typeof id === "string" && id.startsWith("preview-");
   async function saveProgress(bookId, cfi, pct, bookmark) {
+    if (isPreviewId(bookId)) return;
     const old = await getProgress(bookId);
     await put("progress", { bookId, cfi, percentage: pct, updatedAt: Date.now(), bookmark: bookmark !== undefined ? bookmark : (old?.bookmark || null) });
     scheduleProgressPush(bookId);
@@ -567,7 +589,7 @@
       } else {
         await book.locations.generate(1600);
         if (token !== openToken) return;
-        const latest = await getBook(record.id);
+        const latest = record.preview ? null : await getBook(record.id);
         if (latest) await put("books", { ...latest, locations: book.locations.save() });
       }
       if (token !== openToken || !rendition) return;
@@ -575,19 +597,25 @@
       if (loc?.start?.cfi) {
         const pct = percentFor(loc.start.cfi);
         showProgress(pct);
-        await saveProgress(record.id, loc.start.cfi, pct);
+        if (currentBook && !currentBook.preview) await saveProgress(currentBook.id, loc.start.cfi, pct);
       }
     } catch (err) {
       console.warn("Could not compute reading progress:", err);
     }
   }
-  async function openReader(id) {
-    const record = await getBook(id);
+  /**
+   * Open a stored book by id, or (previewRecord) an ephemeral one that is not in the library:
+   * a preview is never written to IndexedDB, and its progress, annotations and reading time are not saved or synced.
+   */
+  async function openReader(id, previewRecord) {
+    const record = previewRecord || await getBook(id);
     if (!record) { showToast("فایل این کتاب روی دستگاه پیدا نشد."); return; }
     if (!librariesReady()) { showToast("کتاب‌خوان کامل بارگذاری نشده است. صفحه را تازه‌سازی کن."); return; }
     const token = ++openToken;
     currentBook = record; currentProgressKey = record.id;
     $("readerTitle").textContent = record.title;
+    $("previewBanner").hidden = !record.preview;
+    $("previewAdd").disabled = false;
     $("reader").classList.remove("hidden");
     document.body.style.overflow = "hidden";
     $("tocList").innerHTML = '<p class="muted">در حال ساخت فهرست…</p>';
@@ -623,7 +651,7 @@
     rendition.on("selected", onTextSelected);
     rendition.on("keydown", markActivity); rendition.on("touchstart", markActivity); rendition.on("click", markActivity);
     lastTurnAt = 0; markActivity(); updateWakeLock();
-    if (!record.status || record.status === "want") setBookMeta(record.id, { status: "reading" }).then(r => { if (r && currentBook && currentBook.id === r.id) currentBook = r; });
+    if (!record.preview && (!record.status || record.status === "want")) setBookMeta(record.id, { status: "reading" }).then(r => { if (r && currentBook && currentBook.id === r.id) currentBook = r; });
     renderedHighlights = new Set();
     rendition.on("relocated", async location => {
       if (token !== openToken || !location?.start) return;
@@ -636,11 +664,14 @@
       markActivity();
       updateTimeLeft(location);
       onTtsRelocated(location);
-      if (location.atEnd && currentBook && currentBook.status !== "finished") {
+      if (location.atEnd && currentBook && !currentBook.preview && currentBook.status !== "finished") {
         setBookMeta(currentBook.id, { status: "finished" }).then(r => { if (r) { currentBook = r; showToast("تبریک! این کتاب را تمام کردی."); } });
       }
       $("nextPage").disabled = !!location.atEnd;
-      try { await saveProgress(record.id, location.start.cfi, pct); } catch (err) { console.warn("Saving progress failed:", err); }
+      const bk = currentBook;
+      if (!bk) return;
+      if (bk.preview) { previewPos = location.start.cfi; return; }
+      try { await saveProgress(bk.id, location.start.cfi, pct); } catch (err) { console.warn("Saving progress failed:", err); }
     });
     rendition.on("displayError", (err) => {
       console.error("EPUB displayError:", err);
@@ -653,7 +684,7 @@
         });
       } catch (_) {}
     });
-    const saved = await getProgress(record.id);
+    const saved = record.preview ? (previewPos ? { cfi: previewPos } : null) : await getProgress(record.id);
     let shown = false;
     if (saved?.cfi) {
       try { await rendition.display(saved.cfi); shown = true; } catch (err) { console.warn("Saved location could not be restored:", err); }
@@ -676,7 +707,8 @@
     });
   }
   async function closeReader() {
-    if (rendition && currentBook) {
+    const wasPreview = !!(currentBook && currentBook.preview);
+    if (rendition && currentBook && !currentBook.preview) {
       try {
         const loc = rendition.currentLocation();
         if (loc?.start?.cfi) await saveProgress(currentBook.id, loc.start.cfi, percentFor(loc.start.cfi, loc.start.percentage));
@@ -693,9 +725,12 @@
     $("reader").classList.add("hidden");
     document.body.style.overflow = "";
     if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
-    bookInstance = null; rendition = null; currentBook = null;
+    bookInstance = null; rendition = null; currentBook = null; previewPos = null;
+    $("previewBanner").hidden = true;
     updateWakeLock();
     renderLibrary();
+    // A preview was opened from the catalog detail page, which is still underneath: put focus back there.
+    if (wasPreview && !$("viewBook").hidden) $("detailRead").focus({ preventScroll: true });
   }
   // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
   const SWIPE_MIN_PX = 50, EDGE_ZONE = 0.25;
@@ -817,6 +852,12 @@
   // ======================= Reading features (v8) =======================
   function reopenCurrentBook() {
     if (!currentBook || !rendition) return;
+    if (currentBook.preview) {
+      const rec = currentBook, loc = rendition.currentLocation();
+      if (loc?.start?.cfi) previewPos = loc.start.cfi;
+      openReader(null, rec).catch(err => console.warn("Reopen failed:", err));
+      return;
+    }
     const id = currentBook.id, loc = rendition.currentLocation();
     const done = loc?.start?.cfi ? saveProgress(id, loc.start.cfi, percentFor(loc.start.cfi, loc.start.percentage)) : Promise.resolve();
     done.then(() => openReader(id)).catch(err => console.warn("Reopen failed:", err));
@@ -1250,12 +1291,15 @@
     $("bookmarkButton").setAttribute("aria-pressed", String(!!bm));
   }
   async function saveAnnotation(rec) {
+    if (isPreviewId(rec.bookId)) return;
     rec.updatedAt = Date.now(); rec.dirty = true;
     await put("annotations", rec);
     scheduleAnnotationPush();
   }
+  const PREVIEW_NO_SAVE = "در حالت پیش‌نمایش نشانک و یادداشت ذخیره نمی‌شود؛ اول کتاب را به کتابخانه اضافه کن.";
   $("bookmarkButton").addEventListener("click", async () => {
     if (!currentBook || !rendition) return;
+    if (currentBook.preview) { showToast(PREVIEW_NO_SAVE); return; }
     const loc = rendition.currentLocation();
     if (!loc?.start?.cfi) return;
     const existing = await bookmarkOnPage();
@@ -1345,6 +1389,7 @@
   function openHighlightActions(uid) { pendingSelection = null; editingUid = uid; showSelectionBar("edit"); }
   async function createHighlight(color, note) {
     if (!pendingSelection || !currentBook) return;
+    if (currentBook.preview) { hideSelectionBar(); showToast(PREVIEW_NO_SAVE); return; }
     const { cfiRange, contents } = pendingSelection;
     let quote = "";
     try { quote = String(await bookInstance.getRange(cfiRange) || "").trim().slice(0, 2000); } catch (_) {}
@@ -1376,6 +1421,7 @@
       hideSelectionBar();
       shareQuote(quote.slice(0, 600));
     }
+    else if (act === "note" && currentBook && currentBook.preview) { hideSelectionBar(); showToast(PREVIEW_NO_SAVE); }
     else if (act === "note") { const note = prompt("یادداشت تو برای این قسمت:", ""); if (note !== null) await createHighlight("yellow", note.trim()); }
     else if (act === "edit" && editingUid) {
       const a = await getAnnotation(editingUid);
@@ -1548,7 +1594,11 @@
     $("accountButton").textContent = user ? user.name : "ورود";
     document.querySelector('[data-view="catalog"]').hidden = !user;
     document.querySelector('[data-view="admin"]').hidden = !(user && user.role === "admin");
-    if (!user) { showView("mine"); setSyncStatus(""); }
+    if (!user) {
+      showView("mine"); setSyncStatus("");
+      catalogBooks = []; catalogLoaded = false; previewCache = null;
+      if (location.hash.startsWith("#catalog")) setHash("", false);
+    }
     $("authForms").hidden = !!user;
     $("accountInfo").hidden = !user;
     if (user) { $("accountName").textContent = user.name; $("accountEmail").textContent = user.email; }
@@ -1556,15 +1606,24 @@
   }
 
   // ---------- Views ----------
+  // "book" is a catalog book's page; it lives under the catalog tab.
   function showView(view) {
-    document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.setAttribute("aria-selected", String(t.dataset.view === view)));
+    const tab = view === "book" ? "catalog" : view;
+    document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.setAttribute("aria-selected", String(t.dataset.view === tab)));
     $("viewMine").hidden = view !== "mine";
     $("viewCatalog").hidden = view !== "catalog";
+    $("viewBook").hidden = view !== "book";
     $("viewAdmin").hidden = view !== "admin";
-    if (view === "catalog") loadCatalog();
+    closeAddMenu();
+    if (view === "catalog") { renderCatalog(); loadCatalog(); }
+    if (view === "book") { renderBookDetail(); if (!catalogLoaded) loadCatalog(); }
     if (view === "admin") loadAdmin();
   }
-  document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.addEventListener("click", () => showView(t.dataset.view)));
+  document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.addEventListener("click", () => {
+    if (t.dataset.view === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; }
+    setHash(t.dataset.view === "catalog" ? "#catalog" : "", false);
+    showView(t.dataset.view);
+  }));
 
   // ---------- Account dialog ----------
   let authMode = "login";
@@ -1621,19 +1680,22 @@
   async function uploadBook(b) {
     const data = await fileOf(b).arrayBuffer();
     let r = await api("upload-init", { method: "POST", body: {
-      sha256: b.contentHash, size: data.byteLength, title: b.title || "بدون عنوان", author: b.author || "", cover: b.cover || undefined,
+      sha256: b.contentHash, size: data.byteLength, title: b.title || "بدون عنوان", author: b.author || "", cover: b.cover || undefined, ...metaBody(b),
     } });
     if (r.exists) return r.book;
     const chunk = r.chunk_bytes, id = r.upload_id;
     for (let off = 0; off < data.byteLength; off += chunk) {
       await api("upload-chunk", { method: "POST", raw: data.slice(off, off + chunk), query: `&upload_id=${id}&offset=${off}` });
     }
-    r = await api("upload-complete", { method: "POST", body: { upload_id: id } });
+    r = await api("upload-complete", { method: "POST", body: { upload_id: id, ...metaBody(b) } });
     return r.book;
   }
-  async function downloadBook(sb) {
-    const res = await api("book-file", { query: `&id=${sb.id}` });
-    const blob = await res.blob();
+  /** Store a server book locally. `blob` can be passed when the file is already here (e.g. from an online preview). */
+  async function downloadBook(sb, blob) {
+    // Never keep two local copies of the same file (a sync may run while a catalog book is being added).
+    const same = sb.sha256 && (await getAllBooks()).find(b => b.contentHash === sb.sha256);
+    if (same) return same;
+    if (!blob) blob = await (await api("book-file", { query: `&id=${sb.id}` })).blob();
     let cover = null;
     if (sb.has_cover) {
       try { cover = await blobToDataUrl(await (await api("book-cover", { query: `&id=${sb.id}` })).blob()); } catch (_) {}
@@ -1643,6 +1705,7 @@
       title: sb.title, author: sb.author || "نویسنده نامشخص", cover,
       file: new File([blob], `${sb.title}.epub`, { type: "application/epub+zip" }),
       size: blob.size, addedAt: Date.now(), contentHash: sb.sha256, serverId: sb.id, catalogStatus: sb.catalog_status || null,
+      publisher: sb.publisher || "", published: sb.published || "", language: sb.language || "", metaExt: true,
     };
     await put("books", record);
     return record;
@@ -1673,15 +1736,23 @@
           const upd = { ...b, serverId: sb.id, catalogStatus: sb.catalog_status || null };
           const serverAuthor = sb.author || "نویسنده نامشخص";
           if (b.metaRepaired && !b.metaPushed) {
-            try { await api("book-meta", { method: "POST", body: { book_id: sb.id, title: b.title, author: b.author === "نویسنده نامشخص" ? "" : (b.author || ""), cover: b.cover || undefined } }); } catch (_) {}
-            upd.metaPushed = true;
+            try { await api("book-meta", { method: "POST", body: { book_id: sb.id, title: b.title, author: b.author === "نویسنده نامشخص" ? "" : (b.author || ""), cover: b.cover || undefined, ...metaBody(b) } }); } catch (_) {}
+            upd.metaPushed = true; if (b.metaExtPush) upd.metaExtPush = false;
           } else if (!b.metaRepaired && (sb.title !== b.title || serverAuthor !== (b.author || "نویسنده نامشخص"))) {
             upd.title = sb.title; upd.author = serverAuthor;
           }
+          // Publisher / date / language read from the EPUB: fill what the server is missing, adopt what it has.
+          const ext = metaBody(b), missing = {};
+          for (const k of Object.keys(META_LIMITS)) if (ext[k] && !sb[k]) missing[k] = ext[k];
+          if (b.metaExtPush) {
+            if (Object.keys(missing).length) { try { await api("book-meta", { method: "POST", body: { book_id: sb.id, ...missing } }); } catch (_) {} }
+            upd.metaExtPush = false;
+          }
+          for (const k of Object.keys(META_LIMITS)) if (typeof sb[k] === "string" && sb[k] && sb[k] !== b[k]) upd[k] = sb[k];
           if (!b.cover && sb.has_cover) {
             try { upd.cover = await blobToDataUrl(await (await api("book-cover", { query: `&id=${sb.id}` })).blob()); } catch (_) {}
           }
-          if (["serverId", "catalogStatus", "title", "author", "cover", "metaPushed"].some(k => upd[k] !== b[k])) await put("books", upd);
+          if (["serverId", "catalogStatus", "title", "author", "cover", "metaPushed", "metaExtPush", ...Object.keys(META_LIMITS)].some(k => upd[k] !== b[k])) await put("books", upd);
         } else if (b.contentHash) toUpload.push(b);
       }
       for (const b of toUpload) {
@@ -1816,72 +1887,338 @@
   }
 
   // ---------- Public catalog ----------
-  let catalogBooks = [];
-  async function loadCatalog() {
-    $("catalogGrid").innerHTML = '<p class="muted">در حال بارگذاری…</p>';
-    try {
-      catalogBooks = (await api("catalog")).books;
-      renderCatalog();
-    } catch (err) { $("catalogGrid").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; }
+  let catalogBooks = [], catalogLoaded = false;
+  const catalogFilter = { author: "", category: "" };
+  let detailId = null;
+  let previewCache = null; // { id, blob }: the last catalog file fetched for online reading, reused when it is added
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const LANG_FA = { fa: "فارسی", per: "فارسی", fas: "فارسی", prs: "دری", en: "انگلیسی", eng: "انگلیسی", ar: "عربی", ara: "عربی", fr: "فرانسوی",
+    de: "آلمانی", tr: "ترکی", ku: "کردی", ckb: "کردی", ur: "اردو", ru: "روسی", es: "اسپانیایی", it: "ایتالیایی", tg: "تاجیکی", az: "آذری" };
+  function langName(code) {
+    const c = String(code || "").trim();
+    return c ? (LANG_FA[c.toLowerCase().split(/[-_]/)[0]] || c) : "";
   }
-  function renderCatalog() {
-    {
-      const q = $("catalogSearch").value.trim().toLocaleLowerCase();
-      const books = catalogBooks.filter(b => !q || `${b.title} ${b.author} ${b.description || ""} ${b.submitter || ""}`.toLocaleLowerCase().includes(q));
-      $("catalogEmpty").hidden = catalogBooks.length > 0;
-      $("catalogGrid").innerHTML = books.map(b => {
-        const [bg, fg] = paletteFor(b.title || String(b.id));
-        const cover = b.has_cover ? `<img alt="" loading="lazy" src="${API}?r=book-cover&id=${b.id}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">`
-          : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
-        const action = b.in_library ? '<span class="book-badge">در کتابخانهٔ تو</span>'
-          : `<button class="secondary-button" type="button" data-catalog-add="${b.id}">＋ افزودن به کتابخانهٔ من</button>`;
-        return `<article class="book-card catalog-card" data-detail="${b.id}" tabindex="0"><div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}</div>
-          <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p>
-          ${b.description ? `<p title="${esc(b.description)}">${esc(b.description)}</p>` : ""}<div class="catalog-actions">${action}</div></div></article>`;
-      }).join("");
-      if (catalogBooks.length && !books.length) $("catalogGrid").innerHTML = '<p class="muted">کتابی با این عبارت پیدا نشد.</p>';
+  const faDigits = t => String(t).replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[d]);
+  const sizeMb = n => Number(n || 0) < 1048576 ? `${Math.max(1, Math.round(Number(n || 0) / 1024)).toLocaleString("fa-IR")} کیلوبایت`
+    : `${(Number(n) / 1048576).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} مگابایت`;
+  const catOf = b => String((b && b.category) || "").trim();
+  const authorOf = b => String((b && b.author) || "").trim();
+  function catalogCover(b, lazy) {
+    return b.has_cover ? `<img alt="" ${lazy ? 'loading="lazy"' : ""} src="${API}?r=book-cover&id=${b.id}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">`
+      : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
+  }
+  function catalogCardHtml(b, withAction) {
+    const [bg, fg] = paletteFor(b.title || String(b.id));
+    const action = !withAction ? "" : b.in_library ? '<span class="book-badge">در کتابخانهٔ تو</span>'
+      : `<button class="secondary-button" type="button" data-catalog-add="${b.id}">＋ افزودن به کتابخانهٔ من</button>`;
+    return `<article class="book-card catalog-card" data-detail="${b.id}" tabindex="0" role="button" aria-label="جزئیات ${esc(b.title)}"><div class="book-cover-thumb" style="background:${bg};color:${fg}">${catalogCover(b, true)}</div>
+      <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p>
+      ${withAction && b.description ? `<p title="${esc(b.description)}">${esc(b.description)}</p>` : ""}${action ? `<div class="catalog-actions">${action}</div>` : ""}</div></article>`;
+  }
+  async function loadCatalog() {
+    if (!catalogBooks.length) $("catalogGrid").innerHTML = '<p class="muted">در حال بارگذاری…</p>';
+    try {
+      catalogBooks = (await api("catalog")).books || [];
+      catalogLoaded = true;
+      renderCatalog();
+      if (!$("viewBook").hidden) renderBookDetail();
+    } catch (err) {
+      $("catalogGrid").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`;
+      if (!$("viewBook").hidden && !catalogBooks.length) $("detailTitle").textContent = apiMessage(err);
     }
   }
+  function catalogCategories() {
+    return [...new Set(catalogBooks.map(catOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fa"));
+  }
+  function fillCategoryList(extra) {
+    const cats = new Set([...catalogCategories(), ...(extra || [])].filter(Boolean));
+    $("categoryList").innerHTML = [...cats].map(c => `<option value="${esc(c)}"></option>`).join("");
+  }
+  function renderCatalogFilters() {
+    const cats = catalogCategories();
+    const chips = [];
+    if (catalogFilter.author) {
+      chips.push(`<button type="button" class="filter-chip-active" data-clear-author aria-label="برداشتن فیلتر نویسنده ${esc(catalogFilter.author)}">نویسنده: ${esc(catalogFilter.author)} <span aria-hidden="true">✕</span></button>`);
+    }
+    if (cats.length || catalogFilter.category) {
+      const list = cats.includes(catalogFilter.category) || !catalogFilter.category ? cats : [...cats, catalogFilter.category];
+      chips.push(`<button type="button" data-cat-filter="" aria-pressed="${!catalogFilter.category}">همهٔ دسته‌ها</button>`);
+      chips.push(...list.map(c => `<button type="button" data-cat-filter="${esc(c)}" aria-pressed="${c === catalogFilter.category}">${esc(c)}</button>`));
+    }
+    $("catalogFilters").innerHTML = chips.join("");
+    $("catalogFilters").hidden = !chips.length;
+  }
+  function renderCatalog() {
+    const q = $("catalogSearch").value.trim().toLocaleLowerCase();
+    const books = catalogBooks.filter(b => !q || `${b.title} ${b.author} ${b.description || ""} ${b.submitter || ""} ${b.category || ""} ${b.publisher || ""}`.toLocaleLowerCase().includes(q))
+      .filter(b => !catalogFilter.author || authorOf(b) === catalogFilter.author)
+      .filter(b => !catalogFilter.category || catOf(b) === catalogFilter.category);
+    renderCatalogFilters();
+    fillCategoryList();
+    $("catalogEmpty").hidden = !catalogLoaded || catalogBooks.length > 0;
+    $("catalogGrid").innerHTML = books.map(b => catalogCardHtml(b, true)).join("");
+    if (catalogBooks.length && !books.length) $("catalogGrid").innerHTML = '<p class="muted">کتابی با این مشخصات پیدا نشد.</p>';
+  }
   $("catalogSearch").addEventListener("input", renderCatalog);
-  function openBookDialog(id) {
+  $("catalogFilters").addEventListener("click", e => {
+    if (e.target.closest("[data-clear-author]")) { catalogFilter.author = ""; renderCatalog(); return; }
+    const c = e.target.closest("[data-cat-filter]");
+    if (c) { catalogFilter.category = c.dataset.catFilter; renderCatalog(); }
+  });
+
+  // ---- Navigation between the catalog and a book's page (deep-linkable: #catalog, #catalog/book/ID) ----
+  function setHash(hash, push, state) {
+    const url = hash ? hash : location.pathname + location.search;
+    try { (push ? history.pushState : history.replaceState).call(history, state || null, "", url); } catch (_) {}
+  }
+  function openCatalogBook(id, push = true) {
+    detailId = id;
+    setHash(`#catalog/book/${id}`, push, { borg: "book", id, inApp: push });
+    showView("book");
+    window.scrollTo({ top: Math.max(0, $("app").querySelector(".library-section").offsetTop - 10), behavior: "auto" });
+  }
+  function goToCatalog(push) {
+    setHash("#catalog", push, { borg: "catalog" });
+    showView("catalog");
+  }
+  function filterCatalogBy(kind, value) {
+    catalogFilter.author = kind === "author" ? value : "";
+    catalogFilter.category = kind === "category" ? value : "";
+    $("catalogSearch").value = "";
+    goToCatalog(true);
+  }
+  function routeFromHash() {
+    if (!account) return;
+    if (readerOpen() && currentBook && currentBook.preview) closeReader();
+    const m = /^#catalog\/book\/(\d+)/.exec(location.hash);
+    if (m) { detailId = Number(m[1]); showView("book"); }
+    else if (location.hash.startsWith("#catalog")) showView("catalog");
+    else if (!$("viewBook").hidden || !$("viewCatalog").hidden) showView("mine");
+  }
+  window.addEventListener("popstate", routeFromHash);
+  $("detailBack").addEventListener("click", () => {
+    if (history.state && history.state.borg === "book" && history.state.inApp) history.back();
+    else goToCatalog(false);
+  });
+  $("detailCrumbs").addEventListener("click", e => {
+    const t = e.target.closest("[data-crumb]");
+    if (!t) return;
+    if (t.dataset.crumb === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; goToCatalog(true); }
+    else filterCatalogBy("category", t.dataset.crumbCat || "");
+  });
+  $("detailAuthor").addEventListener("click", () => { const b = catalogBooks.find(x => x.id === detailId); if (b && authorOf(b)) filterCatalogBy("author", authorOf(b)); });
+  $("detailMeta").addEventListener("click", e => { const t = e.target.closest("[data-meta-cat]"); if (t) filterCatalogBy("category", t.dataset.metaCat); });
+
+  // ---- Book page ----
+  function relatedBooks(b) {
+    const others = catalogBooks.filter(x => x.id !== b.id);
+    const sameAuthor = authorOf(b) ? others.filter(x => authorOf(x) === authorOf(b)) : [];
+    const sameCat = catOf(b) ? others.filter(x => catOf(x) === catOf(b) && !sameAuthor.includes(x)) : [];
+    return [...sameAuthor, ...sameCat].slice(0, 6);
+  }
+  function formatPublished(v) {
+    const t = String(v || "").trim();
+    return t ? faDigits(t.replace(/T.*$/, "")) : "";
+  }
+  async function renderBookDetail() {
+    closeAddMenu();
+    const b = catalogBooks.find(x => x.id === detailId);
+    $("detailBody").hidden = !b;
+    if (!b) {
+      $("detailCrumbs").innerHTML = '<button type="button" class="crumb" data-crumb="catalog">کتابخانهٔ عمومی</button>';
+      $("detailTitle").textContent = catalogLoaded ? "این کتاب در کتابخانهٔ عمومی پیدا نشد." : "در حال بارگذاری…";
+      $("detailTitle").hidden = false;
+      return;
+    }
+    const cat = catOf(b);
+    $("detailCrumbs").innerHTML = `<button type="button" class="crumb" data-crumb="catalog">کتابخانهٔ عمومی</button><span class="crumb-sep" aria-hidden="true">/</span>`
+      + (cat ? `<button type="button" class="crumb" data-crumb="category" data-crumb-cat="${esc(cat)}">${esc(cat)}</button><span class="crumb-sep" aria-hidden="true">/</span>` : "")
+      + `<span class="crumb-current" aria-current="page">${esc(b.title)}</span>`;
+    const [bg, fg] = paletteFor(b.title || String(b.id));
+    const cover = $("detailCover");
+    cover.style.background = bg; cover.style.color = fg;
+    cover.innerHTML = catalogCover(b, false);
+    $("detailTitle").textContent = b.title;
+    $("detailAuthor").textContent = b.author || "نویسنده نامشخص";
+    $("detailAuthor").disabled = !authorOf(b);
+    $("detailAuthor").title = authorOf(b) ? "همهٔ کتاب‌های این نویسنده" : "";
+    const desc = String(b.description || "").trim();
+    $("detailDescWrap").hidden = !desc;
+    $("detailDesc").textContent = desc;
+    $("detailDesc").classList.add("clamped");
+    $("detailMore").hidden = true;
+    $("detailMore").textContent = "بیشتر بخوانید";
+    $("detailMore").setAttribute("aria-expanded", "false");
+    const rows = [
+      ["دسته‌بندی", cat ? `<button type="button" class="link-button" data-meta-cat="${esc(cat)}">${esc(cat)}</button>` : ""],
+      ["زبان", esc(langName(b.language))],
+      ["ناشر", esc(String(b.publisher || "").trim())],
+      ["تاریخ انتشار", esc(formatPublished(b.published))],
+      ["حجم فایل", b.size ? esc(sizeMb(b.size)) : ""],
+      ["پیشنهاددهنده", esc(String(b.submitter || "").trim())],
+    ].filter(([, v]) => v);
+    $("detailMeta").innerHTML = rows.map(([k, v]) => `<tr><th scope="row">${k}</th><td>${v}</td></tr>`).join("");
+    $("detailMeta").hidden = !rows.length;
+    const local = b.in_library ? (await getAllBooks()).find(x => x.serverId === b.id || (b.sha256 && x.contentHash === b.sha256)) : null;
+    if (detailId !== b.id) return;
+    $("detailRead").textContent = local ? "📖 ادامهٔ مطالعه" : "📖 مطالعهٔ آنلاین";
+    $("detailRead").dataset.local = local ? local.id : "";
+    $("detailAddGroup").hidden = !!b.in_library;
+    $("detailInLibrary").hidden = !b.in_library;
+    $("detailAdd").disabled = false; $("detailAddMore").disabled = false;
+    const related = relatedBooks(b);
+    $("detailRelatedSection").hidden = !related.length;
+    $("detailRelated").innerHTML = related.map(x => catalogCardHtml(x, false)).join("");
+    // Only offer "read more" when the description is really cut off (measured once the page is visible).
+    requestAnimationFrame(() => {
+      const d = $("detailDesc");
+      $("detailMore").hidden = !desc || d.scrollHeight <= d.clientHeight + 2;
+    });
+  }
+  $("detailMore").addEventListener("click", () => {
+    const d = $("detailDesc"), open = d.classList.toggle("clamped") === false;
+    $("detailMore").textContent = open ? "بستن" : "بیشتر بخوانید";
+    $("detailMore").setAttribute("aria-expanded", String(open));
+  });
+  $("detailRelated").addEventListener("click", e => { const c = e.target.closest("[data-detail]"); if (c) openCatalogBook(Number(c.dataset.detail)); });
+  $("detailRelated").addEventListener("keydown", e => {
+    const c = e.target.closest("[data-detail]");
+    if (c && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openCatalogBook(Number(c.dataset.detail)); }
+  });
+
+  // ---- Online reading: open the catalog file without adding it to the library ----
+  async function catalogFile(id) {
+    if (previewCache && previewCache.id === id) return previewCache.blob;
+    const blob = await (await api("book-file", { query: `&id=${id}` })).blob();
+    previewCache = { id, blob };
+    return blob;
+  }
+  async function readOnline(id) {
     const b = catalogBooks.find(x => x.id === id);
     if (!b) return;
-    const [bg, fg] = paletteFor(b.title || String(b.id));
-    $("bookDialogCover").style.background = bg; $("bookDialogCover").style.color = fg;
-    $("bookDialogCover").innerHTML = b.has_cover ? `<img alt="" src="${API}?r=book-cover&id=${b.id}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : `<div class="cover-symbol">✳</div>`;
-    $("bookDialogTitle").textContent = b.title;
-    $("bookDialogAuthor").textContent = b.author || "نویسنده نامشخص";
-    $("bookDialogMeta").textContent = `${(b.size / 1048576).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} مگابایت` + (b.submitter ? ` · پیشنهاد ${b.submitter}` : "");
-    $("bookDialogDesc").textContent = b.description || "";
-    $("bookDialogActions").innerHTML = b.in_library ? '<span class="book-badge">در کتابخانهٔ تو</span>' : `<button class="primary-button" type="button" data-catalog-add="${b.id}">＋ افزودن به کتابخانهٔ من</button>`;
-    $("bookDialog").showModal();
+    const btn = $("detailRead");
+    if (btn.dataset.local) { openReader(btn.dataset.local).catch(err => { console.error(err); showToast("بازکردن کتاب ناموفق بود."); }); return; }
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = "در حال دریافت…";
+    try {
+      const blob = await catalogFile(id);
+      const file = new File([blob], `${b.title}.epub`, { type: "application/epub+zip" });
+      await openReader(null, { id: `preview-${id}`, preview: true, catalogId: id, title: b.title, author: b.author || "نویسنده نامشخص",
+                               file, size: blob.size, language: b.language || "" });
+    } catch (err) {
+      console.warn("Online reading failed:", err);
+      showToast(err instanceof ApiFail ? apiMessage(err) : "بازکردن کتاب ناموفق بود.");
+    } finally { btn.disabled = false; btn.textContent = label; }
   }
-  $("bookDialogClose").addEventListener("click", () => $("bookDialog").close());
-  $("bookDialogActions").addEventListener("click", e => { if (e.target.closest("[data-catalog-add]")) { $("bookDialog").close(); addFromCatalog(Number(e.target.closest("[data-catalog-add]").dataset.catalogAdd)); } });
-  async function addFromCatalog(id, btn) {
+  $("detailRead").addEventListener("click", () => readOnline(detailId));
+  $("previewAdd").addEventListener("click", () => {
+    if (!currentBook || !currentBook.preview) return;
+    $("previewAdd").disabled = true;
+    addFromCatalog(currentBook.catalogId).finally(() => { $("previewAdd").disabled = false; });
+  });
+  /** The book being previewed was just added: keep reading it as the stored copy (progress is saved from now on). */
+  async function adoptPreview(id, rec) {
+    if (!rec || !currentBook || !currentBook.preview || currentBook.catalogId !== id || !rendition) return;
+    currentBook = rec; currentProgressKey = rec.id;
+    $("previewBanner").hidden = true;
+    try {
+      const loc = rendition.currentLocation();
+      if (loc?.start?.cfi) await saveProgress(rec.id, loc.start.cfi, percentFor(loc.start.cfi, loc.start.percentage));
+      const r = await setBookMeta(rec.id, { status: "reading" });
+      if (r && currentBook && currentBook.id === r.id) currentBook = r;
+    } catch (err) { console.warn("Adopting the previewed book failed:", err); }
+  }
+
+  // ---- Add to my library (optionally straight onto shelves) ----
+  async function addFromCatalog(id, { btn = null, shelves = [] } = {}) {
     if (btn) btn.disabled = true;
     try {
+      while (syncing) await sleep(150); // a running sync must not see the new local copy before the server does
       await api("catalog-add", { method: "POST", body: { book_id: id } });
       showToast("به کتابخانه‌ات اضافه شد؛ در حال دریافت…");
-      await sync(); loadCatalog();
+      const cb = catalogBooks.find(x => x.id === id);
+      let rec = null;
+      if (cb) {
+        try { rec = await downloadBook({ ...cb, catalog_status: "approved" }, previewCache && previewCache.id === id ? previewCache.blob : null); }
+        catch (err) { console.warn("Download after add failed (sync will retry):", err); }
+      }
+      await sync();
+      while (syncing) await sleep(150);
+      if (!rec) rec = (await getAllBooks()).find(b => b.serverId === id) || null;
+      if (rec && shelves.length) {
+        const cur = await getBook(rec.id);
+        rec = (await setBookMeta(rec.id, { shelves: [...new Set([...((cur && cur.shelves) || []), ...shelves])] })) || rec;
+      }
+      await adoptPreview(id, rec);
+      if (shelves.length) showToast(rec ? "به کتابخانه و قفسه‌های انتخاب‌شده اضافه شد." : "به کتابخانه اضافه شد؛ قفسه‌ها بعد از دریافت تنظیم می‌شوند.");
+      else if (rec) showToast("به کتابخانه‌ات اضافه شد.");
+      renderLibrary();
+      await loadCatalog();
     } catch (err) { if (btn) btn.disabled = false; showToast(apiMessage(err)); }
   }
+  function addMenuOpen() { return !$("detailAddMenu").hidden; }
+  function closeAddMenu() {
+    if (!addMenuOpen()) return;
+    $("detailAddMenu").hidden = true;
+    $("detailAddMore").setAttribute("aria-expanded", "false");
+  }
+  function renderAddMenuShelves(checked) {
+    $("detailShelfChecks").innerHTML = shelvesCache.length
+      ? shelvesCache.map(sh => `<label><input type="checkbox" data-add-shelf="${esc(sh.uid)}" ${checked.has(sh.uid) ? "checked" : ""}> ${esc(sh.name)}</label>`).join("")
+      : '<p class="muted small">هنوز قفسه‌ای نساخته‌ای؛ یکی بساز.</p>';
+  }
+  const checkedAddShelves = () => new Set([...$("detailShelfChecks").querySelectorAll("[data-add-shelf]:checked")].map(x => x.dataset.addShelf));
+  async function openAddMenu() {
+    await refreshShelves();
+    renderAddMenuShelves(new Set());
+    $("detailAddMenu").hidden = false;
+    $("detailAddMore").setAttribute("aria-expanded", "true");
+    const first = $("detailAddMenu").querySelector("input");
+    if (first) first.focus({ preventScroll: true });
+  }
+  $("detailAdd").addEventListener("click", () => { closeAddMenu(); addFromCatalog(detailId, { btn: $("detailAdd") }); });
+  $("detailAddMore").addEventListener("click", e => { e.stopPropagation(); if (addMenuOpen()) closeAddMenu(); else openAddMenu(); });
+  async function addShelfFromMenu() {
+    const name = $("detailNewShelf").value.trim();
+    if (!name) return;
+    const keep = checkedAddShelves(), uid = newUid();
+    await saveShelf({ uid, name: name.slice(0, 80), position: shelvesCache.length, deleted: false });
+    $("detailNewShelf").value = "";
+    keep.add(uid);
+    renderAddMenuShelves(keep);
+  }
+  $("detailNewShelfAdd").addEventListener("click", addShelfFromMenu);
+  $("detailNewShelf").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); addShelfFromMenu(); } });
+  $("detailAddConfirm").addEventListener("click", () => {
+    const shelves = [...checkedAddShelves()];
+    closeAddMenu();
+    addFromCatalog(detailId, { btn: $("detailAdd"), shelves });
+  });
+  document.addEventListener("click", e => {
+    if (addMenuOpen() && !$("detailAddMenu").contains(e.target) && !$("detailAddMore").contains(e.target)) closeAddMenu();
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && addMenuOpen()) { closeAddMenu(); $("detailAddMore").focus({ preventScroll: true }); }
+  });
+
   $("catalogGrid").addEventListener("click", e => {
     const btn = e.target.closest("[data-catalog-add]");
-    if (btn) { e.stopPropagation(); addFromCatalog(Number(btn.dataset.catalogAdd), btn); return; }
+    if (btn) { e.stopPropagation(); addFromCatalog(Number(btn.dataset.catalogAdd), { btn }); return; }
     const card = e.target.closest("[data-detail]");
-    if (card) openBookDialog(Number(card.dataset.detail));
+    if (card) openCatalogBook(Number(card.dataset.detail));
   });
   $("catalogGrid").addEventListener("keydown", e => {
+    if (e.target.closest("[data-catalog-add]")) return;
     const card = e.target.closest("[data-detail]");
-    if (card && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openBookDialog(Number(card.dataset.detail)); }
+    if (card && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openCatalogBook(Number(card.dataset.detail)); }
   });
   async function shareBook(localId) {
     const b = await getBook(localId);
     if (!b || !b.serverId) { showToast("اول باید همگام‌سازی کامل شود."); return; }
     const description = (prompt("یک توضیح کوتاه برای این کتاب (اختیاری):", "") || "").slice(0, 2000);
+    const category = (prompt("دسته‌بندی (اختیاری) — مثلاً رمان، شعر، تاریخ:", "") || "").replace(/\s+/g, " ").trim().slice(0, 80);
     try {
-      const r = await api("catalog-submit", { method: "POST", body: { book_id: b.serverId, description } });
+      const r = await api("catalog-submit", { method: "POST", body: { book_id: b.serverId, description, ...(category ? { category } : {}) } });
       await put("books", { ...b, catalogStatus: r.status });
       showToast(r.status === "approved" ? "به کتابخانهٔ عمومی اضافه شد." : "برای تأیید مدیر ارسال شد.");
       renderLibrary();
@@ -1903,7 +2240,7 @@
       ].map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
       $("settingApproval").checked = !!settings.catalog_requires_approval;
       $("catalogAdminList").innerHTML = catalogAll.books.filter(b => b.status !== "pending").map(b => `<div class="admin-item">
-          <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="status-chip ${b.status === "approved" ? "" : "off"}">${STATUS_FA[b.status] || b.status}</span>
+          <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="status-chip ${b.status === "approved" ? "" : "off"}">${STATUS_FA[b.status] || b.status}</span>${catOf(b) ? ` <span class="status-chip cat-chip">${esc(catOf(b))}</span>` : ""}
           ${b.description ? `<br><span class="muted">${esc(b.description)}</span>` : ""}</span>
           <span class="admin-row"><button class="secondary-button" type="button" data-cat-edit="${b.id}">ویرایش</button>
           <button class="secondary-button" type="button" data-cat-remove="${b.id}">برداشتن از کتابخانهٔ عمومی</button></span></div>`).join("")
@@ -1915,7 +2252,7 @@
           <button class="secondary-button" type="button" data-book-delete="${b.id}" data-title="${esc(b.title)}">حذف کامل</button></span></div>`).join("")
         || '<p class="muted">کتابی روی سرور نیست.</p>';
       $("pendingList").innerHTML = pending.books.length ? pending.books.map(b => `<div class="admin-item">
-          <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="muted">· ${esc(b.submitter || "")} · ${fmtDate(b.submitted_at)}</span>
+          <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="muted">· ${esc(b.submitter || "")} · ${fmtDate(b.submitted_at)}</span>${catOf(b) ? ` <span class="status-chip cat-chip">${esc(catOf(b))}</span>` : ""}
           ${b.description ? `<br><span class="muted">${esc(b.description)}</span>` : ""}</span>
           <span class="admin-row"><a class="secondary-button" href="${API}?r=book-file&id=${b.id}">دانلود</a>
           <button class="secondary-button" type="button" data-review="${b.id}" data-approve="1">تأیید</button>
@@ -1960,12 +2297,16 @@
     }
     if (t.closest("[data-cat-edit]")) {
       const id = Number(t.closest("[data-cat-edit]").dataset.catEdit);
-      const b = (await api("catalog-all")).books.find(x => x.id === id);
+      let all;
+      try { all = (await api("catalog-all")).books; } catch (err) { showToast(apiMessage(err)); return; }
+      const b = all.find(x => x.id === id);
       if (!b) return;
-      const title = prompt("عنوان:", b.title); if (title === null) return;
-      const author = prompt("نویسنده:", b.author || ""); if (author === null) return;
-      const description = prompt("توضیحات:", b.description || ""); if (description === null) return;
-      return adminAction("catalog-update", { book_id: id, title: title.trim() || b.title, author: author.trim(), description: description.trim() }, "ذخیره شد.");
+      fillCategoryList(all.map(catOf));
+      const f = $("catalogEditForm");
+      f.dataset.bookId = String(id);
+      for (const k of CATALOG_EDIT_FIELDS) f.elements[k].value = b[k] == null ? "" : String(b[k]);
+      $("catalogEditDialog").showModal();
+      return;
     }
     if (t.closest("[data-book-delete]")) {
       const el = t.closest("[data-book-delete]");
@@ -1989,6 +2330,18 @@
       }
     }
   });
+  const CATALOG_EDIT_FIELDS = ["title", "author", "description", "category", "publisher", "published", "language"];
+  $("catalogEditClose").addEventListener("click", () => $("catalogEditDialog").close());
+  $("catalogEditForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const f = e.target, body = { book_id: Number(f.dataset.bookId) };
+    for (const k of CATALOG_EDIT_FIELDS) body[k] = f.elements[k].value.replace(k === "description" ? /[ \t]+/g : /\s+/g, " ").trim();
+    if (!body.title) { f.elements.title.focus(); return; }
+    $("catalogEditSave").disabled = true;
+    const r = await adminAction("catalog-update", body, "ذخیره شد.");
+    $("catalogEditSave").disabled = false;
+    if (r) { $("catalogEditDialog").close(); catalogLoaded = false; }
+  });
   $("createInvite").addEventListener("click", async () => {
     try {
       const r = await api("invites", { method: "POST", body: { note: $("inviteNote").value.trim(), days: 14 } });
@@ -2005,9 +2358,17 @@
   async function repairMetadata() {
     let changed = false;
     for (const b of await getAllBooks()) {
-      if (b.metaChecked || !fileOf(b)) continue;
-      const rec = { ...b, metaChecked: true };
-      const weak = !b.cover || !b.author || b.author === UNKNOWN_AUTHOR || looksLikeFilename(b.title);
+      if ((b.metaChecked && b.metaExt) || !fileOf(b)) continue;
+      const rec = { ...b, metaChecked: true, metaExt: true };
+      const weak = !b.metaChecked && (!b.cover || !b.author || b.author === UNKNOWN_AUTHOR || looksLikeFilename(b.title));
+      if (!b.metaExt && !weak) {
+        // Books imported before publisher/date/language were kept: read just those (once).
+        try {
+          const raw = fileOf(b);
+          const m = await extractMetadata(raw instanceof File ? raw : new File([raw], "book.epub", { type: "application/epub+zip" }));
+          for (const k of Object.keys(META_LIMITS)) if (m[k] && !b[k]) { rec[k] = m[k]; rec.metaExtPush = true; }
+        } catch (_) { /* unreadable file: keep what we have */ }
+      }
       if (weak) {
         try {
           const raw = fileOf(b);
@@ -2017,10 +2378,13 @@
           if (m.title && m.title !== fromName && (looksLikeFilename(b.title) || b.title === fromName)) rec.title = m.title;
           if (m.author && m.author !== UNKNOWN_AUTHOR && (!b.author || b.author === UNKNOWN_AUTHOR)) rec.author = m.author;
           if (!b.cover && m.cover) rec.cover = m.cover;
+          for (const k of Object.keys(META_LIMITS)) if (m[k] && !b[k]) { rec[k] = m[k]; rec.metaExtPush = true; }
           if (rec.title !== b.title || rec.author !== b.author || rec.cover !== b.cover) { rec.metaRepaired = true; rec.metaPushed = false; changed = true; }
         } catch (_) { /* unreadable file: keep what we have */ }
       }
-      await put("books", rec);
+      // Merge into the latest copy: the book may have been opened (status, locations) while its file was read.
+      const latest = await getBook(b.id);
+      if (latest) await put("books", { ...latest, ...Object.fromEntries(Object.entries(rec).filter(([k, v]) => v !== b[k])) });
     }
     if (changed) { renderLibrary(); if (account) sync(); }
   }
@@ -2052,7 +2416,7 @@
     if (!navigator.onLine) return; // offline: local-only until the connection returns
     try {
       const r = await api("me");
-      if (r.user) { setAccount({ user: r.user, csrf: r.csrf }); sync(); }
+      if (r.user) { setAccount({ user: r.user, csrf: r.csrf }); routeFromHash(); sync(); }
     } catch (_) { /* offline or API not configured: local-only mode */ }
   }
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && account && navigator.onLine) sync(); });

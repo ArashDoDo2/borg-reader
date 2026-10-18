@@ -111,7 +111,15 @@ function migrations(): array {
                seconds INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, device, day),
                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",
         ],
+        4 => [
+            "ALTER TABLE books ADD COLUMN publisher VARCHAR(300) NOT NULL DEFAULT ''",
+            "ALTER TABLE books ADD COLUMN published VARCHAR(40) NOT NULL DEFAULT ''",
+            "ALTER TABLE catalog ADD COLUMN category VARCHAR(80) NOT NULL DEFAULT ''",
+        ],
     ];
+}
+function schema_version(): int {
+    return (int)(one('SELECT MAX(version) AS v FROM schema_migrations')['v'] ?? 0);
 }
 function migrate(PDO $pdo): void {
     $sqlite = str_starts_with(config()['db_dsn'], 'sqlite:');
@@ -156,6 +164,12 @@ function str_param(array $d, string $k, int $max = 500, bool $required = true): 
     if ($required && $v === '') fail(400, 'missing_' . $k, "Field '$k' is required.");
     if (mb_strlen($v) > $max) fail(400, 'too_long_' . $k, "Field '$k' is too long.");
     return $v;
+}
+/** Optional field: null when the key is absent; 400 when present with a non-scalar value; else trimmed and length-checked. */
+function opt_str_param(array $d, string $k, int $max): ?string {
+    if (!array_key_exists($k, $d)) return null;
+    if ($d[$k] !== null && !is_scalar($d[$k])) fail(400, 'bad_' . $k, "Field '$k' must be a string.");
+    return str_param($d, $k, $max, false);
 }
 function int_param($v): int { if (!is_numeric($v)) fail(400, 'bad_id', 'Invalid id.'); return (int)$v; }
 function client_ip(): string { return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0'; }

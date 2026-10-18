@@ -58,9 +58,9 @@ class Client:
             if isinstance(payload, dict) and payload.get("csrf"): self.csrf = payload["csrf"]
         return status, payload
 
-def upload(c, path, title, author="", cover=None):
+def upload(c, path, title, author="", cover=None, init_extra=None, complete_extra=None):
     data = Path(path).read_bytes(); sha = hashlib.sha256(data).hexdigest()
-    st, r = c.call("POST", "upload-init", {"sha256": sha, "size": len(data), "title": title, "author": author, "cover": cover})
+    st, r = c.call("POST", "upload-init", {"sha256": sha, "size": len(data), "title": title, "author": author, "cover": cover, **(init_extra or {})})
     if st >= 400: return st, r
     if r.get("exists"): return st, r
     uid, chunk, off = r["upload_id"], r["chunk_bytes"], 0
@@ -69,7 +69,7 @@ def upload(c, path, title, author="", cover=None):
         st, rr = c.call("POST", "upload-chunk", raw=part, query=f"&upload_id={uid}&offset={off}")
         if st != 200: return st, rr
         off += len(part)
-    return c.call("POST", "upload-complete", {"upload_id": uid})
+    return c.call("POST", "upload-complete", {"upload_id": uid, **(complete_extra or {})})
 
 def make_big_epub(tmp):
     """An EPUB larger than one chunk, to exercise multi-chunk upload."""
@@ -87,6 +87,7 @@ def run(base, tmp):
     anon = Client(base)
     st, h = anon.call("GET", "health")
     check("health ok, configured, needs setup", st == 200 and h["configured"] and h["database"] and h["needs_setup"], json.dumps(h)[:200])
+    check("migration 4 applied (schema_version >= 4)", h.get("schema_version", 0) >= 4, str(h.get("schema_version")))
     st, r = anon.call("GET", "me"); check("me without session -> null user", st == 200 and r["user"] is None)
     st, _ = anon.call("GET", "library"); check("library requires login", st == 401)
 
@@ -117,19 +118,26 @@ def run(base, tmp):
     check("non-admin cannot create invites", st == 403)
 
     # Upload: small book (single chunk) with cover, then dedupe
-    st, r = upload(user, FIX / "sample-fa.epub", "کتاب آزمایشی", "نویسنده تست", cover=PNG)
+    st, r = upload(user, FIX / "sample-fa.epub", "کتاب آزمایشی", "نویسنده تست", cover=PNG,
+                   init_extra={"publisher": "نشر نی", "published": "1399", "language": "fa"})
     book1 = (r.get("book") or {}).get("id")
     check("upload book with cover", st == 201 and book1 and r["book"]["has_cover"], str(r)[:200])
+    check("upload-init publisher/published/language stored", r.get("book", {}).get("publisher") == "نشر نی"
+          and r["book"]["published"] == "1399" and r["book"]["language"] == "fa", str(r)[:300])
     st, r = upload(admin, FIX / "sample-fa.epub", "dup")
     check("same file by another user is deduplicated (no re-upload)", st == 200 and r.get("exists") and r["book"]["id"] == book1)
     st, r = user.call("GET", "library")
     check("library lists the book", st == 200 and [b["id"] for b in r["books"]] == [book1])
+    check("library returns publisher/published", r["books"][0]["publisher"] == "نشر نی" and r["books"][0]["published"] == "1399", str(r["books"][0])[:300])
 
     # Multi-chunk upload
     big = make_big_epub(tmp)
-    st, r = upload(user, big, "کتاب بزرگ")
+    st, r = upload(user, big, "کتاب بزرگ", init_extra={"publisher": "قدیمی"},
+                   complete_extra={"publisher": "انتشارات خوارزمی", "published": "2021-05-01", "language": "fa-IR"})
     book2 = (r.get("book") or {}).get("id")
     check("multi-chunk upload of a 3 MB book", st == 201 and book2, str(r)[:200])
+    check("upload-complete metadata overrides upload-init", r.get("book", {}).get("publisher") == "انتشارات خوارزمی"
+          and r["book"]["published"] == "2021-05-01" and r["book"]["language"] == "fa-IR", str(r)[:300])
     st, data = user.call("GET", "book-file", query=f"&id={book2}")
     check("download returns identical bytes", st == 200 and hashlib.sha256(data).hexdigest() == hashlib.sha256(big.read_bytes()).hexdigest())
 
@@ -141,6 +149,10 @@ def run(base, tmp):
     st, r = user.call("POST", "upload-complete", {"upload_id": uid})
     check("non-EPUB file rejected", st == 422, str(r))
     data = (FIX / "sample-fa-2.epub").read_bytes()
+    st, r = user.call("POST", "upload-init", {"sha256": "1" * 64, "size": len(data), "title": "x", "publisher": ["bad"]})
+    check("upload-init with non-string publisher -> 400", st == 400, str(r))
+    st, r = user.call("POST", "upload-init", {"sha256": "1" * 64, "size": len(data), "title": "x", "published": "1" * 41})
+    check("upload-init with too-long published -> 400", st == 400 and r.get("error") == "too_long_published", str(r))
     st, r = user.call("POST", "upload-init", {"sha256": "0" * 64, "size": len(data), "title": "liar"})
     uid = r.get("upload_id")
     user.call("POST", "upload-chunk", raw=data, query=f"&upload_id={uid}&offset=0")
@@ -169,6 +181,15 @@ def run(base, tmp):
     check("uploader corrects metadata", st == 200 and r["book"]["title"] == "عنوان درست" and r["book"]["author"] == "نویسندهٔ درست")
     st, r = admin.call("POST", "book-meta", {"book_id": book1, "title": "کتاب آزمایشی", "author": "نویسنده تست"})
     check("admin can correct any book", st == 200 and r["book"]["title"] == "کتاب آزمایشی")
+    st, r = user.call("POST", "book-meta", {"book_id": book1, "publisher": "نشر چشمه", "published": "1400", "language": "fa"})
+    check("owner updates publisher via book-meta; absent keys untouched", st == 200 and r["book"]["publisher"] == "نشر چشمه"
+          and r["book"]["published"] == "1400" and r["book"]["title"] == "کتاب آزمایشی" and r["book"]["author"] == "نویسنده تست", str(r)[:300])
+    st, r = user.call("POST", "book-meta", {"book_id": book1, "publisher": "x" * 301})
+    check("book-meta publisher too long -> 400", st == 400)
+    st, r = user.call("POST", "book-meta", {"book_id": book1, "published": {"y": 1}})
+    check("book-meta non-string published -> 400", st == 400)
+    st, _ = other.call("POST", "book-meta", {"book_id": book1, "publisher": "hacked"})
+    check("other user cannot change publisher", st == 404)
     # admin has book1 in library (dedupe link) but is not the uploader; still allowed as admin
 
     # Progress: last write wins by client timestamp
@@ -186,7 +207,9 @@ def run(base, tmp):
     check("library includes progress", p and p["percentage"] == 55)
 
     # Catalog with moderation
-    st, r = user.call("POST", "catalog-submit", {"book_id": book2, "description": "یک کتاب خوب"})
+    st, r = user.call("POST", "catalog-submit", {"book_id": book2, "description": "یک کتاب خوب", "category": "x" * 81})
+    check("catalog-submit category too long -> 400", st == 400 and r.get("error") == "too_long_category", str(r))
+    st, r = user.call("POST", "catalog-submit", {"book_id": book2, "description": "یک کتاب خوب", "category": "  رمان  "})
     check("user submission goes to pending", st == 201 and r["status"] == "pending")
     st, r = other.call("GET", "catalog")
     check("pending book not visible in catalog", st == 200 and r["books"] == [])
@@ -194,10 +217,14 @@ def run(base, tmp):
     check("non-admin cannot approve", st == 403)
     st, r = admin.call("GET", "catalog-pending")
     check("admin sees pending queue", st == 200 and [b["id"] for b in r["books"]] == [book2] and r["books"][0]["submitter"] == "کاربر")
+    check("pending queue includes category", r["books"][0].get("category") == "رمان")
     st, r = admin.call("POST", "catalog-review", {"book_id": book2, "approve": True})
     check("admin approves", st == 200 and r["status"] == "approved")
     st, r = other.call("GET", "catalog")
     check("approved book visible to everyone", [b["id"] for b in r["books"]] == [book2] and not r["books"][0]["in_library"])
+    cb = r["books"][0]
+    check("catalog includes category (trimmed), publisher, published", cb.get("category") == "رمان" and cb.get("publisher") == "انتشارات خوارزمی"
+          and cb.get("published") == "2021-05-01", str(cb)[:300])
     st, _ = other.call("GET", "book-file", query=f"&id={book2}")
     check("catalog book readable by everyone", st == 200)
     st, r = other.call("POST", "catalog-add", {"book_id": book2})
@@ -207,6 +234,8 @@ def run(base, tmp):
     check("cannot submit a book you do not have", st == 404)
     st, r = admin.call("POST", "catalog-submit", {"book_id": book1})
     check("admin submission is auto-approved", st == 201 and r["status"] == "approved")
+    st, r = other.call("GET", "catalog")
+    check("catalog-submit without category -> empty string", [b["category"] for b in r["books"] if b["id"] == book1] == [""])
     st, r = admin.call("POST", "catalog-review", {"book_id": book1, "approve": False})
     check("cannot review a non-pending entry", st == 404)
 
@@ -323,10 +352,23 @@ def run(base, tmp):
     admin.call("POST", "settings", {"catalog_requires_approval": True})
     st, r = admin.call("GET", "catalog-all")
     check("admin lists whole catalog", st == 200 and book3 in [b["id"] for b in r["books"]])
+    check("catalog-all includes category", all("category" in b for b in r["books"]))
+    st, _ = user.call("POST", "catalog-update", {"book_id": book3, "category": "hack"})
+    check("non-admin cannot catalog-update", st == 403)
+    st, r = admin.call("POST", "catalog-update", {"book_id": book3, "category": "شعر", "publisher": "نشر مرکز", "published": "1380", "language": "fa"})
+    st2, r2 = admin.call("GET", "catalog-all")
+    b3 = [b for b in r2["books"] if b["id"] == book3][0]
+    check("admin catalog-update category+publisher+published+language", st == 200 and b3["category"] == "شعر" and b3["publisher"] == "نشر مرکز"
+          and b3["published"] == "1380" and b3["language"] == "fa" and b3["title"] == "کتاب سوم", str(b3)[:300])
+    st, r = admin.call("POST", "catalog-update", {"book_id": book3, "description": "نباید ذخیره شود", "category": ["bad"]})
+    st2, r2 = admin.call("GET", "catalog-all")
+    b3 = [b for b in r2["books"] if b["id"] == book3][0]
+    check("catalog-update invalid category -> 400, nothing written", st == 400 and b3["category"] == "شعر" and b3["description"] != "نباید ذخیره شود")
     st, _ = admin.call("POST", "catalog-update", {"book_id": book3, "description": "توضیح مدیر", "title": "عنوان مدیر"})
     st2, r = other.call("GET", "catalog")
     b3 = [b for b in r["books"] if b["id"] == book3][0]
     check("admin edits catalog entry", st == 200 and b3["description"] == "توضیح مدیر" and b3["title"] == "عنوان مدیر")
+    check("catalog-update without category keeps it", b3["category"] == "شعر" and b3["publisher"] == "نشر مرکز")
     st, r = admin.call("GET", "books-all")
     check("admin lists all books", st == 200 and book3 in [b["id"] for b in r["books"]])
     st, _ = admin.call("POST", "book-delete", {"book_id": book3})

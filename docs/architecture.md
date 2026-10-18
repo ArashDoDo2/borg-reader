@@ -33,7 +33,7 @@ staging uses `ketabkhane-db-test`, ADR 0005):
 
 | Store | Key | Fields |
 |---|---|---|
-| `books` | `id` (UUID) | `title`, `author`, `cover` (data URL), `file` (Blob), `size`, `addedAt`, `locations` (cached epub.js locations, JSON), `contentHash` (SHA-256, v6.2; filled lazily for older books) |
+| `books` | `id` (UUID) | `title`, `author`, `cover` (data URL), `file` (Blob), `size`, `addedAt`, `locations` (cached epub.js locations, JSON), `contentHash` (SHA-256, v6.2; filled lazily for older books); v8.1 optional `publisher`, `published` (`YYYY-MM-DD` or free text), `language` read from the EPUB `<dc:publisher>`/`<dc:date>`/`<dc:language>`, plus `metaExt` (already read) and `metaExtPush` (still to send to the server) |
 | `progress` | `bookId` | `cfi`, `percentage`, `updatedAt`, `bookmark` (single CFI) |
 
 localStorage: `ketabkhane-reader-preferences` → `{font, lineHeight, fontSize, theme, align, librarySort}`; `ketab-theme` → `light|dark`.
@@ -64,6 +64,21 @@ Target schema v2 and the mandatory migration rules are in spec §8. Rules that a
   After the first import the app requests persistent storage; usage is shown under the grid.
 - **Updates (v6.2):** when a new Service Worker takes control of a page that already had one, a banner offers a reload;
   `reg.update()` runs whenever the app becomes visible.
+- **Catalog book page (v8.1):** `#viewBook` (tab "catalog" stays selected), deep link `#catalog/book/<id>`, catalog
+  `#catalog`; `popstate` routes between them. Large cover, title, author link (→ catalog filtered by that author, with
+  a removable chip), description clamped to 5 lines with «بیشتر بخوانید» shown only when it is really cut off,
+  metadata table (category, language, publisher, date, size, submitter — only rows with a value), breadcrumb
+  (catalog / category / title), «کتاب‌های مشابه» (same author first, then same category, max 6).
+  The catalog view has category chips (built from `category` of the loaded books) combined with search and author filter.
+- **Online preview (v8.1):** «مطالعهٔ آنلاین» fetches `book-file` into memory and opens the reader with an ephemeral
+  record `{id: "preview-<catalogId>", preview: true}`. Nothing is written: no `books` record or cached locations,
+  no progress (`saveProgress` and `saveAnnotation` ignore `preview-` ids as a last guard), no bookmarks/highlights/notes
+  (toast instead), no status change, no reading-time stats, so nothing is synced. A banner offers «افزودن به
+  کتابخانه»; adding reuses the in-memory file, then the reader switches to the stored copy and saves the position from
+  then on. Closing the preview returns to the book page.
+- **Add from the catalog (v8.1):** the main button adds in one click; the ▾ menu lists existing shelves (and can create
+  one) and puts the book on the checked shelves after `catalog-add` + download. `catalog-submit` asks for an optional
+  category; the admin catalog editor is a dialog (title, author, description, category, publisher, date, language).
 - **Race guard:** `openToken` invalidates async work when the reader is closed or another book opens.
 
 ## 5. Service Worker
@@ -85,7 +100,7 @@ and forces permissions to 644/755 (v5 shipped files with 600 → HTTP 403, ADR 0
 2026-10-18 (ADR 0002).
 
 ## 7. Testing
-`tests/e2e_test.py` serves `src/` under `/borg/`, blocks all non-local requests and runs 75 checks
+`tests/e2e_test.py` serves `src/` under `/borg/`, blocks all non-local requests and runs ~200 checks
 (import, render, TOC, font in iframe, paging, progress, bookmark, persistence, offline, corrupt file,
 missing JSZip, mobile layout, keyboard, edge taps, immersive mode, mobile TOC drawer, swipe via CDP touch events). Checks assert visibility (non-zero viewer height), not just DOM presence.
 
@@ -101,6 +116,8 @@ missing JSZip, mobile layout, keyboard, edge taps, immersive mode, mobile TOC dr
   `catalog_requires_approval` (default true), `session_days`.
 - **Schema:** created/migrated automatically on first request (`schema_migrations`); DDL is portable via `{AI}`/`{TXT}`.
   Tables: users, sessions, invites, login_attempts, books (unique `sha256`), user_books, catalog, progress, uploads.
+  Migration 4 adds `books.publisher` (≤300), `books.published` (≤40, free-text date/year from EPUB metadata) and
+  `catalog.category` (≤80), all `NOT NULL DEFAULT ''`. `health` reports `schema_version`.
 - **Auth:** invite-only. First admin via `setup` (needs `setup_key`, only while no users exist). Session token in an
   HttpOnly/Secure/SameSite=Lax cookie scoped to the app path; DB stores only its SHA-256. Mutating routes need the
   per-session CSRF token in `X-CSRF-Token`; JSON routes reject non-JSON bodies. Login/register/setup are rate limited.
@@ -110,12 +127,24 @@ missing JSZip, mobile layout, keyboard, edge taps, immersive mode, mobile TOC dr
   (own library, approved catalog entry, or admin). Unreferenced books are garbage-collected.
 - **Progress:** last write wins by client timestamp (ms); older writes are ignored.
 - **Catalog:** user submissions are `pending` until an admin approves; admin submissions are approved directly.
-- **Metadata:** `book-meta` lets the uploader or an admin correct title/author/cover.
+  `catalog-submit` takes optional `category` (≤80, trimmed). `catalog`, `catalog-pending` and `catalog-all` return
+  `category` per book. Admin `catalog-update` updates only the keys present among `description`, `title`, `author`,
+  `category`, `publisher`, `published`, `language`; all are validated before anything is written.
+- **Book fields:** every book object (`book_out`) has `id, sha256, size, title, author, language, publisher, published,
+  has_cover`. `upload-init` accepts optional `language` (≤20), `publisher` (≤300), `published` (≤40); the same keys
+  sent to `upload-complete` override them (used only when the file is new, not on dedupe).
+- **Metadata:** `book-meta` lets the uploader or an admin correct title/author/language/publisher/published/cover;
+  each field changes only when its key is present (`title`, if present, must be non-empty).
+- **Validation:** optional string fields that are present but not a string/number → 400 `bad_<field>`; over the
+  length limit → 400 `too_long_<field>`.
 
 ## 10. Client sync (v7)
 - `me` on start (skipped offline); when logged in, `sync()` runs on login, start, import, visibility and reconnect.
 - Order: drop local books removed from the account → hash local books → upload missing ones → download missing
   ones (with cover) → reconcile progress both ways by timestamp → push corrected metadata / adopt server metadata.
+  v8.1: `upload-init`/`upload-complete` and `book-meta` carry `publisher`/`published`/`language` when known; on sync
+  the client fills fields the server lacks (once, `metaExtPush`) and adopts non-empty server values. Books imported
+  before v8.1 are re-read once (`metaExt`) to pick these fields up.
 - Progress is pushed 4 s after the last page turn. Deleting a synced book removes it from the account (confirmation).
 - Without an account or offline, everything works locally exactly as before.
 - Share target (`share-target`, POST multipart) is handled by the Service Worker: files are parked in the

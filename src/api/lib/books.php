@@ -19,8 +19,23 @@ function book_out(array $b): array {
     return [
         'id' => (int)$b['id'], 'sha256' => $b['sha256'], 'size' => (int)$b['size'],
         'title' => $b['title'], 'author' => $b['author'], 'language' => $b['language'],
+        'publisher' => (string)($b['publisher'] ?? ''), 'published' => (string)($b['published'] ?? ''),
         'has_cover' => (int)$b['has_cover'] === 1,
     ];
+}
+/** Optional EPUB metadata fields shared by upload, book-meta and catalog-update: key => max length. */
+function book_meta_fields(): array { return ['language' => 20, 'publisher' => 300, 'published' => 40]; }
+/** Present optional metadata fields from a request body (absent keys are left out). */
+function book_meta_from(array $d): array {
+    $out = [];
+    foreach (book_meta_fields() as $k => $max) { $v = opt_str_param($d, $k, $max); if ($v !== null) $out[$k] = $v; }
+    return $out;
+}
+/** UPDATE books with only the given columns (keys come from book_meta_fields / fixed names, never from input). */
+function update_book_cols(int $bookId, array $cols): void {
+    if (!$cols) return;
+    $set = implode(', ', array_map(fn($k) => "$k = ?", array_keys($cols)));
+    q("UPDATE books SET $set WHERE id = ?", array_merge(array_values($cols), [$bookId]));
 }
 function user_has_book(int $uid, int $bookId): bool {
     return (bool)one('SELECT 1 AS x FROM user_books WHERE user_id = ? AND book_id = ?', [$uid, $bookId]);
@@ -183,8 +198,9 @@ function handle_books_route(string $route): bool {
             $id = bin2hex(random_bytes(16));
             $meta = [
                 'title' => str_param($d, 'title', 500), 'author' => str_param($d, 'author', 300, false),
-                'language' => str_param($d, 'language', 20, false),
+                'language' => '', 'publisher' => '', 'published' => '',
             ];
+            $meta = array_merge($meta, book_meta_from($d));
             q('INSERT INTO uploads (id, user_id, sha256, size, meta, received, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)',
               [$id, $s['id'], $sha, $size, json_encode($meta, JSON_UNESCAPED_UNICODE), time()]);
             touch(upload_dir() . "/$id.part");
@@ -211,6 +227,7 @@ function handle_books_route(string $route): bool {
             $s = require_user(true);
             $d = body_json();
             $id = str_param($d, 'upload_id', 32);
+            $late = book_meta_from($d); // optional metadata may also arrive here; it overrides upload-init values
             $u = one('SELECT * FROM uploads WHERE id = ? AND user_id = ?', [$id, $s['id']]);
             if (!$u) fail(404, 'no_upload', 'Upload not found.');
             $part = upload_dir() . "/$id.part";
@@ -222,10 +239,11 @@ function handle_books_route(string $route): bool {
             try { validate_epub($part); } catch (ApiError $e) { $finish(); throw $e; }
             $existing = one('SELECT * FROM books WHERE sha256 = ?', [$u['sha256']]);
             if (!$existing) {
-                $meta = json_decode($u['meta'], true) ?: [];
+                $meta = array_merge(json_decode($u['meta'], true) ?: [], $late);
                 if (!rename($part, book_path($u['sha256']))) { $finish(); fail(500, 'storage', 'Could not store the file.'); }
-                q('INSERT INTO books (sha256, size, title, author, language, has_cover, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)',
-                  [$u['sha256'], $u['size'], $meta['title'] ?? 'بدون عنوان', $meta['author'] ?? '', $meta['language'] ?? '', $s['id'], time()]);
+                q('INSERT INTO books (sha256, size, title, author, language, publisher, published, has_cover, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
+                  [$u['sha256'], $u['size'], $meta['title'] ?? 'بدون عنوان', $meta['author'] ?? '', $meta['language'] ?? '',
+                   $meta['publisher'] ?? '', $meta['published'] ?? '', $s['id'], time()]);
                 $existing = one('SELECT * FROM books WHERE sha256 = ?', [$u['sha256']]);
                 $coverFile = upload_dir() . "/$id.cover";
                 if (is_file($coverFile) && store_cover((int)$existing['id'], (string)file_get_contents($coverFile))) {
@@ -289,7 +307,8 @@ function handle_books_route(string $route): bool {
             json_out(200, ['progress' => ['cfi' => $now['cfi'], 'percentage' => (int)$now['percentage'], 'updated_at' => (int)$now['updated_at']]]);
 
         case 'book-meta':
-            // Correct title/author/cover. Allowed for the uploader (if the book is in their library) and admins.
+            // Correct title/author/language/publisher/published/cover. Allowed for the uploader (if the book is in their
+            // library) and admins. Each field is updated only when its key is present; title, when present, must be non-empty.
             method('POST');
             $s = require_user(true);
             $d = body_json();
@@ -297,9 +316,10 @@ function handle_books_route(string $route): bool {
             $b = one('SELECT * FROM books WHERE id = ?', [$bookId]);
             $owner = $b && user_has_book((int)$s['id'], $bookId) && (int)$b['uploaded_by'] === (int)$s['id'];
             if (!$b || !($owner || $s['role'] === 'admin')) fail(404, 'not_found', 'Book not found.');
-            $title = str_param($d, 'title', 500);
-            $author = str_param($d, 'author', 300, false);
-            q('UPDATE books SET title = ?, author = ? WHERE id = ?', [$title, $author, $bookId]);
+            $cols = book_meta_from($d);
+            if (array_key_exists('title', $d)) $cols['title'] = str_param($d, 'title', 500);
+            if (array_key_exists('author', $d)) $cols['author'] = (string)opt_str_param($d, 'author', 300);
+            update_book_cols($bookId, $cols);
             if (!empty($d['cover']) && is_string($d['cover']) && store_cover($bookId, $d['cover'])) q('UPDATE books SET has_cover = 1 WHERE id = ?', [$bookId]);
             json_out(200, ['book' => book_out(one('SELECT * FROM books WHERE id = ?', [$bookId]))]);
 
@@ -348,12 +368,12 @@ function handle_books_route(string $route): bool {
         case 'catalog':
             method('GET');
             $s = require_user();
-            $rows = all("SELECT b.*, c.description, c.submitted_at, u.display_name AS submitter,
+            $rows = all("SELECT b.*, c.description, c.category, c.submitted_at, u.display_name AS submitter,
                            (SELECT 1 FROM user_books ub WHERE ub.user_id = ? AND ub.book_id = b.id) AS in_library
                          FROM catalog c JOIN books b ON b.id = c.book_id LEFT JOIN users u ON u.id = c.submitted_by
                          WHERE c.status = 'approved' ORDER BY c.reviewed_at DESC, c.submitted_at DESC", [$s['id']]);
             json_out(200, ['books' => array_map(fn($r) => book_out($r) + [
-                'description' => $r['description'], 'submitter' => $r['submitter'], 'in_library' => (bool)$r['in_library'],
+                'description' => $r['description'], 'category' => (string)$r['category'], 'submitter' => $r['submitter'], 'in_library' => (bool)$r['in_library'],
             ], $rows)]);
 
         case 'catalog-submit':
@@ -366,19 +386,21 @@ function handle_books_route(string $route): bool {
             if ($cur && $cur['status'] !== 'rejected') json_out(200, ['status' => $cur['status']]);
             $auto = $s['role'] === 'admin' || !catalog_requires_approval();
             $status = $auto ? 'approved' : 'pending';
+            $desc = str_param($d, 'description', 2000, false);
+            $category = (string)opt_str_param($d, 'category', 80);
             q('DELETE FROM catalog WHERE book_id = ?', [$bookId]);
-            q('INSERT INTO catalog (book_id, status, description, submitted_by, submitted_at, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-              [$bookId, $status, str_param($d, 'description', 2000, false), $s['id'], time(), $auto ? $s['id'] : null, $auto ? time() : null]);
+            q('INSERT INTO catalog (book_id, status, description, category, submitted_by, submitted_at, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+              [$bookId, $status, $desc, $category, $s['id'], time(), $auto ? $s['id'] : null, $auto ? time() : null]);
             json_out(201, ['status' => $status]);
 
         case 'catalog-pending':
             method('GET');
             require_admin();
-            $rows = all("SELECT b.*, c.description, c.submitted_at, u.display_name AS submitter
+            $rows = all("SELECT b.*, c.description, c.category, c.submitted_at, u.display_name AS submitter
                          FROM catalog c JOIN books b ON b.id = c.book_id LEFT JOIN users u ON u.id = c.submitted_by
                          WHERE c.status = 'pending' ORDER BY c.submitted_at", []);
             json_out(200, ['books' => array_map(fn($r) => book_out($r) + [
-                'description' => $r['description'], 'submitter' => $r['submitter'], 'submitted_at' => (int)$r['submitted_at'],
+                'description' => $r['description'], 'category' => (string)$r['category'], 'submitter' => $r['submitter'], 'submitted_at' => (int)$r['submitted_at'],
             ], $rows)]);
 
         case 'catalog-review':

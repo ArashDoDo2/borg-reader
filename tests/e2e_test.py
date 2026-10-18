@@ -90,6 +90,25 @@ async def open_sample(pg, url, sample):
     await pg.set_input_files("#epubInput", sample); await pg.wait_for_timeout(1800)
     await pg.click(".book-card"); await pg.wait_for_timeout(2500)
 
+def make_epub(path, title, ident, author, publisher="", date=""):
+    """A small two-chapter Persian EPUB like the fixtures, with optional publisher and date metadata."""
+    import zipfile
+    extra = (f"<dc:publisher>{publisher}</dc:publisher>" if publisher else "") + (f"<dc:date>{date}</dc:date>" if date else "")
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        D = zipfile.ZIP_DEFLATED
+        z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>', D)
+        z.writestr("OEBPS/content.opf", f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">{ident}</dc:identifier><dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><dc:language>fa</dc:language>{extra}<meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine page-progression-direction="rtl"><itemref idref="c1"/><itemref idref="c2"/></spine></package>', D)
+        z.writestr("OEBPS/nav.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>فهرست</title></head><body><nav epub:type="toc"><ol><li><a href="c1.xhtml">فصل اول</a></li><li><a href="c2.xhtml">فصل دوم</a></li></ol></nav></body></html>', D)
+        for i, n in ((1, "اول"), (2, "دوم")):
+            p = "".join(f"<p>این پاراگراف شماره {k} از فصل {n} در کتاب {title} است.</p>" for k in range(40))
+            z.writestr(f"OEBPS/c{i}.xhtml", f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="fa" dir="rtl"><head><title>فصل {n}</title></head><body><h1>فصل {n}</h1>{p}</body></html>', D)
+    return str(path)
+
+IDB_JS = """([store]) => new Promise(res => { const r = indexedDB.open('ketabkhane-db'); r.onsuccess = () => {
+    const q = r.result.transaction(store).objectStore(store).getAll();
+    q.onsuccess = () => { res(q.result.map(x => { const o = { ...x }; delete o.file; delete o.fileBuffer; delete o.cover; delete o.locations; return o; })); r.result.close(); }; }; })"""
+
 async def swipe(cdp, x0, x1, y):
     await cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": x0, "y": y}]})
     for i in range(1, 6):
@@ -551,8 +570,8 @@ async def run(url):
         check("catalog search filters", await E.locator("#catalogGrid .book-card").count() == 0)
         await E.fill("#catalogSearch", "آزمایشی"); await E.wait_for_timeout(200)
         await E.click("#catalogGrid .book-card"); await E.wait_for_timeout(400)
-        check("catalog details dialog", await E.is_visible("#bookDialog") and await E.inner_text("#bookDialogTitle") == "کتاب آزمایشی")
-        await E.click("#bookDialogClose")
+        check("catalog book page opens", await E.is_visible("#viewBook") and await E.inner_text("#detailTitle") == "کتاب آزمایشی")
+        await E.click("#detailBack"); await E.wait_for_timeout(300)
         # Admin panel
         E.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
         await E.click('[data-view="admin"]'); await E.wait_for_timeout(1500)
@@ -750,6 +769,155 @@ async def run(url):
         bg = await pg.evaluate("getComputedStyle(document.querySelector('#viewer iframe').contentDocument.body).backgroundColor")
         check("auto theme uses dark when the system is dark", bg == "rgb(31, 38, 35)", bg)
         await ctx.close()
+
+        # 15. v8.1: catalog book page, online preview, author/category filters, add with shelves, EPUB publisher metadata
+        import tempfile
+        tmpd = Path(tempfile.mkdtemp(prefix="borg-e2e-epub-"))
+        third = make_epub(tmpd / "third.epub", "کتاب سوم", "test-3", "نویسندهٔ دیگر", "نشر آزمایش", "2019-05-01T00:00:00Z")
+        fourth = make_epub(tmpd / "fourth.epub", "کتاب چهارم", "test-4", "نویسندهٔ دیگر")
+        long_desc = "این توضیح بلند برای آزمایش «بیشتر بخوانید» نوشته شده است. " * 25
+        ext, errsH = [], []
+        ctxH, H = await new_ctx(b, url, ext, errsH)
+        answers = []
+        H.on("dialog", lambda d: asyncio.ensure_future(d.accept(answers.pop(0) if answers else "")))
+        await H.goto(url); await H.wait_for_timeout(800)
+        await auth(H, "login", email="admin@example.com", password="password1"); await wait_synced(H)
+        await H.set_input_files("#epubInput", third); await H.wait_for_timeout(1500)
+        await H.set_input_files("#epubInput", fourth); await H.wait_for_timeout(1500)
+        local = {x["title"]: x for x in await H.evaluate(IDB_JS, ["books"])}
+        t3 = local.get("کتاب سوم", {})
+        check("EPUB publisher/date/language kept on the local book", t3.get("publisher") == "نشر آزمایش" and t3.get("published") == "2019-05-01" and t3.get("language") == "fa", str({k: t3.get(k) for k in ("publisher", "published", "language")}))
+        try:
+            await poll(lambda: _count_gt(H, '#bookGrid .book-card:has-text("کتاب سوم") .share-book, #bookGrid .book-card:has-text("کتاب چهارم") .share-book', 1), 20000)
+            uploaded = True
+        except TimeoutError:
+            uploaded = False
+        check("new books uploaded", uploaded)
+        answers[:] = [long_desc, "شعر"]
+        await H.click('#bookGrid .book-card:has-text("کتاب سوم") .share-book'); await H.wait_for_timeout(1200)
+        answers[:] = ["", ""]
+        await H.click('#bookGrid .book-card:has-text("کتاب چهارم") .share-book'); await H.wait_for_timeout(1200)
+        check("books shared to the catalog with a category", "عمومی" in await H.inner_text('#bookGrid .book-card:has-text("کتاب سوم") .book-badge'))
+        await H.click('[data-view="admin"]'); await H.wait_for_timeout(1500)
+        await H.click('#catalogAdminList .admin-item:has-text("کتاب آزمایشی") [data-cat-edit]'); await H.wait_for_timeout(500)
+        check("admin catalog editor opens with the current values", await H.is_visible("#catalogEditDialog") and await H.input_value('#catalogEditForm [name="title"]') == "کتاب آزمایشی")
+        await H.fill('#catalogEditForm [name="category"]', "رمان")
+        await H.fill('#catalogEditForm [name="publisher"]', "نشر تست")
+        await H.fill('#catalogEditForm [name="published"]', "1402")
+        await H.click("#catalogEditSave"); await H.wait_for_timeout(1500)
+        check("admin edit saves category/publisher/date", not await H.is_visible("#catalogEditDialog")
+              and await H.locator('#catalogAdminList .admin-item:has-text("کتاب آزمایشی") .cat-chip:has-text("رمان")').count() == 1)
+        check("v8.1 admin/upload: no JS errors", len(errsH) == 0, str(errsH[:3]))
+        await ctxH.close()
+
+        # Invited user browses the catalog (their library already holds "کتاب آزمایشی" from scenario 10)
+        ext, errsI = [], []
+        ctxI, I = await new_ctx(b, url, ext, errsI)
+        await I.goto(url); await I.wait_for_timeout(800)
+        await auth(I, "login", email="friend@example.com", password="password2"); await wait_synced(I)
+        await I.wait_for_timeout(500)
+        lib_before = await I.locator("#bookGrid .book-card").count()
+        await I.click('[data-view="catalog"]'); await I.wait_for_timeout(1500)
+        check("catalog lists all shared books", await I.locator("#catalogGrid .book-card").count() == 3)
+        chips = await I.locator("#catalogFilters [data-cat-filter]").all_inner_texts()
+        check("category chips built from the catalog", chips == ["همهٔ دسته‌ها", "رمان", "شعر"], str(chips))
+        await I.click('#catalogFilters [data-cat-filter="شعر"]'); await I.wait_for_timeout(300)
+        titles = await I.locator("#catalogGrid .book-card h3").all_inner_texts()
+        check("category chip filters the catalog", titles == ["کتاب سوم"], str(titles))
+        await I.click('#catalogFilters [data-cat-filter=""]'); await I.wait_for_timeout(300)
+        check("'all categories' shows everything again", await I.locator("#catalogGrid .book-card").count() == 3)
+        # Book page
+        await I.click('#catalogGrid .book-card:has-text("کتاب سوم")'); await I.wait_for_timeout(800)
+        meta = await I.inner_text("#detailMeta") if await I.is_visible("#detailMeta") else ""
+        check("book page opens with title and author", await I.is_visible("#viewBook") and not await I.is_visible("#viewCatalog")
+              and await I.inner_text("#detailTitle") == "کتاب سوم" and await I.inner_text("#detailAuthor") == "نویسندهٔ دیگر")
+        check("book page metadata table", all(x in meta for x in ("شعر", "فارسی", "نشر آزمایش", "۲۰۱۹-۰۵-۰۱", "کیلوبایت", "مدیر بُرگ")), meta.replace("\n", " | "))
+        crumbs = await I.inner_text("#detailCrumbs")
+        check("breadcrumb: catalog / category / title", "کتابخانهٔ عمومی" in crumbs and "شعر" in crumbs and "کتاب سوم" in crumbs, crumbs)
+        book3 = I.url.split("#")[-1]
+        check("book page is deep-linkable", book3.startswith("catalog/book/"), I.url)
+        h0 = (await I.locator("#detailDesc").bounding_box())["height"]
+        check("long description collapsed with 'read more'", await I.is_visible("#detailMore") and "بیشتر بخوانید" in await I.inner_text("#detailMore"))
+        await I.click("#detailMore"); await I.wait_for_timeout(200)
+        h1 = (await I.locator("#detailDesc").bounding_box())["height"]
+        check("'read more' expands the description", h1 > h0 + 20, f"{h0:.0f}->{h1:.0f}")
+        related = await I.locator("#detailRelated .book-card h3").all_inner_texts()
+        check("similar books: same author first", await I.is_visible("#detailRelatedSection") and related[:1] == ["کتاب چهارم"], str(related))
+        # Online reading without adding
+        await I.click("#detailRead")
+        try:
+            await poll(lambda: visible_text(I), 15000); opened = True
+        except TimeoutError:
+            opened = False
+        check("read online opens the book", opened and (await visible_text(I) or "").startswith("فصل اول") and await I.is_visible("#previewBanner"), await visible_text(I))
+        await I.click("#nextPage"); await I.wait_for_timeout(600)
+        await I.click("#bookmarkButton"); await I.wait_for_timeout(300)
+        check("preview: bookmarks are not saved", "کتابخانه" in await I.inner_text("#toast") and len(await I.evaluate(IDB_JS, ["annotations"])) == 0)
+        await I.click("#closeReader"); await I.wait_for_timeout(600)
+        books = await I.evaluate(IDB_JS, ["books"]); progress = await I.evaluate(IDB_JS, ["progress"])
+        check("closing the preview returns to the book page", await I.is_visible("#viewBook") and not await I.is_visible("#reader"))
+        check("read online does not add to the library or save progress",
+              len(books) == lib_before and not any(str(p_.get("bookId", "")).startswith("preview") for p_ in progress), f"{len(books)} books, {len(progress)} progress")
+        # Author filter
+        await I.click("#detailAuthor"); await I.wait_for_timeout(500)
+        titles = sorted(await I.locator("#catalogGrid .book-card h3").all_inner_texts())
+        check("author link filters the catalog by author", await I.is_visible("#viewCatalog") and titles == ["کتاب سوم", "کتاب چهارم"]
+              and "نویسندهٔ دیگر" in await I.inner_text("#catalogFilters [data-clear-author]"), str(titles))
+        await I.click("#catalogFilters [data-clear-author]"); await I.wait_for_timeout(300)
+        check("author filter chip is removable", await I.locator("#catalogGrid .book-card").count() == 3 and await I.locator("#catalogFilters [data-clear-author]").count() == 0)
+        # Add with a shelf
+        await I.click('#catalogGrid .book-card:has-text("کتاب چهارم")'); await I.wait_for_timeout(600)
+        await I.click("#detailAddMore"); await I.wait_for_timeout(300)
+        check("add menu opens", await I.is_visible("#detailAddMenu"))
+        await I.fill("#detailNewShelf", "شعرها"); await I.click("#detailNewShelfAdd"); await I.wait_for_timeout(300)
+        check("new shelf created in the add menu and selected", await I.locator("#detailShelfChecks input:checked").count() == 1)
+        await I.click("#detailAddConfirm")
+        try:
+            await poll(lambda: I.is_visible("#detailInLibrary"), 20000); added = True
+        except TimeoutError:
+            added = False
+        check("book page shows 'in your library' after adding", added)
+        # Add from inside the preview
+        await I.click('[data-view="catalog"]'); await I.wait_for_timeout(800)
+        await I.click('#catalogGrid .book-card:has-text("کتاب سوم")'); await I.wait_for_timeout(600)
+        await I.click("#detailRead")
+        await poll(lambda: visible_text(I), 15000)
+        await I.click("#previewAdd")
+        try:
+            await poll(lambda: I.is_hidden("#previewBanner"), 20000); padded = True
+        except TimeoutError:
+            padded = False
+        check("'add to library' from the preview", padded)
+        await I.click("#nextPage"); await I.wait_for_timeout(1200)
+        await I.click("#closeReader"); await I.wait_for_timeout(600)
+        await I.click('[data-view="mine"]'); await I.wait_for_timeout(600)
+        titles = await I.locator("#bookGrid .book-card h3").all_inner_texts()
+        check("added books are in the library", "کتاب چهارم" in titles and "کتاب سوم" in titles and len(titles) == lib_before + 2, str(titles))
+        await I.click('#libraryFilters button:has-text("شعرها")'); await I.wait_for_timeout(300)
+        titles = await I.locator("#bookGrid .book-card h3").all_inner_texts()
+        check("book added with a shelf is on that shelf", titles == ["کتاب چهارم"], str(titles))
+        await I.click('[data-filter="all"]')
+        progress = await I.evaluate(IDB_JS, ["progress"])
+        b3 = next((x for x in await I.evaluate(IDB_JS, ["books"]) if x["title"] == "کتاب سوم"), {})
+        check("a book added from the preview keeps its reading position", any(p_.get("bookId") == b3.get("id") and p_.get("cfi") for p_ in progress))
+        # Deep link and back
+        await I.goto(url + "#" + book3); await I.wait_for_timeout(2000)
+        try:
+            await poll(lambda: _contains(I, "#detailTitle", "کتاب سوم"), 10000); deep = True
+        except TimeoutError:
+            deep = False
+        check("deep link opens the book page", deep and await I.is_visible("#viewBook"))
+        await I.click("#detailBack"); await I.wait_for_timeout(800)
+        check("back goes to the catalog", await I.is_visible("#viewCatalog") and not await I.is_visible("#viewBook"))
+        # Phone width: the page fits the screen
+        await I.set_viewport_size({"width": 390, "height": 844})
+        await I.click('#catalogGrid .book-card:has-text("کتاب سوم")'); await I.wait_for_timeout(600)
+        sw = await I.evaluate("document.documentElement.scrollWidth")
+        cb = await I.locator("#detailCover").bounding_box()
+        check("mobile: book page fits the screen", sw <= 391 and cb["width"] > 100 and cb["x"] >= 0, f"scrollWidth={sw}")
+        check("v8.1 catalog: no JS errors", len(errsI) == 0, str(errsI[:3]))
+        await ctxI.close()
+        import shutil; shutil.rmtree(tmpd, ignore_errors=True)
         await b.close()
 
 def main():
