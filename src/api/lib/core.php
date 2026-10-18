@@ -91,6 +91,15 @@ function migrations(): array {
             "CREATE TABLE uploads (id CHAR(32) PRIMARY KEY, user_id INTEGER NOT NULL, sha256 CHAR(64) NOT NULL, size BIGINT NOT NULL,
                meta TEXT NOT NULL, received BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL)",
         ],
+        2 => [
+            "CREATE TABLE annotations (uid VARCHAR(40) NOT NULL, user_id INTEGER NOT NULL, book_id INTEGER NOT NULL,
+               type VARCHAR(10) NOT NULL, cfi VARCHAR(1000) NOT NULL, quote VARCHAR(2000) NOT NULL DEFAULT '', note TEXT,
+               color VARCHAR(20) NOT NULL DEFAULT '', created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL,
+               deleted INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, uid),
+               FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE)",
+            "CREATE INDEX annotations_user_updated ON annotations (user_id, updated_at)",
+            "CREATE TABLE settings (name VARCHAR(64) PRIMARY KEY, value VARCHAR(500) NOT NULL)",
+        ],
     ];
 }
 function migrate(PDO $pdo): void {
@@ -210,6 +219,17 @@ function validate_password(string $p): string {
     if (strlen($p) > 200) fail(400, 'bad_password', 'Password too long.');
     return $p;
 }
+
+// ---------- Settings (DB overrides config defaults) ----------
+function setting(string $name, $default) {
+    $r = one('SELECT value FROM settings WHERE name = ?', [$name]);
+    return $r === null ? $default : json_decode($r['value'], true);
+}
+function set_setting(string $name, $value): void {
+    q('DELETE FROM settings WHERE name = ?', [$name]);
+    q('INSERT INTO settings (name, value) VALUES (?, ?)', [$name, json_encode($value)]);
+}
+function catalog_requires_approval(): bool { return (bool)setting('catalog_requires_approval', (bool)config()['catalog_requires_approval']); }
 
 // ---------- Storage ----------
 function storage(string $sub = ''): string {

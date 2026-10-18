@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="7.1.0">
+  <meta name="app-version" content="7.2.0">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="assets/icon-192.png">
@@ -78,12 +78,18 @@
       </div>
       <div id="viewCatalog" class="view" hidden>
         <div class="section-heading"><div><p class="eyebrow">برای همه</p><h2>کتابخانهٔ عمومی</h2></div>
-          <p class="muted catalog-hint">برای پیشنهاد یک کتاب، در «کتابخانهٔ من» دکمهٔ ⇪ روی جلد آن را بزن.</p></div>
+          <div class="library-controls"><label class="search-box"><span>⌕</span><input id="catalogSearch" type="search" placeholder="جست‌وجو در کتابخانهٔ عمومی…" autocomplete="off"></label></div></div>
+        <p class="muted catalog-hint">برای پیشنهاد یک کتاب، در «کتابخانهٔ من» دکمهٔ ⇪ روی جلد آن را بزن.</p>
         <div id="catalogGrid" class="book-grid"></div>
         <p id="catalogEmpty" class="muted" hidden>هنوز کتابی در کتابخانهٔ عمومی نیست.</p>
       </div>
       <div id="viewAdmin" class="view" hidden>
+        <div id="adminStats" class="admin-stats"></div>
+        <div class="admin-block"><h3>تنظیمات</h3>
+          <label class="admin-toggle"><input id="settingApproval" type="checkbox"> کتاب‌هایی که کاربران پیشنهاد می‌دهند، قبل از انتشار در کتابخانهٔ عمومی تأیید شوند</label></div>
         <div class="admin-block"><h3>کتاب‌های در انتظار تأیید</h3><div id="pendingList" class="admin-list"></div></div>
+        <div class="admin-block"><h3>کتابخانهٔ عمومی</h3><div id="catalogAdminList" class="admin-list"></div></div>
+        <div class="admin-block"><h3>همهٔ کتاب‌های روی سرور</h3><div id="booksAdminList" class="admin-list"></div></div>
         <div class="admin-block"><h3>دعوت‌نامه‌ها</h3>
           <div class="admin-row"><input id="inviteNote" class="admin-input" placeholder="برای چه کسی؟ (اختیاری)" maxlength="120"><button id="createInvite" class="secondary-button" type="button">ساخت کد دعوت</button></div>
           <p id="inviteResult" class="invite-result" aria-live="polite"></p>
@@ -136,8 +142,15 @@
     <div class="reader-layout">
       <div id="tocBackdrop" class="toc-backdrop" aria-hidden="true"></div>
       <aside id="tocPanel" class="toc-panel" aria-label="فهرست کتاب" tabindex="-1">
-        <h3>فهرست کتاب</h3>
+        <div class="segmented panel-tabs" role="group" aria-label="بخش‌های پنل">
+          <button type="button" data-ptab="toc" aria-pressed="true">فهرست</button>
+          <button type="button" data-ptab="notes" aria-pressed="false">نشانک و یادداشت</button>
+        </div>
         <div id="tocList" class="toc-list"><p class="muted">در حال بارگذاری…</p></div>
+        <div id="notesView" hidden>
+          <div id="notesList" class="notes-list"></div>
+          <button id="exportNotes" class="text-button export-notes" type="button">⤓ خروجی یادداشت‌ها (Markdown)</button>
+        </div>
         <div class="reader-progress"><div class="progress-track"><span id="progressBar"></span></div><small id="progressText">۰٪</small></div>
       </aside>
       <div class="reading-area">
@@ -147,7 +160,20 @@
           <button id="nextPage" class="nav-button" type="button">بعدی ←</button>
         </div>
         <div id="viewer" class="viewer"></div>
-        <div class="reader-bottom"><span>محل مطالعه در همین دستگاه ذخیره می‌شود.</span><button id="bookmarkButton" class="text-button" type="button">☆ نشانک</button></div>
+        <div id="selectionBar" class="selection-bar" role="toolbar" aria-label="ابزار متن انتخاب‌شده" hidden>
+          <span class="sel-new">
+            <button type="button" class="hl-swatch" data-hl="yellow" aria-label="هایلایت زرد"></button>
+            <button type="button" class="hl-swatch" data-hl="green" aria-label="هایلایت سبز"></button>
+            <button type="button" class="hl-swatch" data-hl="pink" aria-label="هایلایت صورتی"></button>
+            <button type="button" data-sel="note">✎ یادداشت</button>
+          </span>
+          <span class="sel-edit" hidden>
+            <button type="button" data-sel="edit">✎ ویرایش یادداشت</button>
+            <button type="button" data-sel="delete">حذف هایلایت</button>
+          </span>
+          <button type="button" data-sel="close" aria-label="بستن">×</button>
+        </div>
+        <div class="reader-bottom"><span>برای هایلایت یا یادداشت، متن را انتخاب کن.</span><button id="bookmarkButton" class="text-button" type="button">☆ نشانک</button></div>
       </div>
     </div>
   </section>
@@ -178,9 +204,22 @@
       <div class="dialog-actions"><button id="syncNow" class="secondary-button" type="button">همگام‌سازی الان</button><button id="logoutButton" class="secondary-button" type="button">خروج</button></div>
     </div>
   </dialog>
+  <dialog id="bookDialog" class="account-dialog book-dialog" aria-labelledby="bookDialogTitle">
+    <button id="bookDialogClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <div class="book-dialog-body">
+      <div id="bookDialogCover" class="book-cover-thumb book-dialog-cover"></div>
+      <div>
+        <h2 id="bookDialogTitle"></h2>
+        <p id="bookDialogAuthor" class="muted"></p>
+        <p id="bookDialogMeta" class="muted small"></p>
+      </div>
+    </div>
+    <p id="bookDialogDesc" class="book-dialog-desc"></p>
+    <div id="bookDialogActions" class="dialog-actions"></div>
+  </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۷.۱.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۷.۲.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

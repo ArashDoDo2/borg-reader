@@ -4,6 +4,7 @@ declare(strict_types=1);
 define('BORG_API', true);
 require __DIR__ . '/lib/core.php';
 require __DIR__ . '/lib/books.php';
+require __DIR__ . '/lib/admin.php';
 
 $route = is_string($_GET['r'] ?? null) ? $_GET['r'] : '';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -131,19 +132,13 @@ try {
             method('GET');
             require_admin();
             json_out(200, ['invites' => array_map(fn($r) => [
-                'note' => $r['note'], 'created_at' => (int)$r['created_at'], 'expires_at' => (int)$r['expires_at'],
+                'id' => $r['code_hash'], 'note' => $r['note'], 'created_at' => (int)$r['created_at'], 'expires_at' => (int)$r['expires_at'],
                 'used_by' => $r['used_name'], 'used_at' => $r['used_at'] ? (int)$r['used_at'] : null,
             ], all('SELECT i.*, u.display_name AS used_name FROM invites i LEFT JOIN users u ON u.id = i.used_by ORDER BY i.created_at DESC LIMIT 100'))]);
 
-        case 'users':
-            method('GET');
-            require_admin();
-            json_out(200, ['users' => array_map(fn($r) => public_user($r) + ['created_at' => (int)$r['created_at'], 'books' => (int)$r['books']],
-                all('SELECT u.*, (SELECT COUNT(*) FROM user_books ub WHERE ub.user_id = u.id) AS books FROM users u ORDER BY u.created_at'))]);
-
         // ---------- Books, library, progress, catalog ----------
         default:
-            if (!handle_books_route($route)) fail(404, 'not_found', 'Unknown route.');
+            if (!handle_books_route($route) && !handle_admin_route($route)) fail(404, 'not_found', 'Unknown route.');
     }
 } catch (ApiError $e) {
     json_out($e->status, ['error' => $e->codeName, 'message' => $e->getMessage()]);

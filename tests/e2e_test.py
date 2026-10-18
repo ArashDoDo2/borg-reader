@@ -450,6 +450,107 @@ async def run(url):
         check("shared URL cleaned up", "shared" not in pg.url, pg.url)
         check("search/repair/share: no JS errors", len(errs) == 0, str(errs[:3]))
         await ctx.close()
+
+        # 12. v7.2: IndexedDB migration, highlights/notes/bookmarks, annotation sync, catalog details, admin panel
+        SELECT_JS = """([idx, len]) => { const d = document.querySelector('#viewer iframe').contentDocument;
+            const p = d.querySelectorAll('p')[idx]; const r = d.createRange(); r.setStart(p.firstChild, 0); r.setEnd(p.firstChild, len);
+            const sel = d.getSelection(); sel.removeAllRanges(); sel.addRange(r); d.dispatchEvent(new Event('selectionchange')); }"""
+        ANN_COUNT_JS = """() => new Promise(res => { const r = indexedDB.open('ketabkhane-db'); r.onsuccess = () => {
+            const q = r.result.transaction('annotations').objectStore('annotations').getAll();
+            q.onsuccess = () => res(q.result.filter(a => !a.deleted).map(a => a.type + ':' + (a.note || ''))); }; })"""
+        # Migration: a v1 database with an old-style single bookmark.
+        ext, errs = [], []
+        ctx, pg = await new_ctx(b, url, ext, errs)
+        await pg.goto(url + "offline.html")
+        b64 = base64.b64encode(open(sample, "rb").read()).decode()
+        await pg.evaluate("""b64 => new Promise((res, rej) => {
+            const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+            const r = indexedDB.open('ketabkhane-db', 1);
+            r.onupgradeneeded = () => { r.result.createObjectStore('books', { keyPath: 'id' }); r.result.createObjectStore('progress', { keyPath: 'bookId' }); };
+            r.onsuccess = () => { const tx = r.result.transaction(['books', 'progress'], 'readwrite');
+              tx.objectStore('books').put({ id: 'old-1', title: 'کتاب آزمایشی', author: 'نویسنده تست', cover: null,
+                file: new File([bytes], 'old.epub', { type: 'application/epub+zip' }), size: bytes.length, addedAt: 1 });
+              tx.objectStore('progress').put({ bookId: 'old-1', cfi: 'epubcfi(/6/4!/4/2/1:0)', percentage: 0, updatedAt: 1, bookmark: 'epubcfi(/6/4!/4/2/1:0)' });
+              tx.oncomplete = () => { r.result.close(); res(); }; tx.onerror = () => rej(tx.error); }; })""", b64)
+        await pg.goto(url); await pg.wait_for_timeout(1500)
+        version = await pg.evaluate("new Promise(res => { const r = indexedDB.open('ketabkhane-db'); r.onsuccess = () => { res(r.result.version); r.result.close(); }; })")
+        anns = await pg.evaluate(ANN_COUNT_JS)
+        check("v1 database upgraded to v2 without losing the book", version == 2 and await pg.locator("#bookGrid .book-card").count() == 1, str(version))
+        check("old bookmark migrated into annotations", anns == ["bookmark:"], str(anns))
+        await pg.click("#bookGrid .book-card"); await pg.wait_for_timeout(2500)
+        await pg.click('[data-ptab="notes"]'); await pg.wait_for_timeout(300)
+        check("migrated bookmark listed in the notes panel", await pg.locator("#notesList .note-item").count() == 1)
+        # Highlight
+        await pg.evaluate(SELECT_JS, [0, 12]); await pg.wait_for_timeout(800)
+        check("selecting text shows the highlight toolbar", await pg.is_visible("#selectionBar"))
+        await pg.click('[data-hl="yellow"]'); await pg.wait_for_timeout(600)
+        check("highlight drawn in the book", await pg.locator("#viewer svg g.borg-hl, #viewer svg .borg-hl").count() >= 1)
+        anns = await pg.evaluate(ANN_COUNT_JS)
+        check("highlight saved", sorted(anns) == ["bookmark:", "highlight:"], str(anns))
+        # Highlight with a note (prompt)
+        pg.once("dialog", lambda d: asyncio.ensure_future(d.accept("یادداشت تست")))
+        await pg.evaluate(SELECT_JS, [1, 12]); await pg.wait_for_timeout(800)
+        await pg.click('[data-sel="note"]'); await pg.wait_for_timeout(800)
+        anns = await pg.evaluate(ANN_COUNT_JS)
+        check("highlight with note saved", "highlight:یادداشت تست" in anns, str(anns))
+        check("note shown in the notes panel", "یادداشت تست" in await pg.inner_text("#notesList"))
+        # Bookmark toggle on this page
+        before = len(await pg.evaluate(ANN_COUNT_JS))
+        await pg.click("#bookmarkButton"); await pg.wait_for_timeout(500)
+        mid = await pg.evaluate(ANN_COUNT_JS)
+        check("bookmark button toggles off the existing bookmark on this page", len(mid) == before - 1 and "ذخیره" not in await pg.inner_text("#bookmarkButton"), str(mid))
+        await pg.click("#bookmarkButton"); await pg.wait_for_timeout(500)
+        check("bookmark button adds it back", len(await pg.evaluate(ANN_COUNT_JS)) == before and "ذخیره" in await pg.inner_text("#bookmarkButton"))
+        await pg.click("#notesList .note-del >> nth=0"); await pg.wait_for_timeout(400)
+        check("delete from notes panel", len(await pg.evaluate(ANN_COUNT_JS)) == before - 1)
+        check("annotations: no JS errors", len(errs) == 0, str(errs[:3]))
+        await ctx.close()
+
+        # Annotation sync between two devices of the same account (admin from scenario 10)
+        ext, errsD = [], []
+        ctxD, D = await new_ctx(b, url, ext, errsD)
+        await D.goto(url); await D.wait_for_timeout(800)
+        await auth(D, "login", email="admin@example.com", password="password1")
+        await wait_synced(D)
+        await D.click("#bookGrid .book-card"); await D.wait_for_timeout(2500)
+        await D.evaluate(SELECT_JS, [0, 10]); await D.wait_for_timeout(800)
+        await D.click('[data-hl="green"]'); await D.wait_for_timeout(3500)  # debounced push
+        await D.click("#closeReader")
+        ext, errsE = [], []
+        ctxE, E = await new_ctx(b, url, ext, errsE)
+        await E.goto(url); await E.wait_for_timeout(800)
+        await auth(E, "login", email="admin@example.com", password="password1")
+        await wait_synced(E)
+        await E.click("#bookGrid .book-card"); await E.wait_for_timeout(2500)
+        await E.click('[data-ptab="notes"]'); await E.wait_for_timeout(300)
+        check("highlight synced to the other device", await E.locator("#notesList .note-item").count() >= 1)
+        check("synced highlight drawn on the other device", await E.locator("#viewer svg g.borg-hl, #viewer svg .borg-hl").count() >= 1)
+        await E.click("#closeReader")
+        # Catalog search and details
+        await E.click('[data-view="catalog"]'); await E.wait_for_timeout(1200)
+        await E.fill("#catalogSearch", "چیزی-که-نیست"); await E.wait_for_timeout(200)
+        check("catalog search filters", await E.locator("#catalogGrid .book-card").count() == 0)
+        await E.fill("#catalogSearch", "آزمایشی"); await E.wait_for_timeout(200)
+        await E.click("#catalogGrid .book-card"); await E.wait_for_timeout(400)
+        check("catalog details dialog", await E.is_visible("#bookDialog") and await E.inner_text("#bookDialogTitle") == "کتاب آزمایشی")
+        await E.click("#bookDialogClose")
+        # Admin panel
+        E.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
+        await E.click('[data-view="admin"]'); await E.wait_for_timeout(1500)
+        check("admin stats shown", await E.locator("#adminStats .stat").count() == 6)
+        check("approval setting on by default", await E.is_checked("#settingApproval"))
+        await E.click("#settingApproval"); await E.wait_for_timeout(1200)
+        check("approval setting saved", not await E.is_checked("#settingApproval"))
+        await E.click("#settingApproval"); await E.wait_for_timeout(1200)
+        friend = E.locator('#userList .admin-item:has-text("friend@example.com")')
+        await friend.locator('[data-user-act="disable"]').click(); await E.wait_for_timeout(1200)
+        check("admin disables a user", await E.locator('#userList .admin-item:has-text("friend@example.com") .status-chip.off').count() == 1)
+        await E.locator('#userList .admin-item:has-text("friend@example.com") [data-user-act="enable"]').click(); await E.wait_for_timeout(1200)
+        check("admin re-enables the user", await E.locator('#userList .admin-item:has-text("friend@example.com") .status-chip.off').count() == 0)
+        check("whole catalog and server books listed", await E.locator("#catalogAdminList .admin-item").count() >= 1 and await E.locator("#booksAdminList .admin-item").count() >= 1)
+        allerrs = errsD + errsE
+        check("v7.2 sync/admin: no JS errors", len(allerrs) == 0, str(allerrs[:3]))
+        await ctxD.close(); await ctxE.close()
         await b.close()
 
 def main():

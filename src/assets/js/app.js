@@ -6,7 +6,7 @@
   const STORAGE_SUFFIX = location.pathname.includes("/borg-test/") ? "-test" : "";
   const DB_NAME = "ketabkhane-db" + STORAGE_SUFFIX;
   const THEME_KEY = "ketab-theme" + STORAGE_SUFFIX;
-  const DB_VERSION = 1;
+  const DB_VERSION = 2; // v2 (7.2): annotations store; single bookmark migrated into it
   let db, currentBook = null, rendition = null, bookInstance = null, currentProgressKey = null;
   let fontSize = 100, toastTimer;
   const READER_PREFS_KEY = "ketabkhane-reader-preferences" + STORAGE_SUFFIX;
@@ -69,10 +69,29 @@
   function openDB() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open(DB_NAME, DB_VERSION);
-      req.onupgradeneeded = () => {
+      req.onupgradeneeded = (event) => {
         const database = req.result;
+        const tx = req.transaction;
         if (!database.objectStoreNames.contains("books")) database.createObjectStore("books", { keyPath: "id" });
         if (!database.objectStoreNames.contains("progress")) database.createObjectStore("progress", { keyPath: "bookId" });
+        if (!database.objectStoreNames.contains("annotations")) {
+          const ann = database.createObjectStore("annotations", { keyPath: "uid" });
+          ann.createIndex("bookId", "bookId");
+          // 1 -> 2: the old single bookmark per book becomes an annotation (kept in progress too, never deleted).
+          if (event.oldVersion >= 1) {
+            tx.objectStore("progress").openCursor().onsuccess = e => {
+              const cur = e.target.result;
+              if (!cur) return;
+              const p = cur.value;
+              if (p && p.bookmark) {
+                const now = Date.now();
+                ann.put({ uid: `bm-${p.bookId}`.slice(0, 40), bookId: p.bookId, type: "bookmark", cfi: p.bookmark, quote: "", note: "", color: "",
+                          createdAt: p.updatedAt || now, updatedAt: now, deleted: false, dirty: true });
+              }
+              cur.continue();
+            };
+          }
+        }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -123,6 +142,29 @@
       req.onerror = () => reject(req.error);
     });
   }
+  function getAnnotations(bookId) {
+    return new Promise((resolve, reject) => {
+      const req = db.transaction("annotations", "readonly").objectStore("annotations").index("bookId").getAll(bookId);
+      req.onsuccess = () => resolve((req.result || []).filter(a => !a.deleted));
+      req.onerror = () => reject(req.error);
+    });
+  }
+  function getAllAnnotations() {
+    return new Promise((resolve, reject) => {
+      const req = db.transaction("annotations", "readonly").objectStore("annotations").getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  function getAnnotation(uid) {
+    return new Promise((resolve, reject) => {
+      const req = db.transaction("annotations", "readonly").objectStore("annotations").get(uid);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  function newUid() { return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now().toString(16)}-${Math.random().toString(16).slice(2, 10)}`).slice(0, 40); }
+
   function bookCardHtml(b, prog) {
     const [bg, fg] = paletteFor(b.title || b.id);
     const cover = b.cover ? `<img alt="" src="${b.cover}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
@@ -359,12 +401,16 @@
     rendition.on("touchstart", onTouchStart);
     rendition.on("touchend", onTouchEnd);
     rendition.on("click", onReaderClick);
+    rendition.on("selected", onTextSelected);
+    renderedHighlights = new Set();
     rendition.on("relocated", async location => {
       if (token !== openToken || !location?.start) return;
       const pct = percentFor(location.start.cfi, location.start.percentage);
       showProgress(pct);
       $("chapterLabel").textContent = location.start.index != null ? `بخش ${Number(location.start.index + 1).toLocaleString("fa-IR")}` : "مطالعه";
       $("prevPage").disabled = !!location.atStart;
+      if (!pendingSelection) hideSelectionBar();
+      updateBookmarkButton();
       $("nextPage").disabled = !!location.atEnd;
       try { await saveProgress(record.id, location.start.cfi, pct); } catch (err) { console.warn("Saving progress failed:", err); }
     });
@@ -391,7 +437,8 @@
     const toc = nav.toc || [];
     $("tocList").innerHTML = toc.length ? toc.map((item, i) => `<button class="toc-link" type="button" data-href="${esc(item.href)}">${esc(item.label || `بخش ${i+1}`)}</button>`).join("") : '<p class="muted">فهرست فصل‌ها در این EPUB وجود ندارد.</p>';
     $("tocList").querySelectorAll("[data-href]").forEach(btn => btn.addEventListener("click", () => { closeToc(false); if (rendition) rendition.display(btn.dataset.href); }));
-    $("bookmarkButton").textContent = saved?.bookmark ? "★ نشانک ذخیره‌شده" : "☆ نشانک";
+    await renderBookAnnotations();
+    updateBookmarkButton();
     prepareLocations(record, token);
   }
   function getProgress(id) {
@@ -411,6 +458,7 @@
     $("reader").classList.remove("toc-open", "immersive");
     closeSettings(false);
     closeSearch(false);
+    hideSelectionBar(); renderedHighlights = new Set();
     $("bookSearchResults").innerHTML = ""; $("bookSearchStatus").textContent = ""; $("bookSearchInput").value = "";
     $("tocToggle").setAttribute("aria-expanded", "false");
     $("reader").classList.add("hidden");
@@ -497,6 +545,7 @@
   function onReaderClick(e, contents) {
     if (Date.now() < suppressClickUntil) return;
     if (settingsOpen() || searchOpen()) { closeSettings(false); closeSearch(false); return; }
+    if (!$("selectionBar").hidden) { hideSelectionBar(); return; }
     if (e.target && e.target.closest && e.target.closest("a, button, input, select, textarea, audio, video, label")) return;
     try {
       const win = (contents && contents.window) || e.view;
@@ -623,13 +672,144 @@
   $("prevPage").addEventListener("click", () => rendition?.prev());
   $("nextPage").addEventListener("click", () => rendition?.next());
   $("closeReader").addEventListener("click", closeReader);
+  // ======================= Bookmarks, highlights, notes (v7.2) =======================
+  const HL_COLORS = { yellow: "#ffe066", green: "#9be3b4", pink: "#f7a8c8" };
+  let pendingSelection = null, editingUid = null, renderedHighlights = new Set();
+  const cfiCompare = (a, b) => { try { return new ePub.CFI().compare(a, b); } catch (_) { return 0; } };
+  async function bookmarkOnPage() {
+    if (!rendition || !currentBook) return null;
+    const loc = rendition.currentLocation();
+    if (!loc?.start?.cfi) return null;
+    const end = loc.end?.cfi || loc.start.cfi;
+    return (await getAnnotations(currentBook.id)).find(a => a.type === "bookmark" && cfiCompare(a.cfi, loc.start.cfi) >= 0 && cfiCompare(a.cfi, end) <= 0) || null;
+  }
+  async function updateBookmarkButton() {
+    const bm = await bookmarkOnPage().catch(() => null);
+    $("bookmarkButton").textContent = bm ? "★ نشانک ذخیره شد" : "☆ نشانک";
+    $("bookmarkButton").setAttribute("aria-pressed", String(!!bm));
+  }
+  async function saveAnnotation(rec) {
+    rec.updatedAt = Date.now(); rec.dirty = true;
+    await put("annotations", rec);
+    scheduleAnnotationPush();
+  }
   $("bookmarkButton").addEventListener("click", async () => {
     if (!currentBook || !rendition) return;
     const loc = rendition.currentLocation();
     if (!loc?.start?.cfi) return;
-    await saveProgress(currentBook.id, loc.start.cfi, percentFor(loc.start.cfi, loc.start.percentage), loc.start.cfi);
-    $("bookmarkButton").textContent = "★ نشانک ذخیره شد";
-    showToast("نشانک در همین دستگاه ذخیره شد.");
+    const existing = await bookmarkOnPage();
+    if (existing) {
+      await saveAnnotation({ ...existing, deleted: true });
+      showToast("نشانک برداشته شد.");
+    } else {
+      let quote = "";
+      try { quote = String(await bookInstance.getRange(loc.start.cfi) || "").trim().slice(0, 140); } catch (_) {}
+      if (!quote) quote = $("chapterLabel").textContent;
+      await saveAnnotation({ uid: newUid(), bookId: currentBook.id, type: "bookmark", cfi: loc.start.cfi, quote, note: "", color: "", createdAt: Date.now(), deleted: false });
+      showToast("نشانک ذخیره شد.");
+    }
+    updateBookmarkButton(); renderNotesList();
+  });
+  function highlightStyle(color) { return { fill: HL_COLORS[color] || HL_COLORS.yellow, "fill-opacity": "0.4", "mix-blend-mode": "multiply" }; }
+  function drawHighlight(a) {
+    if (!rendition || renderedHighlights.has(a.uid)) return;
+    try {
+      rendition.annotations.highlight(a.cfi, { uid: a.uid }, () => openHighlightActions(a.uid), "borg-hl", highlightStyle(a.color));
+      renderedHighlights.add(a.uid);
+    } catch (err) { console.warn("Highlight could not be drawn:", err); }
+  }
+  function eraseHighlight(a) {
+    try { rendition && rendition.annotations.remove(a.cfi, "highlight"); } catch (_) {}
+    renderedHighlights.delete(a.uid);
+  }
+  async function renderBookAnnotations() {
+    if (!rendition || !currentBook) return;
+    const anns = await getAnnotations(currentBook.id);
+    const live = new Set(anns.filter(a => a.type === "highlight").map(a => a.uid));
+    for (const uid of [...renderedHighlights]) if (!live.has(uid)) { const a = await getAnnotation(uid); if (a) eraseHighlight(a); else renderedHighlights.delete(uid); }
+    anns.filter(a => a.type === "highlight").forEach(drawHighlight);
+    renderNotesList();
+  }
+  async function renderNotesList() {
+    if (!currentBook) { $("notesList").innerHTML = ""; return; }
+    const anns = (await getAnnotations(currentBook.id)).sort((a, b) => cfiCompare(a.cfi, b.cfi));
+    $("notesList").innerHTML = anns.length ? anns.map(a => `<div class="note-item" data-goto="${esc(a.cfi)}">
+        <span class="note-mark" style="background:${a.type === "bookmark" ? "#2f7a62" : (HL_COLORS[a.color] || HL_COLORS.yellow)}"></span>
+        <span class="note-text"><span class="note-quote">${a.type === "bookmark" ? "🔖 " : ""}${esc(a.quote || "")}</span>${a.note ? `<span class="note-note">✎ ${esc(a.note)}</span>` : ""}</span>
+        <button class="note-del" type="button" data-del="${esc(a.uid)}" aria-label="حذف">×</button></div>`).join("")
+      : '<p class="muted">هنوز نشانک یا یادداشتی نداری. متن را انتخاب کن تا هایلایت شود.</p>';
+  }
+  document.querySelectorAll("[data-ptab]").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll("[data-ptab]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    $("tocList").hidden = b.dataset.ptab !== "toc";
+    $("notesView").hidden = b.dataset.ptab !== "notes";
+    if (b.dataset.ptab === "notes") renderNotesList();
+  }));
+  $("notesList").addEventListener("click", async e => {
+    const del = e.target.closest("[data-del]");
+    if (del) {
+      e.stopPropagation();
+      const a = await getAnnotation(del.dataset.del);
+      if (a) { if (a.type === "highlight") eraseHighlight(a); await saveAnnotation({ ...a, deleted: true }); }
+      renderNotesList(); updateBookmarkButton();
+      return;
+    }
+    const item = e.target.closest("[data-goto]");
+    if (item && rendition) { closeToc(false); rendition.display(item.dataset.goto); }
+  });
+  $("exportNotes").addEventListener("click", async () => {
+    if (!currentBook) return;
+    const anns = (await getAnnotations(currentBook.id)).sort((a, b) => cfiCompare(a.cfi, b.cfi));
+    const lines = [`# ${currentBook.title}`, currentBook.author ? `*${currentBook.author}*` : "", ""];
+    for (const a of anns) {
+      lines.push(a.type === "bookmark" ? `- 🔖 ${a.quote || ""}` : `> ${String(a.quote || "").replace(/\n+/g, " ")}`);
+      if (a.note) lines.push("", `یادداشت: ${a.note}`);
+      lines.push("");
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown;charset=utf-8" });
+    const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `${currentBook.title} - یادداشت‌ها.md` });
+    document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 5000);
+  });
+  function hideSelectionBar() { $("selectionBar").hidden = true; pendingSelection = null; editingUid = null; }
+  function showSelectionBar(mode) {
+    $("selectionBar").querySelector(".sel-new").hidden = mode !== "new";
+    $("selectionBar").querySelector(".sel-edit").hidden = mode !== "edit";
+    $("selectionBar").hidden = false;
+  }
+  function onTextSelected(cfiRange, contents) {
+    pendingSelection = { cfiRange, contents }; editingUid = null;
+    showSelectionBar("new");
+  }
+  function openHighlightActions(uid) { pendingSelection = null; editingUid = uid; showSelectionBar("edit"); }
+  async function createHighlight(color, note) {
+    if (!pendingSelection || !currentBook) return;
+    const { cfiRange, contents } = pendingSelection;
+    let quote = "";
+    try { quote = String(await bookInstance.getRange(cfiRange) || "").trim().slice(0, 2000); } catch (_) {}
+    if (!quote) { try { quote = String(contents.window.getSelection()).trim().slice(0, 2000); } catch (_) {} }
+    const rec = { uid: newUid(), bookId: currentBook.id, type: "highlight", cfi: cfiRange, quote, note: note || "", color, createdAt: Date.now(), deleted: false };
+    await saveAnnotation(rec);
+    drawHighlight(rec);
+    try { contents.window.getSelection().removeAllRanges(); } catch (_) {}
+    hideSelectionBar(); renderNotesList();
+  }
+  $("selectionBar").addEventListener("click", async e => {
+    const sw = e.target.closest("[data-hl]");
+    if (sw) { await createHighlight(sw.dataset.hl, ""); return; }
+    const act = e.target.closest("[data-sel]")?.dataset.sel;
+    if (act === "close") { try { pendingSelection?.contents.window.getSelection().removeAllRanges(); } catch (_) {} hideSelectionBar(); }
+    else if (act === "note") { const note = prompt("یادداشت تو برای این قسمت:", ""); if (note !== null) await createHighlight("yellow", note.trim()); }
+    else if (act === "edit" && editingUid) {
+      const a = await getAnnotation(editingUid);
+      const note = a ? prompt("یادداشت:", a.note || "") : null;
+      if (a && note !== null) await saveAnnotation({ ...a, note: note.trim() });
+      hideSelectionBar(); renderNotesList();
+    } else if (act === "delete" && editingUid) {
+      const a = await getAnnotation(editingUid);
+      if (a) { eraseHighlight(a); await saveAnnotation({ ...a, deleted: true }); }
+      hideSelectionBar(); renderNotesList();
+    }
   });
   $("searchInput").addEventListener("input", renderLibrary);
   inputEls.forEach(el => el?.addEventListener("change", e => importFile(e.target.files?.[0])));
@@ -880,6 +1060,7 @@
           try { await api("progress", { method: "POST", body: { book_id: b.serverId, cfi: lp.cfi, percentage: lp.percentage || 0, updated_at: lp.updatedAt || Date.now() } }); } catch (_) {}
         }
       }
+      await syncAnnotations();
       setSyncStatus("همگام شد ✓");
     } catch (err) {
       setSyncStatus(err instanceof ApiFail && err.status === 401 ? "" : "همگام‌سازی انجام نشد");
@@ -889,6 +1070,46 @@
       renderLibrary();
       if (syncAgain) { syncAgain = false; sync(); }
     }
+  }
+  function annSinceKey() { return `borg-ann-since-${account?.user?.id || 0}${STORAGE_SUFFIX}`; }
+  async function syncAnnotations() {
+    const books = await getAllBooks();
+    const localToServer = new Map(books.filter(b => b.serverId).map(b => [b.id, b.serverId]));
+    const serverToLocal = new Map(books.filter(b => b.serverId).map(b => [b.serverId, b.id]));
+    // Push local changes.
+    const dirty = (await getAllAnnotations()).filter(a => a.dirty && localToServer.has(a.bookId));
+    for (let i = 0; i < dirty.length; i += 200) {
+      const batch = dirty.slice(i, i + 200);
+      await api("annotations", { method: "POST", body: { items: batch.map(a => ({
+        uid: a.uid, book_id: localToServer.get(a.bookId), type: a.type, cfi: a.cfi, quote: a.quote || "", note: a.note || "",
+        color: a.color || "", created_at: a.createdAt || a.updatedAt, updated_at: a.updatedAt, deleted: !!a.deleted,
+      })) } });
+      for (const a of batch) { const cur = await getAnnotation(a.uid); if (cur && cur.updatedAt === a.updatedAt) await put("annotations", { ...cur, dirty: false }); }
+    }
+    // Pull remote changes (newest timestamp wins).
+    let since = 0;
+    try { since = Number(localStorage.getItem(annSinceKey())) || 0; } catch (_) {}
+    const r = await api("annotations", { query: `&since=${since}` });
+    let maxSeen = since, changedCurrent = false;
+    for (const a of r.annotations) {
+      maxSeen = Math.max(maxSeen, a.updated_at);
+      const bookId = serverToLocal.get(a.book_id);
+      if (!bookId) continue;
+      const cur = await getAnnotation(a.uid);
+      if (cur && cur.updatedAt >= a.updated_at) continue;
+      await put("annotations", { uid: a.uid, bookId, type: a.type, cfi: a.cfi, quote: a.quote, note: a.note, color: a.color,
+                                 createdAt: a.created_at, updatedAt: a.updated_at, deleted: a.deleted, dirty: false });
+      if (currentBook && currentBook.id === bookId) changedCurrent = true;
+    }
+    // Re-read from slightly earlier next time to tolerate clock differences between devices.
+    try { localStorage.setItem(annSinceKey(), String(Math.max(0, maxSeen - 10 * 60 * 1000))); } catch (_) {}
+    if (changedCurrent) { await renderBookAnnotations(); updateBookmarkButton(); }
+  }
+  let annTimer = null;
+  function scheduleAnnotationPush() {
+    if (!account || !navigator.onLine) return;
+    clearTimeout(annTimer);
+    annTimer = setTimeout(() => { syncAnnotations().catch(err => console.warn("Annotation sync failed:", err)); }, 2500);
   }
   /** Debounced push of one book's progress while reading. */
   function scheduleProgressPush(localBookId) {
@@ -904,32 +1125,65 @@
   }
 
   // ---------- Public catalog ----------
+  let catalogBooks = [];
   async function loadCatalog() {
     $("catalogGrid").innerHTML = '<p class="muted">در حال بارگذاری…</p>';
     try {
-      const books = (await api("catalog")).books;
-      $("catalogEmpty").hidden = books.length > 0;
+      catalogBooks = (await api("catalog")).books;
+      renderCatalog();
+    } catch (err) { $("catalogGrid").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; }
+  }
+  function renderCatalog() {
+    {
+      const q = $("catalogSearch").value.trim().toLocaleLowerCase();
+      const books = catalogBooks.filter(b => !q || `${b.title} ${b.author} ${b.description || ""} ${b.submitter || ""}`.toLocaleLowerCase().includes(q));
+      $("catalogEmpty").hidden = catalogBooks.length > 0;
       $("catalogGrid").innerHTML = books.map(b => {
         const [bg, fg] = paletteFor(b.title || String(b.id));
         const cover = b.has_cover ? `<img alt="" loading="lazy" src="${API}?r=book-cover&id=${b.id}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">`
           : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
         const action = b.in_library ? '<span class="book-badge">در کتابخانهٔ تو</span>'
           : `<button class="secondary-button" type="button" data-catalog-add="${b.id}">＋ افزودن به کتابخانهٔ من</button>`;
-        return `<article class="book-card catalog-card"><div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}</div>
+        return `<article class="book-card catalog-card" data-detail="${b.id}" tabindex="0"><div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}</div>
           <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p>
           ${b.description ? `<p title="${esc(b.description)}">${esc(b.description)}</p>` : ""}<div class="catalog-actions">${action}</div></div></article>`;
       }).join("");
-    } catch (err) { $("catalogGrid").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; }
+      if (catalogBooks.length && !books.length) $("catalogGrid").innerHTML = '<p class="muted">کتابی با این عبارت پیدا نشد.</p>';
+    }
   }
-  $("catalogGrid").addEventListener("click", async e => {
-    const btn = e.target.closest("[data-catalog-add]");
-    if (!btn) return;
-    btn.disabled = true;
+  $("catalogSearch").addEventListener("input", renderCatalog);
+  function openBookDialog(id) {
+    const b = catalogBooks.find(x => x.id === id);
+    if (!b) return;
+    const [bg, fg] = paletteFor(b.title || String(b.id));
+    $("bookDialogCover").style.background = bg; $("bookDialogCover").style.color = fg;
+    $("bookDialogCover").innerHTML = b.has_cover ? `<img alt="" src="${API}?r=book-cover&id=${b.id}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : `<div class="cover-symbol">✳</div>`;
+    $("bookDialogTitle").textContent = b.title;
+    $("bookDialogAuthor").textContent = b.author || "نویسنده نامشخص";
+    $("bookDialogMeta").textContent = `${(b.size / 1048576).toLocaleString("fa-IR", { maximumFractionDigits: 1 })} مگابایت` + (b.submitter ? ` · پیشنهاد ${b.submitter}` : "");
+    $("bookDialogDesc").textContent = b.description || "";
+    $("bookDialogActions").innerHTML = b.in_library ? '<span class="book-badge">در کتابخانهٔ تو</span>' : `<button class="primary-button" type="button" data-catalog-add="${b.id}">＋ افزودن به کتابخانهٔ من</button>`;
+    $("bookDialog").showModal();
+  }
+  $("bookDialogClose").addEventListener("click", () => $("bookDialog").close());
+  $("bookDialogActions").addEventListener("click", e => { if (e.target.closest("[data-catalog-add]")) { $("bookDialog").close(); addFromCatalog(Number(e.target.closest("[data-catalog-add]").dataset.catalogAdd)); } });
+  async function addFromCatalog(id, btn) {
+    if (btn) btn.disabled = true;
     try {
-      await api("catalog-add", { method: "POST", body: { book_id: Number(btn.dataset.catalogAdd) } });
+      await api("catalog-add", { method: "POST", body: { book_id: id } });
       showToast("به کتابخانه‌ات اضافه شد؛ در حال دریافت…");
       await sync(); loadCatalog();
-    } catch (err) { btn.disabled = false; showToast(apiMessage(err)); }
+    } catch (err) { if (btn) btn.disabled = false; showToast(apiMessage(err)); }
+  }
+  $("catalogGrid").addEventListener("click", e => {
+    const btn = e.target.closest("[data-catalog-add]");
+    if (btn) { e.stopPropagation(); addFromCatalog(Number(btn.dataset.catalogAdd), btn); return; }
+    const card = e.target.closest("[data-detail]");
+    if (card) openBookDialog(Number(card.dataset.detail));
+  });
+  $("catalogGrid").addEventListener("keydown", e => {
+    const card = e.target.closest("[data-detail]");
+    if (card && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openBookDialog(Number(card.dataset.detail)); }
   });
   async function shareBook(localId) {
     const b = await getBook(localId);
@@ -945,9 +1199,30 @@
 
   // ---------- Admin ----------
   const fmtDate = s => new Date(s * 1000).toLocaleDateString("fa-IR");
+  const mb = n => (n / 1048576).toLocaleString("fa-IR", { maximumFractionDigits: 1 });
+  const STATUS_FA = { approved: "عمومی", pending: "در انتظار", rejected: "ردشده" };
   async function loadAdmin() {
     try {
-      const [pending, invites, users] = await Promise.all([api("catalog-pending"), api("invites"), api("users")]);
+      const [pending, invites, users, stats, settings, catalogAll, booksAll] = await Promise.all([
+        api("catalog-pending"), api("invites"), api("users"), api("admin-stats"), api("settings"), api("catalog-all"), api("books-all")]);
+      const fa = n => Number(n).toLocaleString("fa-IR");
+      $("adminStats").innerHTML = [
+        [fa(stats.active_users) + " / " + fa(stats.users), "کاربر فعال"], [fa(stats.books), "کتاب روی سرور"], [mb(stats.storage_bytes) + " MB", "فضای کتاب‌ها"],
+        [fa(stats.catalog_approved), "در کتابخانهٔ عمومی"], [fa(stats.catalog_pending), "در انتظار تأیید"], [fa(stats.open_invites), "دعوت‌نامهٔ باز"],
+      ].map(([v, l]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join("");
+      $("settingApproval").checked = !!settings.catalog_requires_approval;
+      $("catalogAdminList").innerHTML = catalogAll.books.filter(b => b.status !== "pending").map(b => `<div class="admin-item">
+          <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="status-chip ${b.status === "approved" ? "" : "off"}">${STATUS_FA[b.status] || b.status}</span>
+          ${b.description ? `<br><span class="muted">${esc(b.description)}</span>` : ""}</span>
+          <span class="admin-row"><button class="secondary-button" type="button" data-cat-edit="${b.id}">ویرایش</button>
+          <button class="secondary-button" type="button" data-cat-remove="${b.id}">برداشتن از کتابخانهٔ عمومی</button></span></div>`).join("")
+        || '<p class="muted">کتابخانهٔ عمومی خالی است.</p>';
+      $("booksAdminList").innerHTML = booksAll.books.map(b => `<div class="admin-item">
+          <span><strong>${esc(b.title)}</strong> <span class="muted">· ${mb(b.size)} MB · ${esc(b.uploader || "؟")} · ${fa(b.readers)} خواننده</span>
+          ${b.catalog_status ? `<span class="status-chip">${STATUS_FA[b.catalog_status] || b.catalog_status}</span>` : ""}</span>
+          <span class="admin-row"><a class="secondary-button" href="${API}?r=book-file&id=${b.id}">دانلود</a>
+          <button class="secondary-button" type="button" data-book-delete="${b.id}" data-title="${esc(b.title)}">حذف کامل</button></span></div>`).join("")
+        || '<p class="muted">کتابی روی سرور نیست.</p>';
       $("pendingList").innerHTML = pending.books.length ? pending.books.map(b => `<div class="admin-item">
           <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="muted">· ${esc(b.submitter || "")} · ${fmtDate(b.submitted_at)}</span>
           ${b.description ? `<br><span class="muted">${esc(b.description)}</span>` : ""}</span>
@@ -956,10 +1231,19 @@
           <button class="secondary-button" type="button" data-review="${b.id}" data-approve="0">رد</button></span></div>`).join("")
         : '<p class="muted">موردی در انتظار نیست.</p>';
       $("inviteList").innerHTML = invites.invites.map(i => `<div class="admin-item"><span>${esc(i.note || "بدون یادداشت")}</span>
-          <span class="muted">${i.used_by ? `استفاده‌شده توسط ${esc(i.used_by)}` : i.expires_at * 1000 < Date.now() ? "منقضی" : `معتبر تا ${fmtDate(i.expires_at)}`}</span></div>`).join("")
+          <span class="admin-row"><span class="muted">${i.used_by ? `استفاده‌شده توسط ${esc(i.used_by)}` : i.expires_at * 1000 < Date.now() ? "منقضی" : `معتبر تا ${fmtDate(i.expires_at)}`}</span>
+          ${!i.used_by && i.expires_at * 1000 > Date.now() ? `<button class="secondary-button" type="button" data-invite-revoke="${esc(i.id)}">باطل کردن</button>` : ""}</span></div>`).join("")
         || '<p class="muted">هنوز دعوت‌نامه‌ای ساخته نشده.</p>';
-      $("userList").innerHTML = users.users.map(u => `<div class="admin-item"><span>${esc(u.name)} <span class="muted" dir="ltr">${esc(u.email)}</span></span>
-          <span class="muted">${u.role === "admin" ? "مدیر" : "کاربر"} · ${u.books.toLocaleString("fa-IR")} کتاب</span></div>`).join("");
+      const me = account?.user?.id;
+      $("userList").innerHTML = users.users.map(u => `<div class="admin-item" data-user="${u.id}">
+          <span>${esc(u.name)} <span class="muted" dir="ltr">${esc(u.email)}</span><br>
+          <span class="muted small">${u.role === "admin" ? "مدیر" : "کاربر"} · ${fa(u.books)} کتاب${u.last_seen ? ` · آخرین ورود ${fmtDate(u.last_seen)}` : ""}</span>
+          ${u.disabled ? '<span class="status-chip off">غیرفعال</span>' : ""}</span>
+          ${u.id === me ? '<span class="muted small">(خودت)</span>' : `<span class="admin-row">
+            <button class="secondary-button" type="button" data-user-act="${u.disabled ? "enable" : "disable"}">${u.disabled ? "فعال کردن" : "غیرفعال کردن"}</button>
+            <button class="secondary-button" type="button" data-user-act="${u.role === "admin" ? "demote" : "promote"}">${u.role === "admin" ? "کاربر عادی شود" : "مدیر شود"}</button>
+            <button class="secondary-button" type="button" data-user-act="reset">ریست رمز</button>
+            <button class="secondary-button" type="button" data-user-act="delete">حذف</button></span>`}</div>`).join("");
     } catch (err) { $("pendingList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; }
   }
   $("pendingList").addEventListener("click", async e => {
@@ -970,6 +1254,49 @@
       showToast(btn.dataset.approve === "1" ? "تأیید شد و در کتابخانهٔ عمومی قرار گرفت." : "رد شد.");
       loadAdmin();
     } catch (err) { showToast(apiMessage(err)); }
+  });
+  async function adminAction(route, body, okMessage) {
+    try { const r = await api(route, { method: "POST", body }); if (okMessage) showToast(okMessage); loadAdmin(); return r; }
+    catch (err) { showToast(apiMessage(err)); return null; }
+  }
+  $("settingApproval").addEventListener("change", e => adminAction("settings", { catalog_requires_approval: e.target.checked }, "تنظیمات ذخیره شد."));
+  $("viewAdmin").addEventListener("click", async e => {
+    const t = e.target;
+    if (t.closest("[data-invite-revoke]")) return adminAction("invite-revoke", { id: t.closest("[data-invite-revoke]").dataset.inviteRevoke }, "دعوت‌نامه باطل شد.");
+    if (t.closest("[data-cat-remove]")) {
+      if (!confirm("این کتاب از کتابخانهٔ عمومی برداشته شود؟ (از کتابخانهٔ شخصی کسانی که اضافه‌اش کرده‌اند حذف نمی‌شود)")) return;
+      return adminAction("catalog-remove", { book_id: Number(t.closest("[data-cat-remove]").dataset.catRemove) }, "از کتابخانهٔ عمومی برداشته شد.");
+    }
+    if (t.closest("[data-cat-edit]")) {
+      const id = Number(t.closest("[data-cat-edit]").dataset.catEdit);
+      const b = (await api("catalog-all")).books.find(x => x.id === id);
+      if (!b) return;
+      const title = prompt("عنوان:", b.title); if (title === null) return;
+      const author = prompt("نویسنده:", b.author || ""); if (author === null) return;
+      const description = prompt("توضیحات:", b.description || ""); if (description === null) return;
+      return adminAction("catalog-update", { book_id: id, title: title.trim() || b.title, author: author.trim(), description: description.trim() }, "ذخیره شد.");
+    }
+    if (t.closest("[data-book-delete]")) {
+      const el = t.closest("[data-book-delete]");
+      if (!confirm(`«${el.dataset.title}» برای همه حذف شود؟ این کار برگشت‌پذیر نیست.`)) return;
+      return adminAction("book-delete", { book_id: Number(el.dataset.bookDelete) }, "کتاب حذف شد.");
+    }
+    const act = t.closest("[data-user-act]")?.dataset.userAct;
+    if (act) {
+      const userId = Number(t.closest("[data-user]").dataset.user);
+      if (act === "enable" || act === "disable") return adminAction("user-update", { user_id: userId, disabled: act === "disable" }, act === "disable" ? "کاربر غیرفعال شد." : "کاربر فعال شد.");
+      if (act === "promote" || act === "demote") return adminAction("user-update", { user_id: userId, role: act === "promote" ? "admin" : "user" }, "نقش کاربر تغییر کرد.");
+      if (act === "reset") {
+        if (!confirm("رمز این کاربر ریست شود؟ از همهٔ دستگاه‌ها خارج می‌شود.")) return;
+        const r = await adminAction("user-reset-password", { user_id: userId });
+        if (r) prompt("رمز جدید (برای کاربر بفرست):", r.password);
+        return;
+      }
+      if (act === "delete") {
+        if (!confirm("این کاربر و کتابخانه‌اش حذف شود؟ این کار برگشت‌پذیر نیست.")) return;
+        return adminAction("user-delete", { user_id: userId }, "کاربر حذف شد.");
+      }
+    }
   });
   $("createInvite").addEventListener("click", async () => {
     try {

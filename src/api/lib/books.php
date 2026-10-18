@@ -230,6 +230,47 @@ function handle_books_route(string $route): bool {
             if (!empty($d['cover']) && is_string($d['cover']) && store_cover($bookId, $d['cover'])) q('UPDATE books SET has_cover = 1 WHERE id = ?', [$bookId]);
             json_out(200, ['book' => book_out(one('SELECT * FROM books WHERE id = ?', [$bookId]))]);
 
+        // ---------- Bookmarks, highlights, notes (last write wins per item) ----------
+        case 'annotations':
+            if ($method === 'GET') {
+                $s = require_user();
+                $since = (int)($_GET['since'] ?? 0);
+                $rows = all('SELECT * FROM annotations WHERE user_id = ? AND updated_at > ? ORDER BY updated_at', [$s['id'], $since]);
+                json_out(200, ['annotations' => array_map('annotation_out', $rows), 'server_time' => (int)(microtime(true) * 1000)]);
+            }
+            method('POST');
+            $s = require_user(true);
+            $items = body_json()['items'] ?? [];
+            if (!is_array($items) || count($items) > 500) fail(400, 'bad_items', 'Invalid items.');
+            $saved = 0;
+            $owned = array_flip(array_map('intval', array_column(all('SELECT book_id FROM user_books WHERE user_id = ?', [$s['id']]), 'book_id')));
+            foreach ($items as $it) {
+                if (!is_array($it)) continue;
+                $uid = (string)($it['uid'] ?? '');
+                $bookId = (int)($it['book_id'] ?? 0);
+                $type = (string)($it['type'] ?? '');
+                if (!preg_match('/^[A-Za-z0-9-]{8,40}$/', $uid) || !isset($owned[$bookId]) || !in_array($type, ['bookmark', 'highlight'], true)) continue;
+                $at = (int)($it['updated_at'] ?? 0);
+                if ($at <= 0 || $at > (time() + 300) * 1000) $at = (int)(microtime(true) * 1000);
+                $row = [
+                    'cfi' => mb_substr((string)($it['cfi'] ?? ''), 0, 1000), 'quote' => mb_substr((string)($it['quote'] ?? ''), 0, 2000),
+                    'note' => mb_substr((string)($it['note'] ?? ''), 0, 10000), 'color' => mb_substr((string)($it['color'] ?? ''), 0, 20),
+                    'deleted' => !empty($it['deleted']) ? 1 : 0,
+                ];
+                if ($row['cfi'] === '') continue;
+                $cur = one('SELECT updated_at FROM annotations WHERE user_id = ? AND uid = ?', [$s['id'], $uid]);
+                if (!$cur) {
+                    insert_ignore('annotations', ['uid' => $uid, 'user_id' => $s['id'], 'book_id' => $bookId, 'type' => $type] + $row
+                        + ['created_at' => (int)($it['created_at'] ?? $at), 'updated_at' => $at]);
+                    $saved++;
+                } elseif ($at > (int)$cur['updated_at']) {
+                    q('UPDATE annotations SET cfi = ?, quote = ?, note = ?, color = ?, deleted = ?, updated_at = ? WHERE user_id = ? AND uid = ? AND updated_at < ?',
+                      [$row['cfi'], $row['quote'], $row['note'], $row['color'], $row['deleted'], $at, $s['id'], $uid, $at]);
+                    $saved++;
+                }
+            }
+            json_out(200, ['saved' => $saved]);
+
         // ---------- Public catalog ----------
         case 'catalog':
             method('GET');
@@ -250,7 +291,7 @@ function handle_books_route(string $route): bool {
             if (!user_has_book((int)$s['id'], $bookId)) fail(404, 'not_found', 'Book not in your library.');
             $cur = one('SELECT status FROM catalog WHERE book_id = ?', [$bookId]);
             if ($cur && $cur['status'] !== 'rejected') json_out(200, ['status' => $cur['status']]);
-            $auto = $s['role'] === 'admin' || !config()['catalog_requires_approval'];
+            $auto = $s['role'] === 'admin' || !catalog_requires_approval();
             $status = $auto ? 'approved' : 'pending';
             q('DELETE FROM catalog WHERE book_id = ?', [$bookId]);
             q('INSERT INTO catalog (book_id, status, description, submitted_by, submitted_at, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
@@ -296,4 +337,12 @@ function handle_books_route(string $route): bool {
             json_out(200, ['book' => book_out($b)]);
     }
     return false;
+}
+
+function annotation_out(array $r): array {
+    return [
+        'uid' => $r['uid'], 'book_id' => (int)$r['book_id'], 'type' => $r['type'], 'cfi' => $r['cfi'], 'quote' => $r['quote'],
+        'note' => (string)$r['note'], 'color' => $r['color'], 'created_at' => (int)$r['created_at'],
+        'updated_at' => (int)$r['updated_at'], 'deleted' => (int)$r['deleted'] === 1,
+    ];
 }
