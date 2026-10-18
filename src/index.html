@@ -228,7 +228,7 @@
         </div>
         <div class="page-nav">
           <button id="prevPage" class="nav-button" type="button">→ قبلی</button>
-          <span id="chapterLabel">شروع مطالعه</span>
+          <span id="chapterLabel" dir="auto">شروع مطالعه</span>
           <button id="nextPage" class="nav-button" type="button">بعدی ←</button>
         </div>
         <div id="viewer" class="viewer"></div>
@@ -265,7 +265,7 @@
           </span>
           <button type="button" data-sel="close" aria-label="بستن">×</button>
         </div>
-        <div class="reader-bottom"><span id="timeLeft">برای هایلایت یا یادداشت، متن را انتخاب کن.</span><button id="bookmarkButton" class="text-button" type="button">☆ نشانک</button></div>
+        <div class="reader-bottom"><span id="timeLeft">برای هایلایت یا یادداشت، متن را انتخاب کن.</span><div class="reader-seek"><input id="bookSeek" type="range" min="0" max="1000" step="1" value="0" disabled aria-label="پیشرفت کتاب" aria-valuetext="در حال محاسبهٔ صفحه‌ها…" aria-describedby="seekInfo"><span id="seekInfo" class="seek-info">در حال محاسبهٔ صفحه‌ها…</span><div id="seekPreview" class="seek-preview" dir="auto" aria-hidden="true" hidden></div></div><button id="bookmarkButton" class="text-button" type="button">☆ نشانک</button></div>
       </div>
     </div>
   </section>

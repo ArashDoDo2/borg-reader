@@ -374,3 +374,27 @@ body.dark .cat-chip{background:#3d3524;color:#e5c58b}
 .icon-button{display:inline-flex;align-items:center;justify-content:center}
 .icon-button .ico{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none}
 .settings-toggle{font-weight:700;font-size:16px}
+
+/* v8.2 nav: chapter title + book seek bar */
+.page-nav #chapterLabel{flex:1 1 auto;min-width:0}
+/* The seek bar sits in the bottom bar between "time left in chapter" and the bookmark button (one row on wide
+   screens, so the book viewer keeps its height); narrower screens give it its own row above them. */
+.reader-bottom #timeLeft{flex:0 1 auto;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.reader-bottom #bookmarkButton{flex-shrink:0}
+.reader-seek{position:relative;flex:1 1 auto;display:flex;align-items:center;gap:10px;min-width:0}
+.reader-seek input[type=range]{flex:1 1 auto;min-width:60px;width:100%;height:24px;margin:0;background:transparent;accent-color:var(--green2);cursor:pointer}
+.reader-seek input[type=range]:disabled{opacity:.45;cursor:progress}
+.reader-seek input[type=range]:focus-visible{outline:2px solid var(--green2);outline-offset:2px;border-radius:6px}
+.seek-info{flex:0 0 auto;max-width:60%;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.seek-preview{position:absolute;bottom:calc(100% + 6px);left:0;transform:translateX(-50%);max-width:min(280px,80vw);padding:5px 10px;border:1px solid var(--line);border-radius:9px;background:var(--paper);color:var(--ink);box-shadow:var(--shadow);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;z-index:6}
+.seek-preview[hidden]{display:none}
+@media(max-width:1100px){
+ .reader-bottom{height:auto;min-height:50px;flex-wrap:wrap;row-gap:0;padding-top:4px}
+ .reader-seek{order:-1;flex:1 1 100%}
+}
+@media(max-width:700px){
+ .reader-bottom{min-height:0;column-gap:8px;padding-bottom:4px}
+ .reader-seek{flex-wrap:wrap;gap:0 6px}
+ .reader-seek input[type=range]{flex:1 1 100%;height:28px}
+ .seek-info{flex:1 1 100%;max-width:100%;font-size:9.5px;line-height:1.4}
+}

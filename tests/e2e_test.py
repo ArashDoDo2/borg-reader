@@ -166,7 +166,7 @@ async def run(url):
         await pg.click("#settingsToggle"); await pg.click("#fontUp"); await pg.click("#fontUp"); await pg.wait_for_timeout(300)
         await pg.keyboard.press("Escape"); await pg.wait_for_timeout(200)
         await pg.click(".toc-link >> nth=1"); await pg.wait_for_timeout(800)
-        check("toc navigation to chapter 2", await pg.inner_text("#chapterLabel") == "بخش ۲")
+        check("toc navigation to chapter 2", await pg.inner_text("#chapterLabel") == "فصل دوم")
         await pg.click("#closeReader"); await pg.wait_for_timeout(400)
         await pg.reload(); await pg.wait_for_timeout(1000)
         await pg.click(".book-card"); await pg.wait_for_timeout(2500)
@@ -279,7 +279,7 @@ async def run(url):
         check("mobile: aria-expanded true", await pg.get_attribute("#tocToggle", "aria-expanded") == "true")
         await pg.click(".toc-link >> nth=1"); await pg.wait_for_timeout(900)
         check("mobile: TOC link opens chapter and closes drawer",
-              await pg.inner_text("#chapterLabel") == "بخش ۲" and (await panel.bounding_box())["x"] >= 389)
+              await pg.inner_text("#chapterLabel") == "فصل دوم" and (await panel.bounding_box())["x"] >= 389)
         await pg.click("#tocToggle"); await pg.wait_for_timeout(400)
         await pg.mouse.click(20, 420); await pg.wait_for_timeout(400)
         check("mobile: backdrop closes drawer", (await panel.bounding_box())["x"] >= 389)
@@ -455,7 +455,7 @@ async def run(url):
         check("search result is highlighted", await pg.locator("#bookSearchResults mark").count() >= 1)
         await pg.click("#bookSearchResults button"); await pg.wait_for_timeout(1200)
         pos = await page_pos(pg)
-        check("clicking a result jumps there", await pg.inner_text("#chapterLabel") == "بخش ۲" and pos is not None and 26 <= pos <= 35, f"{await pg.inner_text('#chapterLabel')} pos={pos}")
+        check("clicking a result jumps there", await pg.inner_text("#chapterLabel") == "فصل دوم" and pos is not None and 26 <= pos <= 35, f"{await pg.inner_text('#chapterLabel')} pos={pos}")
         check("search panel closes after jumping", not await pg.is_visible("#searchPanel"))
         await pg.click("#searchToggle"); await pg.fill("#bookSearchInput", "نیست-در-کتاب"); await pg.press("#bookSearchInput", "Enter")
         await poll(lambda: _contains(pg, "#bookSearchStatus", "پیدا نشد"), 10000)
@@ -679,7 +679,7 @@ async def run(url):
         fr = pg.frame_locator("#viewer iframe")
         await fr.locator("#r1").click(); await pg.wait_for_timeout(1200)
         check("EPUB3 footnote opens in a popup", await pg.is_visible("#notePopup") and "پانویس اول" in await pg.inner_text("#notePopupText"), await pg.inner_text("#notePopupText"))
-        check("footnote click does not navigate away", await pg.inner_text("#chapterLabel") == "بخش ۱")
+        check("footnote click does not navigate away", await pg.inner_text("#chapterLabel") == "متن")
         await pg.click("#notePopupClose"); await pg.wait_for_timeout(200)
         await fr.locator("#r2").click(); await pg.wait_for_timeout(800)
         check("classic #fn footnote opens in a popup", await pg.is_visible("#notePopup") and "پانویس دوم" in await pg.inner_text("#notePopupText"))
@@ -750,7 +750,7 @@ async def run(url):
             reached = True
         except TimeoutError:
             reached = False
-        check("read-aloud turns pages and continues into the next chapter", reached and await pg.inner_text("#chapterLabel") == "بخش ۲", await pg.inner_text("#chapterLabel"))
+        check("read-aloud turns pages and continues into the next chapter", reached and await pg.inner_text("#chapterLabel") == "فصل دوم", await pg.inner_text("#chapterLabel"))
         await pg.click("#ttsPlay"); await pg.wait_for_timeout(300)
         n1 = await pg.evaluate("window.__spoken.length"); await pg.wait_for_timeout(600)
         n2 = await pg.evaluate("window.__spoken.length")
@@ -968,6 +968,135 @@ async def run(url):
         check("v8.1.5 mobile: toolbar icons are drawn at a readable size", all(w >= 18 and bw >= 38 for _, w, bw in icons), str(icons))
         check("v8.1.1 direction: no JS errors", len(errsD) == 0, str(errsD[:3]))
         await ctxD.close(); shutil.rmtree(tmpd, ignore_errors=True)
+
+        # 15. v8.2 nav: chapter title from the TOC in the header, TOC active entry, whole-book seek bar
+        import zipfile
+        tmpn = Path(tempfile.mkdtemp(prefix="borg-e2e-nav-"))
+        # A longer Persian book: six chapter files, the third with two #fragment sub-entries (#a and #b, both after its first page).
+        big = tmpn / "big.epub"
+        names = ["اول", "دوم", "سوم", "چهارم", "پنجم", "ششم"]
+        with zipfile.ZipFile(big, "w") as z:
+            z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            D = zipfile.ZIP_DEFLATED
+            z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>', D)
+            items = "".join(f'<item id="c{i}" href="text/c{i}.xhtml" media-type="application/xhtml+xml"/>' for i in range(1, 7))
+            refs = "".join(f'<itemref idref="c{i}"/>' for i in range(1, 7))
+            z.writestr("OEBPS/content.opf", f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">nav-big-1</dc:identifier><dc:title>کتاب بلند</dc:title><dc:creator>نویسنده</dc:creator><dc:language>fa</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>{items}</manifest><spine page-progression-direction="rtl">{refs}</spine></package>', D)
+            lis = "".join((f'<li><a href="text/c{i}.xhtml">فصل {n}</a><ol><li><a href="text/c3.xhtml#a">بخش الف</a></li><li><a href="text/c3.xhtml#b">بخش ب</a></li></ol></li>' if i == 3 else f'<li><a href="text/c{i}.xhtml">فصل {n}</a></li>') for i, n in enumerate(names, 1))
+            z.writestr("OEBPS/nav.xhtml", f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>فهرست</title></head><body><nav epub:type="toc"><ol>{lis}</ol></nav></body></html>', D)
+            for i, n in enumerate(names, 1):
+                ps = [f"<p>پاراگراف {k} از فصل {n}: این متن برای آزمایش نوار پیشرفت کتاب و نام فصل در سربرگ نوشته شده است.</p>" for k in range(90)]
+                if i == 3:
+                    ps.insert(30, '<h2 id="a">بخش الف</h2>'); ps.insert(61, '<h2 id="b">بخش ب</h2>')
+                z.writestr(f"OEBPS/text/c{i}.xhtml", f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="fa" dir="rtl"><head><title>فصل {n}</title></head><body><h1>فصل {n}</h1>{"".join(ps)}</body></html>', D)
+        LABEL_GEOM = """()=>{const l=document.getElementById('chapterLabel'),n=document.querySelector('.page-nav');const r=l.getBoundingClientRect(),q=n.getBoundingClientRect();
+          return {dir:l.getAttribute('dir'),w:r.width,inside:r.left>=q.left-1&&r.right<=q.right+1&&r.height>0,cut:l.scrollWidth>l.clientWidth+1,ov:getComputedStyle(l).textOverflow}}"""
+        ACTIVE = "()=>[...document.querySelectorAll('#tocList .toc-link.active')].map(b=>[b.textContent.trim(),b.getAttribute('aria-current')])"
+        SEEK = """()=>{const s=document.getElementById('bookSeek'),r=s.getBoundingClientRect();return {dis:s.disabled,v:+s.value,dir:s.dir,
+          cdir:getComputedStyle(s).direction,w:r.width,h:r.height,top:r.top,vt:s.getAttribute('aria-valuetext'),al:s.getAttribute('aria-label'),
+          info:document.getElementById('seekInfo').textContent,infoVis:document.getElementById('seekInfo').getBoundingClientRect().width>0}}"""
+        faint = lambda t: int("".join("0123456789"["۰۱۲۳۴۵۶۷۸۹".index(c)] if c in "۰۱۲۳۴۵۶۷۸۹" else c for c in t if c in "۰۱۲۳۴۵۶۷۸۹0123456789") or -1)
+        errsN, extN = [], []
+        ctxN, N = await new_ctx(b, url, extN, errsN)
+        await open_sample(N, url, sample)
+        lg = await N.evaluate(LABEL_GEOM)
+        check("v8.2: header shows the TOC chapter title after opening", await N.inner_text("#chapterLabel") == "فصل اول" and lg["inside"] and lg["dir"] == "auto", str(lg))
+        check("v8.2: TOC entry of the current chapter is marked active", await N.evaluate(ACTIVE) == [["فصل اول", "true"]], str(await N.evaluate(ACTIVE)))
+        await N.click(".toc-link >> nth=1"); await N.wait_for_timeout(1000)
+        check("v8.2: header shows the chapter title after a TOC jump", await N.inner_text("#chapterLabel") == "فصل دوم", await N.inner_text("#chapterLabel"))
+        check("v8.2: active TOC entry follows the jump", await N.evaluate(ACTIVE) == [["فصل دوم", "true"]], str(await N.evaluate(ACTIVE)))
+        await poll(lambda: N.evaluate("!document.getElementById('bookSeek').disabled"), 15000)
+        sk = await N.evaluate(SEEK)
+        check("v8.2: seek bar is enabled once locations are ready, visible, RTL for a Persian book",
+              not sk["dis"] and sk["w"] > 200 and sk["h"] > 10 and sk["dir"] == "rtl" and sk["cdir"] == "rtl" and sk["al"] == "پیشرفت کتاب", str(sk))
+        check("v8.2: book percentage and time left in the book are shown", sk["infoVis"] and "از کتاب" in sk["info"] and "دقیقه تا پایان کتاب" in sk["info"] and "درصد" in (sk["vt"] or ""), sk["info"])
+        # A longer book: fragment entries, drag preview without navigating, release navigates to the middle
+        await N.click("#closeReader"); await N.wait_for_timeout(400)
+        await N.set_input_files("#epubInput", str(big)); await N.wait_for_timeout(2500)
+        await N.click('#bookGrid .book-card:has-text("کتاب بلند")'); await N.wait_for_timeout(3000)
+        check("v8.2: TOC entries pointing into a text/ folder match the spine (first chapter title)", await N.inner_text("#chapterLabel") == "فصل اول", await N.inner_text("#chapterLabel"))
+        await poll(lambda: N.evaluate("!document.getElementById('bookSeek').disabled"), 20000)
+        before = await visible_text(N)
+        await N.evaluate("()=>{const s=document.getElementById('bookSeek');s.value='500';s.dispatchEvent(new Event('input',{bubbles:true}))}")
+        await N.wait_for_timeout(300)
+        pv = await N.evaluate("""()=>{const p=document.getElementById('seekPreview'),r=p.getBoundingClientRect();return {hid:p.hidden,t:p.textContent,
+          vis:r.width>0&&r.left>=0&&r.right<=innerWidth&&r.top>=0}}""")
+        check("v8.2: dragging shows a preview (chapter + Persian percentage) without navigating",
+              not pv["hid"] and pv["vis"] and "٪۵۰" in pv["t"] and "فصل" in pv["t"] and await visible_text(N) == before and await N.inner_text("#chapterLabel") == "فصل اول", str(pv))
+        await N.evaluate("()=>document.getElementById('bookSeek').dispatchEvent(new Event('change',{bubbles:true}))")
+        await N.wait_for_timeout(1800)
+        pct = faint(await N.inner_text("#progressText")); lab = await N.inner_text("#chapterLabel"); sk = await N.evaluate(SEEK)
+        check("v8.2: releasing the seek bar at 50% jumps to the middle of the book",
+              35 <= pct <= 65 and lab in ("فصل سوم", "بخش الف", "بخش ب", "فصل چهارم") and await visible_text(N) != before and await N.is_hidden("#seekPreview"), f"{pct}% {lab} v={sk['v']} {sk['info']}")
+        check("v8.2: info shows the new book percentage", f"٪{str(pct).translate(str.maketrans('0123456789','۰۱۲۳۴۵۶۷۸۹'))} از کتاب" in sk["info"], sk["info"])
+        await N.locator("#tocList .toc-link", has_text="بخش ب").click(); await N.wait_for_timeout(1500)
+        check("v8.2: a #fragment TOC entry is used for the header once its target is on the page",
+              await N.inner_text("#chapterLabel") == "بخش ب" and await N.evaluate(ACTIVE) == [["بخش ب", "true"]], f"{await N.inner_text('#chapterLabel')} {await N.evaluate(ACTIVE)}")
+        await N.locator("#tocList .toc-link", has_text="فصل سوم").click(); await N.wait_for_timeout(1500)
+        check("v8.2: at the start of the file (before #a's heading) the chapter entry is used",
+              await N.inner_text("#chapterLabel") == "فصل سوم" and await N.evaluate(ACTIVE) == [["فصل سوم", "true"]], f"{await N.inner_text('#chapterLabel')} {await N.evaluate(ACTIVE)}")
+        await N.focus("#bookSeek"); await N.keyboard.press("End"); await N.wait_for_timeout(2000)
+        pct = faint(await N.inner_text("#progressText"))
+        check("v8.2: seek bar works from the keyboard (End = end of book)", pct >= 90 and await N.inner_text("#chapterLabel") == "فصل ششم", f"{pct}% {await N.inner_text('#chapterLabel')}")
+        check("v8.2: keyboard on the seek bar does not turn pages by itself", await N.evaluate("document.activeElement.id") == "bookSeek")
+        box = await N.locator("#viewer").bounding_box()
+        await N.mouse.click(box["x"] + box["width"] * 0.5, box["y"] + box["height"] / 2); await N.wait_for_timeout(800)
+        check("v8.2: seek bar is hidden in immersive mode", await N.is_visible("#reader") and not await N.is_visible("#bookSeek") and not await N.is_visible(".page-nav"))
+        await N.keyboard.press("Escape"); await N.wait_for_timeout(600)
+        check("v8.2: seek bar comes back after immersive mode", await N.is_visible("#bookSeek"))
+        for theme in ("sepia", "dark", "black"):
+            await open_settings(N); await N.click(f'[data-theme="{theme}"]'); await N.wait_for_timeout(300)
+        await N.keyboard.press("Escape"); await N.wait_for_timeout(300)
+        await open_settings(N); await N.click('[data-theme="light"]'); await N.keyboard.press("Escape")
+        # The same book on a phone: the bar fits, no horizontal scroll, the TOC drawer scrolls to the active entry
+        await N.set_viewport_size({"width": 390, "height": 844}); await N.wait_for_timeout(900)
+        mob = await N.evaluate("""()=>{const w=document.querySelector('.reader-seek').getBoundingClientRect(),s=document.getElementById('bookSeek').getBoundingClientRect(),
+          i=document.getElementById('seekInfo'),ir=i.getBoundingClientRect(),v=document.getElementById('viewer').getBoundingClientRect();
+          return {sw:document.documentElement.scrollWidth,rw:document.getElementById('reader').scrollWidth,iw:innerWidth,l:w.left,r:w.right,sl:s.left,sr:s.right,sh:s.height,
+            il:ir.left,ir:ir.right,cut:i.scrollWidth>i.clientWidth+1,below:s.top>=v.bottom-1,vh:v.height}}""")
+        check("v8.2 mobile: seek bar visible and inside the screen, no horizontal overflow",
+              await N.is_visible("#bookSeek") and mob["sw"] <= mob["iw"] and mob["rw"] <= mob["iw"] and mob["l"] >= 0 and mob["r"] <= 390 and mob["sl"] >= 0 and mob["sr"] <= 390
+              and mob["sr"] - mob["sl"] > 250 and mob["sh"] >= 20 and mob["below"] and mob["vh"] > 400, str(mob))
+        check("v8.2 mobile: book progress text fits without being cut", not mob["cut"] and mob["il"] >= 0 and mob["ir"] <= 390, str(mob))
+        await N.click("#tocToggle"); await N.wait_for_timeout(500)
+        act = await N.evaluate("""()=>{const a=document.querySelector('#tocList .toc-link.active'),p=document.getElementById('tocPanel');if(!a)return null;
+          const r=a.getBoundingClientRect(),q=p.getBoundingClientRect();return {t:a.textContent.trim(),inView:r.top>=q.top&&r.bottom<=q.bottom&&r.left>=0&&r.right<=391,focus:document.activeElement===a}}""")
+        check("v8.2 mobile: opening the TOC shows (and focuses) the active entry", act and act["t"] == "فصل ششم" and act["inView"] and act["focus"], str(act))
+        await N.keyboard.press("Escape"); await N.wait_for_timeout(400)
+        check("v8.2: no requests outside the site", len(extN) == 0, str(extN[:3]))
+        check("v8.2: no JS errors (Persian books)", len(errsN) == 0, str(errsN[:3]))
+        await ctxN.close()
+        # English book with a nested NCX and a long article title: LTR seek bar, English title in the header with an ellipsis
+        en2 = tmpn / "english-nav.epub"
+        long_t = "Second article with a remarkably long headline that cannot possibly fit in the reader header"
+        with zipfile.ZipFile(en2, "w") as z:
+            z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+            z.writestr("content.opf", '<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">en-nav-1</dc:identifier><dc:title>English Navigator</dc:title><dc:language>en</dc:language></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="a" href="a.html" media-type="application/xhtml+xml"/><item id="b" href="b.html" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="a"/><itemref idref="b"/></spine></package>')
+            z.writestr("toc.ncx", f'<?xml version="1.0" encoding="utf-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head/><docTitle><text>English Navigator</text></docTitle><navMap><navPoint id="n1" playOrder="1"><navLabel><text>Leaders</text></navLabel><content src="a.html"/><navPoint id="n2" playOrder="2"><navLabel><text>{long_t}</text></navLabel><content src="b.html"/></navPoint></navPoint></navMap></ncx>')
+            for f, h in (("a.html", "Leaders"), ("b.html", "Second article")):
+                body = "".join(f"<p>This is paragraph {k} of the section called {h}, written in plain English.</p>" for k in range(60))
+                z.writestr(f, f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><title>{h}</title></head><body><h1>{h}</h1>{body}</body></html>')
+        errsE, extE = [], []
+        ctxE, E_ = await new_ctx(b, url, extE, errsE, is_mobile=True, has_touch=True)
+        await E_.set_viewport_size({"width": 390, "height": 844})
+        await E_.goto(url); await E_.wait_for_timeout(1000)
+        await E_.set_input_files("#epubInput", str(en2)); await E_.wait_for_timeout(2500)
+        await E_.click('#bookGrid .book-card:has-text("English Navigator")'); await E_.wait_for_timeout(3000)
+        check("v8.2 English: header shows the English chapter title", await E_.inner_text("#chapterLabel") == "Leaders", await E_.inner_text("#chapterLabel"))
+        await poll(lambda: E_.evaluate("!document.getElementById('bookSeek').disabled"), 15000)
+        sk = await E_.evaluate(SEEK)
+        check("v8.2 English: seek bar runs left-to-right", sk["dir"] == "ltr" and sk["cdir"] == "ltr" and not sk["dis"], str(sk))
+        await E_.click("#tocToggle"); await E_.wait_for_timeout(500)
+        await E_.locator("#tocList .toc-sub").click(); await E_.wait_for_timeout(2000)
+        lg = await E_.evaluate(LABEL_GEOM)
+        check("v8.2 English: nested TOC jump shows the (long) article title, cut with an ellipsis inside the header",
+              await E_.inner_text("#chapterLabel") == long_t and lg["inside"] and lg["cut"] and lg["ov"] == "ellipsis" and lg["dir"] == "auto"
+              and await E_.is_visible("#prevPage") and await E_.is_visible("#nextPage"), str(lg))
+        check("v8.2 English: active TOC entry is the nested article", await E_.evaluate(ACTIVE) == [[long_t, "true"]], str(await E_.evaluate(ACTIVE)))
+        check("v8.2 English mobile: no horizontal overflow", await E_.evaluate("document.documentElement.scrollWidth<=innerWidth"))
+        check("v8.2 English: no JS errors", len(errsE) == 0, str(errsE[:3]))
+        await ctxE.close(); shutil.rmtree(tmpn, ignore_errors=True)
         await b.close()
 
 def main():
