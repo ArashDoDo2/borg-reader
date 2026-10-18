@@ -19,6 +19,9 @@
     return READER_THEMES[readerPrefs.theme] ? readerPrefs.theme : "light";
   }
   let readerPrefs = loadReaderPrefs();
+  // Diagnostics only (set by the WebKit probe): {noDir, method, direction}. Empty for real users.
+  let DEBUG = {};
+  try { DEBUG = JSON.parse(localStorage.getItem("borg-debug") || "{}") || {}; } catch (_) {}
   fontSize = Math.min(180, Math.max(70, Number(readerPrefs.fontSize) || 100));
 
   function loadReaderPrefs() {
@@ -68,7 +71,7 @@
     const lineHeight = readerPrefs.lineHeight || "1.9";
     const align = readerPrefs.align === "right" ? "right" : "justify";
     rendition.themes.default({
-      body: { "font-family": selectedFontStack(), "line-height": lineHeight, "color": ink, "background": background, "direction": "rtl" },
+      body: Object.assign({ "font-family": selectedFontStack(), "line-height": lineHeight, "color": ink, "background": background }, DEBUG.noDir ? {} : { "direction": "rtl" }),
       p: { "text-align": align, "margin": paraGap, "line-height": lineHeight },
       img: { "cursor": "zoom-in" },
       "h1,h2,h3,h4": { "line-height": "1.7", "margin": "0 0 1em" },
@@ -584,7 +587,8 @@
     });
     rendition = bookInstance.renderTo("viewer", {
       width: "100%", height: "100%", flow: readerPrefs.flow === "scrolled" ? "scrolled-doc" : "paginated",
-      spread: readerPrefs.spread === "none" ? "none" : "auto", manager: "default"
+      spread: readerPrefs.spread === "none" ? "none" : "auto", manager: "default",
+      ...(DEBUG.method ? { method: DEBUG.method } : {}), ...(DEBUG.direction ? { defaultDirection: DEBUG.direction } : {}),
     });
     rendition.hooks.content.register(onBookContent);
     // The book is rendered in an iframe; load the bundled font there too.
@@ -624,7 +628,7 @@
     rendition.on("rendered", () => {
       try {
         rendition.getContents().forEach(c => {
-          c.addStylesheetRules({ "body": { "direction": "rtl" } });
+          if (!DEBUG.noDir) c.addStylesheetRules({ "body": { "direction": "rtl" } });
         });
       } catch (_) {}
     });
