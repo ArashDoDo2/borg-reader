@@ -767,11 +767,18 @@
     const t = e.changedTouches && e.changedTouches[0];
     touchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
   }
-  function onTouchEnd(e) {
+  function onTouchEnd(e, contents) {
     const t = e.changedTouches && e.changedTouches[0];
     if (!touchStart || !t) return;
     const dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y, dt = Date.now() - touchStart.time;
     touchStart = null;
+    // iOS Safari never fires "click" on plain text inside the book iframe, so edge taps are detected from the touch itself.
+    if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 500) {
+      if (Date.now() < suppressClickUntil) return;
+      suppressClickUntil = Date.now() + 700; // swallow the synthetic click that other browsers send afterwards
+      handleTap(e.target, t.clientX, e.view, contents);
+      return;
+    }
     if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 800) {
       suppressClickUntil = Date.now() + 500;
       // Finger moving right turns to the next page in an RTL book, like a Persian paper book.
@@ -780,18 +787,22 @@
   }
   function onReaderClick(e, contents) {
     if (Date.now() < suppressClickUntil) return;
+    handleTap(e.target, e.clientX, e.view, contents);
+  }
+  function handleTap(target, clientX, view, contents) {
     if (settingsOpen() || searchOpen()) { closeSettings(false); closeSearch(false); return; }
     if (!$("selectionBar").hidden) { hideSelectionBar(); return; }
     if (!$("notePopup").hidden || !$("lookupBox").hidden) { $("notePopup").hidden = true; $("lookupBox").hidden = true; return; }
-    if (e.target && e.target.closest && e.target.closest("a, button, input, select, textarea, audio, video, label")) return;
+    const el = target && target.nodeType === 3 ? target.parentElement : target;
+    if (el && el.closest && el.closest("a, button, input, select, textarea, audio, video, label, img")) return;
     try {
-      const win = (contents && contents.window) || e.view;
+      const win = (contents && contents.window) || view;
       if (win && String(win.getSelection()).trim()) return;
     } catch (_) {}
-    const frame = e.view && e.view.frameElement;
+    const frame = (view && view.frameElement) || (contents && contents.window && contents.window.frameElement);
     const box = $("viewer").getBoundingClientRect();
     if (!frame || !box.width) return;
-    const ratio = (frame.getBoundingClientRect().left + e.clientX - box.left) / box.width;
+    const ratio = (frame.getBoundingClientRect().left + clientX - box.left) / box.width;
     const edges = readerPrefs.taps !== false && readerPrefs.flow !== "scrolled";
     if (!edges) setImmersive(!$("reader").classList.contains("immersive"));
     else if (ratio < EDGE_ZONE) goLeft();
