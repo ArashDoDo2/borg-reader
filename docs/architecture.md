@@ -1,7 +1,7 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v6.0.0. Product goals, roadmap and ideas live in
-`docs/context/product-spec-v1.1-fa.docx`; this file is the technical source of truth.
+Status: describes the code in `src/` as of v6.0.0. Product goals, roadmap and ideas live in the
+private product spec (not in this repo); this file is the technical source of truth.
 
 ## 1. Overview
 A static PWA. The browser does everything: parse EPUB, render, store books and progress.
