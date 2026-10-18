@@ -49,6 +49,7 @@ H_IN_VIEW = """(t) => { const f = document.querySelector('#viewer iframe'); if (
   return x.width > 0 && x.right + r.left > box.left && x.left + r.left < box.right && x.bottom + r.top > box.top && x.top + r.top < box.bottom }"""
 VEIL_JS = """() => { const d = document.querySelector('#viewer iframe').contentDocument;
   return { veil: !!d.getElementById('borg-veil'), vis: d.defaultView.getComputedStyle(d.documentElement).visibility } }"""
+DIAG_JS = "() => { const d = document.querySelector('#viewer iframe'); return { diag: document.documentElement.dataset.borgDiag || '', frames: document.querySelectorAll('#viewer iframe').length, veils: [...document.querySelectorAll('#viewer iframe')].map(f => { try { const x = f.contentDocument; return [!!x.getElementById('borg-veil'), x.defaultView.getComputedStyle(x.documentElement).visibility, (x.getAnimations ? x.getAnimations().length : -1)]; } catch (e) { return String(e); } }) } }"
 BODY_DIR = "() => { const d = document.querySelector('#viewer iframe').contentDocument; return d.defaultView.getComputedStyle(d.body).direction }"
 
 def english_epub(path):
@@ -66,6 +67,7 @@ def english_epub(path):
 async def new_ctx(browser, opts, errors, external):
     ctx = await browser.new_context(**opts)
     await ctx.add_init_script(GUIDE_SEEN_JS)
+    await ctx.add_init_script("try{localStorage.setItem('borg-debug', JSON.stringify({stats:1}))}catch(e){}")
     async def block(route):
         external.append(route.request.url); await route.abort()
     await ctx.route(lambda u: not u.startswith("http://localhost"), block)
@@ -113,9 +115,10 @@ async def touch_device(browser, url, name):
     await tap_at(pg, 0.9)
     c = await pg.evaluate(LAYOUT_JS)
     one = lambda x, y: x and y and x["sl"] is not None and y["sl"] is not None and abs(abs(y["sl"] - x["sl"]) - x["cw"]) <= 2
+    tapdiag = await pg.evaluate(DIAG_JS)
     check(f"{name}: tap near the next-page edge turns exactly one page; the other edge comes back",
           one(a, b) and c and abs(c["sl"] - a["sl"]) <= 1 and (await pg.evaluate(VISIBLE_TEXT_JS) or "").startswith("فصل اول"),
-          f"{a and a['sl']} → {b and b['sl']} → {c and c['sl']} (page {a and a['cw']})")
+          f"{a and a['sl']} → {b and b['sl']} → {c and c['sl']} (page {a and a['cw']}) diag={tapdiag}")
     h0 = (await pg.locator("#viewer").bounding_box())["height"]
     await tap_at(pg, 0.5)
     imm = not await pg.is_visible(".reader-toolbar") and (await pg.locator("#viewer").bounding_box())["height"] > h0 + 50
@@ -133,8 +136,12 @@ async def touch_device(browser, url, name):
     await pg.wait_for_timeout(800)
     check(f"{name}: TOC jump shows the chapter heading inside the viewer and its title in the header",
           await pg.evaluate(H_IN_VIEW, "فصل دوم") and await pg.inner_text("#chapterLabel") == "فصل دوم", await pg.inner_text("#chapterLabel"))
+    try:  # the veil may legitimately stay up to its 1.5 s safety limit
+        await poll(lambda: pg.evaluate("()=>{const v=(" + VEIL_JS + ")();return !v.veil && v.vis==='visible'}"), 3000)
+    except TimeoutError:
+        pass
     veil = await pg.evaluate(VEIL_JS)
-    check(f"{name}: chapter veil is lifted", not veil["veil"] and veil["vis"] == "visible", str(veil))
+    check(f"{name}: chapter veil is lifted", not veil["veil"] and veil["vis"] == "visible", str(veil) + " diag=" + str(await pg.evaluate(DIAG_JS)))
     try:
         await poll(lambda: pg.evaluate("!document.getElementById('bookSeek').disabled"), 30000)
         seek = True

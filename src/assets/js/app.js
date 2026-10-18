@@ -890,6 +890,9 @@
   }
   // v8.5 diagnostics: how often the expensive open steps really ran (read by the e2e tests when borg-debug has "stats").
   const openStats = { detect: 0, locGen: 0 };
+  // Generic diagnostics (WebKit probe): counters/timestamps in <html data-borg-diag> when borg-debug has "stats".
+  const diagData = {}, diagT0 = Date.now();
+  function diag(k, v) { if (!DEBUG.stats) return; diagData[k] = v === undefined ? (diagData[k] || 0) + 1 : v; document.documentElement.dataset.borgDiag = JSON.stringify(diagData); }
   function countOpenStat(k) { openStats[k]++; if (DEBUG.stats) document.documentElement.dataset["borg" + k[0].toUpperCase() + k.slice(1)] = String(openStats[k]); }
   async function prepareLocations(record, token) {
     const book = bookInstance;
@@ -995,13 +998,14 @@
     // Not returned to epub.js (never block rendering on fonts); every reveal looks the veil up in the live document.
     const liftVeil = c => { try { const d = c && c.document; if (d) d.querySelectorAll("style#borg-veil").forEach(v => v.remove()); } catch (_) {} };
     rendition.hooks.content.register(contents => {
-      const reveal = () => { liftVeil(contents); if (token === openToken) hideOpening(); };
+      diag("veilHook");
+      const reveal = () => { diag("veilLiftMs", Date.now() - diagT0); liftVeil(contents); if (token === openToken) hideOpening(); };
       const safety = setTimeout(reveal, 1500); // never leave a page hidden
       Promise.resolve(contents.addStylesheet(READER_FONTS_URL))
-        .then(() => new Promise(r => { const d = contents.document; if (d && d.body) void d.body.offsetHeight; const w = contents.window; (w && w.requestAnimationFrame ? w.requestAnimationFrame.bind(w) : setTimeout)(r); }))
+        .then(() => { diag("fontsCssMs", Date.now() - diagT0); return new Promise(r => { const d = contents.document; if (d && d.body) void d.body.offsetHeight; const w = contents.window; (w && w.requestAnimationFrame ? w.requestAnimationFrame.bind(w) : setTimeout)(r); }); })
         .then(() => { const d = contents.document; return Promise.race([d && d.fonts ? d.fonts.ready : null, new Promise(r => setTimeout(r, 700))]); })
         .catch(() => {})
-        .then(() => { clearTimeout(safety); reveal(); });
+        .then(() => { diag("fontsReadyMs", Date.now() - diagT0); clearTimeout(safety); reveal(); });
     });
     rendition.on("rendered", () => setTimeout(() => { try { rendition.getContents().forEach(liftVeil); } catch (_) {} }, 1600));
     applyReaderStyles();
@@ -1199,11 +1203,14 @@
     if (handled && fromPage && e.cancelable) e.preventDefault();
   }
   function onTouchStart(e) {
+    diag("touchstart");
     const t = e.changedTouches && e.changedTouches[0];
     touchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
   }
   function onTouchEnd(e, contents) {
+    diag("touchend");
     const t = e.changedTouches && e.changedTouches[0];
+    diag("touchendHasPoint", !!t); diag("touchendHadStart", !!touchStart);
     if (!touchStart || !t) return;
     const dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y, dt = Date.now() - touchStart.time;
     touchStart = null;
@@ -1221,10 +1228,12 @@
     }
   }
   function onReaderClick(e, contents) {
+    diag("click");
     if (Date.now() < suppressClickUntil) return;
     handleTap(e.target, e.clientX, e.view, contents);
   }
   function handleTap(target, clientX, view, contents) {
+    diag("tap"); diag("tapHasFrame", !!((view && view.frameElement) || (contents && contents.window && contents.window.frameElement)));
     if (settingsOpen() || searchOpen()) { closeSettings(false); closeSearch(false); return; }
     if (!$("selectionBar").hidden) { hideSelectionBar(); return; }
     if (!$("notePopup").hidden || !$("lookupBox").hidden) { $("notePopup").hidden = true; $("lookupBox").hidden = true; return; }
