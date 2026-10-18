@@ -989,10 +989,16 @@
       // Many Persian EPUBs omit page-progression-direction (some even claim lang="en"); without RTL here the
       // chapter start sits off-screen and TOC jumps land on the chapter's last page. A book's own direction still wins.
       defaultDirection: DEBUG.direction || bookDir,
+      // Safari runs no event listener inside a sandboxed iframe without allow-scripts, so taps, footnote and image
+      // clicks and keys inside the book silently did nothing on iPhone/iPad. Book scripts still cannot run: the
+      // srcdoc frame inherits our CSP (script-src 'self') and stripBookScripts() removes them before rendering.
+      allowScriptedContent: true,
     });
     // Keep each newly loaded chapter invisible until the reader font and theme are applied, so the text
     // doesn't first paint in the fallback font and then visibly re-flow.
     // Registered after "opened" so it runs after epub.js's own resource-substitution hook (both rewrite section.output).
+    // Defence in depth for allowScriptedContent: drop scripts, inline handlers and javascript: URLs from every chapter.
+    bookInstance.spine.hooks.content.register(stripBookScripts);
     const veilBook = bookInstance;
     veilBook.opened.then(() => veilBook.spine.hooks.serialize.register((output, section) => {
       const html = typeof section.output === "string" ? section.output : output;
@@ -1132,6 +1138,19 @@
   // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
   const SWIPE_MIN_PX = 50, EDGE_ZONE = 0.25;
   let touchStart = null, suppressClickUntil = 0;
+  function stripBookScripts(doc) {
+    try {
+      if (!doc || !doc.querySelectorAll) return;
+      doc.querySelectorAll("script, iframe, object, embed").forEach(el => el.remove());
+      doc.querySelectorAll("*").forEach(el => {
+        for (const attr of Array.from(el.attributes)) {
+          const n = attr.name.toLowerCase();
+          if (n.startsWith("on")) el.removeAttribute(attr.name);
+          else if ((n === "href" || n === "src" || n === "xlink:href" || n === "action") && /^\s*javascript:/i.test(attr.value)) el.removeAttribute(attr.name);
+        }
+      });
+    } catch (_) {}
+  }
   function bookIsRtl() { return bookDir === "rtl"; }
   // A book's declared page-progression-direction wins. Otherwise look at the actual text of the first chapters:
   // the language tag is unreliable (Persian books tagged "en" exist). Image-only books fall back to the tag, then RTL.

@@ -5,6 +5,12 @@ with CSS columns. Most bugs so far came from three sources: Safari/WebKit, epub.
 Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/app.js`) → test that guards it.
 
 ## Safari / WebKit
+- **Nothing inside the book reacts on iPhone/iPad (taps, footnote and image clicks, keys)** → the epub.js iframe was
+  sandboxed `allow-same-origin` only; WebKit runs no event listeners in a sandboxed frame without `allow-scripts`
+  (console: "Blocked script execution in 'about:srcdoc'"). Chromium does, so every Chromium test passed. → 8.6.1:
+  `allowScriptedContent: true`. Book scripts stay dead: the srcdoc frame inherits the page CSP (`script-src 'self'`,
+  no inline, no blob:) and `stripBookScripts()` (spine content hook) removes `<script>`, `on*` attributes,
+  `javascript:` URLs, iframes/objects/embeds. → e2e section 22, WebKit tap checks (gating).
 - **Blank book page on iPad/Safari (TOC visible)** → WebKit's `Range#getBoundingClientRect()` over RTL multi-column
   content made epub.js size the iframe ~500,000 px wide, which Safari cannot paint. → `patchTextWidth("rects")`
   overrides `ePub.Contents.prototype.textWidth` with the union of `getClientRects()`; identical results in Chromium.

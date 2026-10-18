@@ -1628,6 +1628,33 @@ async def run(url):
         unexpected = [e for e in errsQ if "500" not in e and "ERR_INTERNET_DISCONNECTED" not in e]
         check("v8.5 speed + sync: no JS errors, no external requests", not unexpected and not extQ, str(unexpected[:3] + extQ[:3]))
         await ctxQ.close()
+        # 22. v8.6.1: the book iframe allows scripts (Safari runs no listeners otherwise) but book scripts never run
+        import zipfile as _zf22
+        tmps = Path(tempfile.mkdtemp(prefix="borg-e2e-scr-"))
+        evil = tmps / "scripted.epub"
+        with _zf22.ZipFile(evil, "w") as z:
+            z.writestr(_zf22.ZipInfo("mimetype"), "application/epub+zip", compress_type=_zf22.ZIP_STORED)
+            z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+            z.writestr("content.opf", '<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">scr-1</dc:identifier><dc:title>کتاب اسکریپت‌دار</dc:title><dc:language>fa</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml" properties="scripted"/><item id="js" href="x.js" media-type="application/javascript"/></manifest><spine><itemref idref="c1"/></spine></package>')
+            z.writestr("nav.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>فهرست</title></head><body><nav epub:type="toc"><ol><li><a href="c1.xhtml">فصل اول</a></li></ol></nav></body></html>')
+            z.writestr("x.js", "window.top.__pwned = 'external';")
+            paras = "".join(f"<p>پاراگراف {k} متن عادی این کتاب است.</p>" for k in range(30))
+            z.writestr("c1.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="fa" dir="rtl"><head><title>فصل اول</title><script src="x.js"></script><script>window.top.__pwned = "inline";</script></head><body><h1 onclick="window.top.__pwned=\'click\'">فصل اول</h1><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" onerror="window.top.__pwned=\'onerror\'" alt=""/><a id="jsl" href="javascript:window.top.__pwned=\'href\'">پیوند</a>' + paras + '</body></html>')
+        errsS, extS = [], []
+        ctxS, SP = await new_ctx(b, url, extS, errsS)
+        await SP.goto(url); await SP.wait_for_timeout(1000)
+        await SP.set_input_files("#epubInput", str(evil)); await SP.wait_for_timeout(2500)
+        await SP.click('#bookGrid .book-card:has-text("کتاب اسکریپت‌دار")'); await SP.wait_for_timeout(3500)
+        info = await SP.evaluate("""()=>{const f=document.querySelector('#viewer iframe');const d=f.contentDocument;
+          return {sandbox:f.getAttribute('sandbox')||'', scripts:d.querySelectorAll('script').length, onattr:[...d.querySelectorAll('*')].some(e=>[...e.attributes].some(a=>/^on/i.test(a.name))),
+                  js:!!(d.getElementById('jsl')&&/javascript:/i.test(d.getElementById('jsl').getAttribute('href')||'')), pwned: window.__pwned||null}}""")
+        check("v8.6.1: book iframe allows scripts (so Safari runs our listeners)", "allow-scripts" in info["sandbox"], info["sandbox"])
+        check("v8.6.1: book scripts, inline handlers and javascript: links are stripped and never run",
+              info["scripts"] == 0 and not info["onattr"] and not info["js"] and info["pwned"] is None, str(info))
+        await SP.click("#nextPage") if await SP.is_visible("#nextPage") else None
+        await SP.wait_for_timeout(800)
+        check("v8.6.1: still no book script ran after interaction", await SP.evaluate("window.__pwned||null") is None)
+        await ctxS.close(); shutil.rmtree(tmps, ignore_errors=True)
         await b.close()
 
 def main():

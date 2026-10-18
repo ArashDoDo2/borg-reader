@@ -27,9 +27,9 @@ def check(name, ok, info="", gate=True):
     if not ok and os.environ.get("GITHUB_ACTIONS"):
         print(f"::{LEVEL if gate else 'warning'} title=webkit::{name} [{str(info)[:600]}]", flush=True)
 
-# Synthetic touches from Playwright's WebKit never reached the book iframe in CI (not even a click), while real
-# iOS taps are handled since 8.0.5. Until that is understood, tap checks report without gating the deploy.
-TAP_GATE = os.environ.get("WEBKIT_TAP_GATE") == "1"
+# Taps used to reach no listener in WebKit: the book iframe was sandboxed without allow-scripts, and WebKit runs no
+# event listeners there (real iPhones too). Fixed in 8.6.1 (allowScriptedContent); tap checks gate again.
+TAP_GATE = os.environ.get("WEBKIT_TAP_GATE", "1") == "1"
 IFRAME_COUNTERS_JS = """() => { const f = document.querySelector('#viewer iframe'); const d = f.contentDocument; if (d.__wk) return;
   d.__wk = {touchstart: 0, touchend: 0, click: 0, pointerdown: 0};
   ['touchstart', 'touchend', 'click', 'pointerdown'].forEach(t => d.addEventListener(t, () => { d.__wk[t]++; }, true)); }"""
@@ -62,6 +62,8 @@ H_IN_VIEW = """(t) => { const f = document.querySelector('#viewer iframe'); if (
 VEIL_JS = """() => { const d = document.querySelector('#viewer iframe').contentDocument;
   return { veil: !!d.getElementById('borg-veil'), vis: d.defaultView.getComputedStyle(d.documentElement).visibility } }"""
 DIAG_JS = "() => { const d = document.querySelector('#viewer iframe'); return { diag: document.documentElement.dataset.borgDiag || '', frames: document.querySelectorAll('#viewer iframe').length, veils: [...document.querySelectorAll('#viewer iframe')].map(f => { try { const x = f.contentDocument; return [!!x.getElementById('borg-veil'), x.defaultView.getComputedStyle(x.documentElement).visibility, (x.getAnimations ? x.getAnimations().length : -1)]; } catch (e) { return String(e); } }) } }"
+# The chapter name shown to the user: the toolbar line on phones (8.6), the page-nav label elsewhere.
+CHAPTER_JS = "() => { const v = e => e && e.getBoundingClientRect().height > 0 ? e.textContent.trim() : ''; return v(document.getElementById('readerChapter')) || v(document.getElementById('chapterLabel')) || (document.getElementById('chapterLabel') || {}).textContent || '' }"
 BODY_DIR = "() => { const d = document.querySelector('#viewer iframe').contentDocument; return d.defaultView.getComputedStyle(d.body).direction }"
 
 def english_epub(path):
@@ -149,7 +151,7 @@ async def touch_device(browser, url, name):
         pass
     await pg.wait_for_timeout(800)
     check(f"{name}: TOC jump shows the chapter heading inside the viewer and its title in the header",
-          await pg.evaluate(H_IN_VIEW, "فصل دوم") and await pg.inner_text("#chapterLabel") == "فصل دوم", await pg.inner_text("#chapterLabel"))
+          await pg.evaluate(H_IN_VIEW, "فصل دوم") and await pg.evaluate(CHAPTER_JS) == "فصل دوم", await pg.evaluate(CHAPTER_JS))
     try:  # the veil may legitimately stay up to its 1.5 s safety limit
         await poll(lambda: pg.evaluate("()=>{const v=(" + VEIL_JS + ")();return !v.veil && v.vis==='visible'}"), 3000)
     except TimeoutError:
@@ -193,7 +195,7 @@ async def desktop(browser, url, tmp):
             pass
         await pg.wait_for_timeout(800)
         check("desktop: nested TOC entry opens its section with the heading inside the viewer",
-              await pg.evaluate(H_IN_VIEW, "Second article") and await pg.inner_text("#chapterLabel") == "Second article", await pg.inner_text("#chapterLabel"))
+              await pg.evaluate(H_IN_VIEW, "Second article") and await pg.evaluate(CHAPTER_JS) == "Second article", await pg.evaluate(CHAPTER_JS))
     check("desktop: no page errors, no external requests", not errs and not ext, str(errs[:3] + ext[:3]))
     await ctx.close()
 
