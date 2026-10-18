@@ -580,7 +580,7 @@ async def run(url):
         # Admin panel
         E.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
         await E.click('[data-view="admin"]'); await E.wait_for_timeout(1500)
-        check("admin stats shown", await E.locator("#adminStats .stat").count() == 6)
+        check("admin stats shown", await E.locator("#adminStats .stat").count() == 7)  # v8.4: + client errors
         check("approval setting on by default", await E.is_checked("#settingApproval"))
         await E.click("#settingApproval"); await E.wait_for_timeout(1200)
         check("approval setting saved", not await E.is_checked("#settingApproval"))
@@ -1291,6 +1291,67 @@ async def run(url):
         check("v8.3 clean: re-importing the original file is still detected as a duplicate", "قبلاً" in await K.inner_text("#toast") and await K.locator("#bookGrid .book-card").count() == 2)
         check("v8.3 clean: no JS errors, no external requests", len(errsK) == 0 and len(extK) == 0, str(errsK[:3] + extK[:3]))
         await ctxK.close(); shutil.rmtree(tmpd, ignore_errors=True)
+
+        # 19. v8.4 error reports: client errors are queued, batched to the API and listed for the admin (admin from scenario 10)
+        QKEY = "borg-error-queue" + suffix
+        QUEUE_JS = "([k]) => JSON.parse(localStorage.getItem(k) || '[]')"
+        HIDE_JS = "() => { Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); document.dispatchEvent(new Event('visibilitychange')); }"
+        extX, errsX = [], []
+        ctxX, X = await new_ctx(b, url, extX, errsX)
+        await X.goto(url); await X.wait_for_timeout(1000)
+        for _ in range(2):
+            await X.evaluate("() => { setTimeout(() => { throw new Error('borg-e2e-error 19 for mail@example.com') }, 0); }")
+        await X.evaluate("() => { Promise.reject(new Error('borg-e2e-rejection 19')); }")
+        await X.wait_for_timeout(400)
+        q = await X.evaluate(QUEUE_JS, [QKEY])
+        qe = [x for x in q if "borg-e2e-error 19" in x["message"]]
+        check("v8.4 errors: uncaught error queued once with count 2 (client dedupe), e-mail scrubbed",
+              len(qe) == 1 and qe[0]["count"] == 2 and qe[0]["kind"] == "error" and "mail@example.com" not in qe[0]["message"]
+              and qe[0]["app_version"] and qe[0]["path"] == "/" + url.split("/", 3)[3] and "borg-e2e-error 19" in qe[0]["stack"], str(q)[:300])
+        check("v8.4 errors: unhandled rejection queued", any(x["kind"] == "rejection" and "borg-e2e-rejection 19" in x["message"] for x in q), str(q)[:300])
+        await X.evaluate(HIDE_JS)
+        try:
+            await poll(lambda: X.evaluate("([k]) => !localStorage.getItem(k)", [QKEY]), 8000); sent = True
+        except Exception:
+            sent = False
+        check("v8.4 errors: queue sent and cleared when the page is hidden (anonymous visitor)", sent)
+        check("v8.4 errors: only the triggered errors, no external requests", len(extX) == 0
+              and all("borg-e2e" in e for e in errsX), str(errsX[:3] + extX[:3]))
+        await ctxX.close()
+        extY, errsY = [], []
+        ctxY, Y = await new_ctx(b, url, extY, errsY)
+        Y.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
+        await Y.goto(url); await Y.wait_for_timeout(800)
+        await auth(Y, "login", email="admin@example.com", password="password1"); await wait_synced(Y)
+        await Y.click('[data-view="admin"]')
+        await poll(lambda: _count_gt(Y, "#errorsList .err-item", 0), 8000)
+        item = Y.locator('#errorsList .err-item:has-text("borg-e2e-error 19")')
+        check("v8.4 errors: admin sees the error with its count and version", await item.count() == 1 and await item.is_visible()
+              and "× ۲" in await item.inner_text() and await item.locator(".cat-chip").count() == 1, (await Y.inner_text("#errorsList"))[:300])
+        check("v8.4 errors: error badge in the admin stats", await Y.locator("#adminStats .stat-errors").is_visible()
+              and "خطای کاربران" in await Y.inner_text("#adminStats"))
+        await item.locator("summary").click(); await Y.wait_for_timeout(200)
+        check("v8.4 errors: details expand to stack / user agent", await item.locator(".err-meta").is_visible()
+              and "مرورگر" in await item.locator(".err-meta").inner_text() and await item.locator(".err-stack").is_visible(), await item.inner_text())
+        await item.locator("[data-err-clear]").click()
+        async def _gone(): return await Y.locator('#errorsList .err-item:has-text("borg-e2e-error 19")').count() == 0
+        await poll(_gone, 6000)
+        check("v8.4 errors: clear one removes it, others stay", await Y.locator('#errorsList .err-item:has-text("borg-e2e-error 19")').count() == 0
+              and await Y.locator('#errorsList .err-item:has-text("borg-e2e-rejection 19")').count() == 1)
+        # A logged-in user's report goes through the CSRF-protected path
+        await Y.evaluate("() => { setTimeout(() => { throw new Error('borg-e2e-admin-error 19') }, 0); }")
+        await Y.wait_for_timeout(300); await Y.evaluate(HIDE_JS)
+        await poll(lambda: Y.evaluate("([k]) => !localStorage.getItem(k)", [QKEY]), 8000)
+        await Y.click("#errorsRefresh")
+        await poll(lambda: _count_gt(Y, '#errorsList .err-item:has-text("borg-e2e-admin-error 19")', 0), 6000)
+        adm = Y.locator('#errorsList .err-item:has-text("borg-e2e-admin-error 19")')
+        await adm.locator("summary").click(); await Y.wait_for_timeout(200)
+        check("v8.4 errors: logged-in report (CSRF) listed as from a user", "۱ کاربر" in await adm.inner_text(), await adm.inner_text())
+        await Y.click("#errorsClearAll")
+        await poll(lambda: _contains(Y, "#errorsList", "خطایی ثبت نشده است"), 6000)
+        check("v8.4 errors: clear all empties the list", await Y.locator("#errorsList .err-item").count() == 0 and await Y.is_visible("#errorsList"))
+        check("v8.4 errors admin: no unexpected JS errors, no external requests", len(extY) == 0 and all("borg-e2e" in e for e in errsY), str(errsY[:3] + extY[:3]))
+        await ctxY.close()
         await b.close()
 
 def main():

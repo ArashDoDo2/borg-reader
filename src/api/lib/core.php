@@ -32,6 +32,7 @@ function config(): array {
         'max_book_bytes' => 100 * 1024 * 1024,
         'catalog_requires_approval' => true,
         'session_days' => 60,
+        'client_errors_max' => 5000, // rows kept in client_errors (oldest deleted beyond this)
     ];
     return $cfg = $c;
 }
@@ -115,6 +116,15 @@ function migrations(): array {
             "ALTER TABLE books ADD COLUMN publisher VARCHAR(300) NOT NULL DEFAULT ''",
             "ALTER TABLE books ADD COLUMN published VARCHAR(40) NOT NULL DEFAULT ''",
             "ALTER TABLE catalog ADD COLUMN category VARCHAR(80) NOT NULL DEFAULT ''",
+        ],
+        5 => [
+            "CREATE TABLE client_errors (id {AI}, created_at BIGINT NOT NULL, user_id INTEGER NOT NULL DEFAULT 0,
+               app_version VARCHAR(20) NOT NULL DEFAULT '', kind VARCHAR(20) NOT NULL DEFAULT 'error',
+               message VARCHAR(500) NOT NULL DEFAULT '', source VARCHAR(300) NOT NULL DEFAULT '', stack TEXT,
+               url_path VARCHAR(300) NOT NULL DEFAULT '', user_agent VARCHAR(300) NOT NULL DEFAULT '',
+               count INTEGER NOT NULL DEFAULT 1, fingerprint CHAR(64) NOT NULL, last_seen BIGINT NOT NULL DEFAULT 0)",
+            "CREATE INDEX client_errors_fp ON client_errors (fingerprint, created_at)",
+            "CREATE INDEX client_errors_seen ON client_errors (last_seen)",
         ],
     ];
 }

@@ -144,6 +144,12 @@
           <p id="inviteResult" class="invite-result" aria-live="polite"></p>
           <div id="inviteList" class="admin-list"></div></div>
         <div class="admin-block"><h3>کاربران</h3><div id="userList" class="admin-list"></div></div>
+        <div id="errorsBlock" class="admin-block"><h3>خطاهای کاربران <span id="errorsCount" class="status-chip"></span></h3>
+          <div class="admin-row errors-tools"><select id="errorsVersion" class="admin-input" aria-label="نسخه"><option value="">همهٔ نسخه‌ها</option></select>
+            <button id="errorsRefresh" class="secondary-button" type="button">تازه‌سازی</button>
+            <button id="errorsClearAll" class="secondary-button" type="button">پاک کردن همه</button></div>
+          <div id="errorsList" class="admin-list"></div>
+          <button id="errorsMore" class="secondary-button" type="button" hidden>نمایش بیشتر</button></div>
       </div>
     </section>
   </main>
