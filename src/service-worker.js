@@ -1,5 +1,5 @@
 // Bump this name on every release so old caches are removed.
-const CACHE_NAME = "borg-shell-v8.1.3";
+const CACHE_NAME = "borg-shell-v8.1.4";
 // Files shared to the app (Android share sheet) wait here until the page imports them.
 const SHARE_CACHE = "borg-share";
 const APP_SHELL = [

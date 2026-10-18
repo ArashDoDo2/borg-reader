@@ -719,7 +719,7 @@
     // Nested entries (e.g. articles under a section) are listed too, indented by depth (max 3 levels).
     const flat = [];
     (function walk(items, depth) { (items || []).forEach(it => { flat.push({ it, depth }); if (depth < 2) walk(it.subitems, depth + 1); }); })(toc, 0);
-    $("tocList").innerHTML = flat.length ? flat.map(({ it, depth }, i) => `<button class="toc-link${depth ? " toc-sub toc-d" + depth : ""}" type="button" data-href="${esc(it.href)}">${esc((it.label || "").trim() || `بخش ${i+1}`)}</button>`).join("") : '<p class="muted">فهرست فصل‌ها در این EPUB وجود ندارد.</p>';
+    $("tocList").innerHTML = flat.length ? flat.map(({ it, depth }, i) => `<button class="toc-link${depth ? " toc-sub toc-d" + depth : ""}" type="button" dir="auto" data-href="${esc(it.href)}">${esc((it.label || "").trim() || `بخش ${i+1}`)}</button>`).join("") : '<p class="muted">فهرست فصل‌ها در این EPUB وجود ندارد.</p>';
     $("tocList").querySelectorAll("[data-href]").forEach(btn => btn.addEventListener("click", () => { closeToc(false); if (rendition) rendition.display(btn.dataset.href); }));
     await renderBookAnnotations();
     updateBookmarkButton();
@@ -1379,7 +1379,7 @@
     const anns = (await getAnnotations(currentBook.id)).sort((a, b) => cfiCompare(a.cfi, b.cfi));
     $("notesList").innerHTML = anns.length ? anns.map(a => `<div class="note-item" data-goto="${esc(a.cfi)}">
         <span class="note-mark" style="background:${a.type === "bookmark" ? "#2f7a62" : (HL_COLORS[a.color] || HL_COLORS.yellow)}"></span>
-        <span class="note-text"><span class="note-quote">${a.type === "bookmark" ? "🔖 " : ""}${esc(a.quote || "")}</span>${a.note ? `<span class="note-note">✎ ${esc(a.note)}</span>` : ""}</span>
+        <span class="note-text"><span class="note-quote" dir="auto">${a.type === "bookmark" ? "🔖 " : ""}${esc(a.quote || "")}</span>${a.note ? `<span class="note-note" dir="auto">✎ ${esc(a.note)}</span>` : ""}</span>
         <button class="note-del" type="button" data-del="${esc(a.uid)}" aria-label="حذف">×</button></div>`).join("")
       : '<p class="muted">هنوز نشانک یا یادداشتی نداری. متن را انتخاب کن تا هایلایت شود.</p>';
   }
