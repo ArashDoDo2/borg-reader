@@ -488,3 +488,149 @@ body.dark .clean-broad{background:#3d3220;color:#f0d9a8}
  .reader-sync[data-state=syncing]::before{width:7px;height:7px}
 }
 @media(prefers-reduced-motion:reduce){.opening-spinner,.sync-chip[data-state=syncing]::before{animation:none}}
+
+/* v8.6 mobile: library + dialogs */
+/* First-run hero: hidden while the library loads and once it holds books (all widths; body classes set in renderLibrary). */
+body.lib-loading .hero,body.lib-has-books .hero{display:none}
+body.lib-loading .library-section,body.lib-has-books .library-section{margin-top:26px}
+/* Header: drawn sun/moon icon, connectivity only when offline */
+.theme-toggle .ico-sun,body.dark .theme-toggle .ico-moon{display:none}
+body.dark .theme-toggle .ico-sun{display:block}
+.network-status[hidden]{display:none}
+body.dark .topbar .icon-button:hover,body.dark #app .secondary-button:not(.import-button):hover,body.dark .account-dialog .secondary-button:hover{background:var(--mint);border-color:var(--line)}
+body.dark .book-badge{color:var(--green2)}
+.network-status{border:1px solid #e7c3b3;background:#fbefe9;border-radius:999px;padding:3px 10px;font-weight:600}
+body.dark .network-status{background:#3a2a24;border-color:#6b4a3c}
+/* Library toolbar: add is the primary action */
+.import-button{background:var(--green2);border-color:var(--green2);color:#fff;white-space:nowrap}
+.import-button:hover{background:var(--green);border-color:var(--green)}
+body.dark .import-button,body.dark .import-button:hover{color:#132019}
+.import-button .ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;flex-shrink:0}
+/* Focus rings and form controls in the green palette (library, catalog, admin, header, dialogs; the reader keeps its own) */
+#app,.topbar,.account-dialog{accent-color:var(--green2)}
+#app :focus-visible,.topbar :focus-visible,.account-dialog :focus-visible{outline:2px solid var(--green2);outline-offset:2px}
+#app input:focus-visible,#app select:focus-visible,#app textarea:focus-visible,.account-dialog input:focus-visible,.account-dialog textarea:focus-visible,.account-dialog select:focus-visible{outline:2px solid var(--green2);outline-offset:1px}
+#app .search-box input:focus-visible{outline:0}
+.admin-input:focus{outline:2px solid var(--green2);outline-offset:1px}
+.admin-input,.auth-form input,.auth-form textarea{transition:border-color .15s}
+@media(max-width:700px){
+ /* header */
+ .topbar{height:auto;min-height:60px;padding:env(safe-area-inset-top) max(14px,env(safe-area-inset-right)) 0 max(14px,env(safe-area-inset-left))}
+ .brand{font-size:16px}.brand-mark{width:36px;height:36px;border-radius:12px;font-size:19px}
+ .top-actions .icon-button{min-width:44px;height:44px;border-radius:13px}
+ .account-button{min-height:44px}
+ .network-status{font-size:11px}
+ body.lib-loading .library-section,body.lib-has-books .library-section{margin-top:10px}
+ .hero{margin-top:14px}
+ /* tabs: one row; the sync chip shrinks instead of wrapping to a second line */
+ .view-tabs{flex-wrap:nowrap;gap:2px;margin-bottom:14px;overflow-x:auto;scrollbar-width:none}
+ .view-tabs::-webkit-scrollbar{display:none}
+ .view-tabs [role=tab]{flex-shrink:0;padding:12px 10px;min-height:44px}
+ .view-tabs .sync-wrap{flex:0 1 auto;min-width:0;margin-right:auto;padding-inline-start:6px}
+ .view-tabs .sync-chip{width:32px;min-height:32px;padding:0;justify-content:center;font-size:0;gap:0} /* dot only, like the reader chip */
+ .view-tabs .sync-chip::before{width:9px;height:9px}
+ /* the tab already names the view: drop «مجموعه شخصی / کتابخانه» and «برای همه / کتابخانهٔ عمومی» */
+ #viewMine>.section-heading>div:first-child,#viewCatalog>.section-heading>div:first-child{display:none}
+ .section-heading{margin-bottom:12px;gap:0}
+ /* toolbar: search full width, then add + cleanup + sort on one row */
+ #viewMine .library-controls{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:8px}
+ #viewMine .lib-search{grid-column:1/-1;order:0;height:46px}
+ #viewMine .import-button{order:1;min-height:44px;padding:0 14px}
+ #viewMine .clean-open{order:2;min-height:44px;padding:0 12px;flex:none}
+ #viewMine .sort-select{order:3;min-width:0;width:100%;max-width:none;height:44px;flex:none}
+ .lbl-long{display:none}
+ .search-box input,.reader-select.sort-select,.admin-input,.auth-form input,.auth-form textarea{font-size:16px}
+ /* filter chips: one horizontally scrollable row bleeding to the screen edges */
+ .filter-chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin-inline:-16px;padding:2px 16px;margin-bottom:16px;scroll-padding-inline:16px;-webkit-overflow-scrolling:touch}
+ .filter-chips::-webkit-scrollbar{display:none}
+ .filter-chips button{flex-shrink:0;white-space:nowrap;min-height:40px;padding:6px 14px;font-size:13px}
+ .catalog-filters{margin:10px -16px 16px}
+ /* books first: the reading-stats card moves below the grid (#viewMine becomes a column) */
+ #viewMine:not([hidden]){display:flex;flex-direction:column}
+ #viewMine>#statsCard{order:1;margin:22px 0 0}
+ #viewMine>#storageInfo{order:2}
+ #viewMine>#emptyState{order:3}
+ /* reading stats: one compact card */
+ .stats-card:not([hidden]){display:flex;flex-wrap:wrap;align-items:center;gap:8px 0;background:var(--paper);border:1px solid var(--line);border-radius:16px;padding:10px 12px}
+ .stats-goal,.stat-mini{background:none;border:0;border-radius:0;padding:0}
+ .stats-goal{flex:1 1 100%;gap:10px;font-size:12px;line-height:1.6}
+ .stats-goal br{display:none}
+ .stats-goal>div:last-child{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+ .goal-ring{width:42px;height:42px}.goal-ring b{font-size:13px}
+ .goal-button{min-height:32px}
+ .stat-mini{flex:1 1 0;min-width:0;display:flex;align-items:baseline;gap:5px;justify-content:center;padding:6px 4px 0;border-top:1px solid var(--line)}
+ .stat-mini+.stat-mini{border-inline-start:1px solid var(--line)}
+ .stat-mini b{display:inline;font-size:15px}
+ .stat-mini span{font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ /* book cards */
+ .continue-section{margin-bottom:22px}
+ .continue-shelf{grid-auto-columns:minmax(120px,38vw);gap:14px;margin-inline:-16px;padding:0 16px 6px;scroll-padding-inline:16px}
+ .book-grid{gap:20px 14px}
+ .book-cover-thumb{aspect-ratio:2/3;max-height:none;border-radius:6px 12px 12px 6px}
+ .book-cover-thumb .cover-name{font-size:15px}
+ .book-meta{padding-top:8px}
+ .book-meta h3{font-size:13.5px;line-height:1.7}
+ .book-meta p{font-size:12px;line-height:1.7}
+ .book-badge{margin-top:5px}
+ .cover-progress{height:4px}
+ /* «⋯» and «⇪»: 28px visual circle inside a 44px tap area at the cover corner; removing a book is in the «⋯» sheet */
+ .book-options,.share-book{top:0;width:44px;height:44px;background:radial-gradient(circle,rgba(255,255,255,.88) 0 13px,transparent 14px);box-shadow:none;font-size:14px;opacity:1;color:#173b35}
+ .book-options{left:0}
+ .share-book{left:34px}
+ .book-card .remove-book{display:none}
+ /* catalog */
+ .catalog-hint{max-width:none;margin:0 0 4px}
+ .catalog-actions .secondary-button{width:100%;min-height:40px;padding:6px 8px;white-space:normal;line-height:1.5}
+ /* catalog book page */
+ .book-page-top{margin-bottom:14px;flex-wrap:nowrap}
+ .breadcrumb{flex:1 1 auto;flex-wrap:nowrap;overflow:hidden;white-space:nowrap}
+ .crumb-current{max-width:40vw}
+ .detail-back{flex-shrink:0;min-height:44px}
+ .detail-head{gap:16px}
+ .detail-actions .primary-button,.split-button>.secondary-button{min-height:46px}
+ .detail-badge{display:inline-flex;align-items:center;min-height:34px}
+ .detail-cover{width:min(44vw,190px)}
+ .split-toggle{min-width:48px}
+ .detail-desc{font-size:14.5px}
+ .meta-table th{width:34%}
+ /* admin */
+ .admin-stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+ .stat{padding:9px 10px;border-radius:12px}
+ .stat b{font-size:17px}.stat span{font-size:10.5px;line-height:1.5;display:block}
+ .admin-block{padding:14px;border-radius:14px}
+ .admin-toggle{align-items:flex-start;line-height:1.8}
+ .admin-toggle input{margin-top:5px;flex-shrink:0}
+ .admin-item{align-items:flex-start;gap:8px}
+ .admin-item>:first-child{flex:1 1 100%;min-width:0;overflow-wrap:anywhere}
+ .admin-item .secondary-button,.admin-row .secondary-button,#errorsMore{min-height:42px;padding:8px 12px;font-size:12px}
+ .admin-row .admin-input{min-width:0;flex:1 1 160px;min-height:44px}
+ .errors-tools .admin-input{flex:1 1 100%}
+ .errors-tools .secondary-button{flex:1 1 0}
+ /* dialogs become bottom sheets */
+ .account-dialog,#catalogEditDialog,.clean-dialog{width:100%;max-width:none;margin:auto 0 0;max-height:calc(100dvh - 28px);overflow:auto;border-radius:22px 22px 0 0;padding:26px 18px calc(20px + env(safe-area-inset-bottom));padding-inline:max(18px,env(safe-area-inset-left)) max(18px,env(safe-area-inset-right));box-shadow:0 -12px 40px #0003;overscroll-behavior:contain}
+ .account-dialog[open]{animation:borg-sheet-up .24s ease-out}
+ .account-dialog::before{content:"";position:absolute;top:8px;left:50%;width:40px;height:4px;margin-left:-20px;border-radius:4px;background:var(--line)}
+ .account-dialog h2{padding-left:52px;font-size:18px;line-height:1.6;margin-bottom:14px}
+ .dialog-close{top:12px;left:12px;min-width:44px;height:44px;font-size:20px;border-radius:13px}
+ .account-dialog .segmented button{min-height:44px}
+ .account-dialog .primary-button,.account-dialog .secondary-button{min-height:46px}
+ .auth-form .primary-button{width:100%}
+ .account-dialog .dialog-actions>*{flex:1 1 0}
+ .shelf-checks label{min-height:40px}
+ .shelf-checks input{width:20px;height:20px;flex-shrink:0}
+ .shelf-checks .note-del{min-width:40px;min-height:40px;margin-inline-start:auto}
+ .account-dialog .admin-input{min-width:0}
+ .clean-preset{min-height:44px;width:100%;text-align:start;line-height:1.6}
+ .clean-form .secondary-button{min-height:44px}
+ #catalogEditSave{position:sticky;bottom:0;box-shadow:0 -8px 18px var(--paper)}
+ .toast{bottom:calc(18px + env(safe-area-inset-bottom))}
+ .update-banner{bottom:calc(14px + env(safe-area-inset-bottom))}
+}
+@keyframes borg-sheet-up{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
+@media(prefers-reduced-motion:reduce){.account-dialog[open]{animation:none}}
+/* Tablets: the library toolbar gets its own full-width row under the heading instead of overflowing beside it */
+@media(min-width:701px) and (max-width:1024px){
+ #viewMine>.section-heading{flex-direction:column;align-items:stretch;gap:12px}
+ #viewMine .library-controls{flex-wrap:wrap}
+ #viewMine .lib-search{flex:1 1 240px;min-width:0}
+}

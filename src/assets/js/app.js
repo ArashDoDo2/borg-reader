@@ -538,6 +538,9 @@
       $("continueShelf").innerHTML = reading.map(b => bookCardHtml(b, prog.get(b.id))).join("");
       updateStorageInfo();
       $("emptyState").classList.toggle("visible", books.length === 0);
+      // v8.6: the welcome hero is a first-run screen; once the library holds books it is hidden (CSS).
+      document.body.classList.remove("lib-loading");
+      document.body.classList.toggle("lib-has-books", books.length > 0);
       $("bookGrid").style.display = books.length ? "grid" : "none";
       const countEl = $("librarySearchCount");
       countEl.hidden = !query || !books.length || !filtered.length;
@@ -548,7 +551,7 @@
           ? '<div class="lib-search-empty" role="status"><p>کتابی با این عبارت پیدا نشد</p><button type="button" class="secondary-button" data-search-clear>× پاک کردن جستجو</button></div>'
           : '<p class="muted">کتابی با این عبارت پیدا نشد.</p>';
       }
-    }).catch(() => showToast("خواندن کتابخانه محلی ناموفق بود."));
+    }).catch(() => { document.body.classList.remove("lib-loading"); showToast("خواندن کتابخانه محلی ناموفق بود."); });
   }
   class UserError extends Error {}
   const READER_FONTS_URL = new URL("assets/css/reader-fonts.css", document.baseURI).href;
@@ -2111,6 +2114,7 @@
     const online = navigator.onLine;
     $("networkStatus").textContent = online ? "● آنلاین" : "● آفلاین";
     $("networkStatus").style.color = online ? "#4b9874" : "#c67b5c";
+    $("networkStatus").hidden = online; // v8.6: connectivity is shown only when offline
   }
   window.addEventListener("online", network); window.addEventListener("offline", network);
   if (localStorage.getItem(THEME_KEY) === "dark") document.body.classList.add("dark");
@@ -2121,7 +2125,7 @@
     await importSharedFiles();
     await initAccount();
     setTimeout(repairMetadata, 1200);
-  }).catch(err => { console.error(err); showToast("مرورگر اجازه ذخیره محلی نمی‌دهد."); });
+  }).catch(err => { console.error(err); document.body.classList.remove("lib-loading"); showToast("مرورگر اجازه ذخیره محلی نمی‌دهد."); });
   network();
 
   // ======================= Account, cloud sync, public catalog, admin (v7) =======================

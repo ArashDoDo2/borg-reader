@@ -15,13 +15,13 @@
   <link rel="stylesheet" href="assets/css/app.css">
   <title>بُرگ</title>
 </head>
-<body>
+<body class="lib-loading">
   <header class="topbar">
     <a class="brand" href="#" aria-label="صفحه اصلی"><span class="brand-mark">ب</span><span>بُرگ</span></a>
     <div class="top-actions">
-      <span id="networkStatus" class="network-status">در حال بررسی اتصال…</span>
+      <span id="networkStatus" class="network-status" role="status" hidden>در حال بررسی اتصال…</span>
       <button id="accountButton" class="secondary-button account-button" type="button">ورود</button>
-      <button id="themeToggle" class="icon-button" type="button" aria-label="تغییر حالت شب">◐</button>
+      <button id="themeToggle" class="icon-button theme-toggle" type="button" aria-label="تغییر حالت شب" title="حالت شب / روز"><svg class="ico ico-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 14.6A8.2 8.2 0 0 1 9.4 4a8.2 8.2 0 1 0 10.6 10.6z"/></svg><svg class="ico ico-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg></button>
     </div>
   </header>
 
@@ -61,8 +61,8 @@
             <option value="added">تازه‌ترین افزوده</option><option value="read">آخرین مطالعه</option><option value="title">عنوان</option>
           </select>
           <div id="librarySearchBox" class="search-box lib-search" role="search"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="جستجو در عنوان، نویسنده، ناشر…" autocomplete="off" aria-label="جستجو در کتابخانهٔ من" aria-keyshortcuts="/" enterkeyhint="search"><button id="librarySearchClear" class="lib-search-clear" type="button" aria-label="پاک کردن جستجو" title="پاک کردن جستجو (Esc)" hidden>×</button></div>
-          <label class="secondary-button import-button">افزودن EPUB<input id="epubInputSmall" type="file" accept=".epub,application/epub+zip" hidden></label>
-          <button id="cleanOpen" class="secondary-button clean-open" type="button" aria-haspopup="dialog" title="حذف عبارت‌های ناخواسته (مثل لینک کانال) از متن همهٔ کتاب‌ها">🧹 پاک‌سازی متن</button>
+          <label class="secondary-button import-button"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg><span>افزودن<span class="lbl-long"> EPUB</span></span><input id="epubInputSmall" type="file" accept=".epub,application/epub+zip" hidden></label>
+          <button id="cleanOpen" class="secondary-button clean-open" type="button" aria-haspopup="dialog" title="حذف عبارت‌های ناخواسته (مثل لینک کانال) از متن همهٔ کتاب‌ها" aria-label="پاک‌سازی متن"><span>🧹 پاک‌سازی<span class="lbl-long"> متن</span></span></button>
         </div>
       </div>
       <div id="statsCard" class="stats-card" hidden>
