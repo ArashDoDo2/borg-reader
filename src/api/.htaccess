@@ -1,0 +1,6 @@
+# Only index.php is reachable; lib/ is denied below.
+Options -Indexes
+<IfModule mod_headers.c>
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "same-origin"
+</IfModule>

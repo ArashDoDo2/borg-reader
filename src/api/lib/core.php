@@ -1,0 +1,222 @@
+<?php
+// Borg API core: config, database, migrations, JSON I/O, sessions, CSRF, auth helpers.
+// Not web-accessible (lib/.htaccess denies it); included only by api/index.php.
+declare(strict_types=1);
+if (!defined('BORG_API')) { http_response_code(404); exit; }
+
+final class ApiError extends Exception {
+    public int $status; public string $codeName;
+    public function __construct(int $status, string $codeName, string $message) {
+        parent::__construct($message); $this->status = $status; $this->codeName = $codeName;
+    }
+}
+function fail(int $status, string $code, string $message): void { throw new ApiError($status, $code, $message); }
+
+// ---------- Config ----------
+// Production: /home/<user>/public_html/borg/api -> /home/<user>/borg-config/config.php
+// Tests:      BORG_CONFIG=/path/to/config.php
+function config(): array {
+    static $cfg = null;
+    if ($cfg !== null) return $cfg;
+    $path = getenv('BORG_CONFIG') ?: '';
+    if ($path === '') {
+        $home = dirname(__DIR__, 4); // lib -> api -> borg -> public_html -> home
+        $path = $home . '/borg-config/config.php';
+    }
+    if (!is_file($path)) fail(503, 'not_configured', 'Server is not configured yet.');
+    $c = require $path;
+    if (!is_array($c) || empty($c['db_dsn'])) fail(503, 'not_configured', 'Server configuration is invalid.');
+    $c += [
+        'db_user' => null, 'db_pass' => null, 'setup_key' => '',
+        'storage_dir' => dirname($path, 2) . '/borg-storage',
+        'max_book_bytes' => 100 * 1024 * 1024,
+        'catalog_requires_approval' => true,
+        'session_days' => 60,
+    ];
+    return $cfg = $c;
+}
+
+// ---------- Database ----------
+function db(): PDO {
+    static $pdo = null;
+    if ($pdo) return $pdo;
+    $c = config();
+    $pdo = new PDO($c['db_dsn'], $c['db_user'], $c['db_pass'], [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES => false,
+    ]);
+    if (is_sqlite()) { $pdo->exec('PRAGMA foreign_keys = ON'); $pdo->exec('PRAGMA busy_timeout = 5000'); }
+    migrate($pdo);
+    return $pdo;
+}
+function is_sqlite(): bool { return str_starts_with(config()['db_dsn'], 'sqlite:'); }
+function q(string $sql, array $params = []): PDOStatement { $st = db()->prepare($sql); $st->execute($params); return $st; }
+function one(string $sql, array $params = []): ?array { $r = q($sql, $params)->fetch(); return $r === false ? null : $r; }
+function all(string $sql, array $params = []): array { return q($sql, $params)->fetchAll(); }
+/** INSERT that silently skips duplicates of a unique key. */
+function insert_ignore(string $table, array $row): void {
+    $cols = implode(',', array_keys($row));
+    $ph = implode(',', array_fill(0, count($row), '?'));
+    $verb = is_sqlite() ? 'INSERT OR IGNORE' : 'INSERT IGNORE';
+    q("$verb INTO $table ($cols) VALUES ($ph)", array_values($row));
+}
+
+// ---------- Migrations (portable DDL: {AI} = auto-increment primary key, {TXT} = indexed short text) ----------
+function migrations(): array {
+    return [
+        1 => [
+            "CREATE TABLE users (id {AI}, email {TXT} NOT NULL UNIQUE, password_hash VARCHAR(255) NOT NULL,
+               display_name VARCHAR(120) NOT NULL, role VARCHAR(10) NOT NULL DEFAULT 'user',
+               disabled INTEGER NOT NULL DEFAULT 0, created_at BIGINT NOT NULL)",
+            "CREATE TABLE sessions (id CHAR(64) PRIMARY KEY, user_id INTEGER NOT NULL, csrf CHAR(64) NOT NULL,
+               created_at BIGINT NOT NULL, expires_at BIGINT NOT NULL, user_agent VARCHAR(255),
+               FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)",
+            "CREATE TABLE invites (code_hash CHAR(64) PRIMARY KEY, created_by INTEGER NOT NULL, created_at BIGINT NOT NULL,
+               expires_at BIGINT NOT NULL, used_by INTEGER NULL, used_at BIGINT NULL, note VARCHAR(120))",
+            "CREATE TABLE login_attempts (id {AI}, key_hash CHAR(64) NOT NULL, at BIGINT NOT NULL)",
+            "CREATE INDEX login_attempts_key ON login_attempts (key_hash, at)",
+            "CREATE TABLE books (id {AI}, sha256 CHAR(64) NOT NULL UNIQUE, size BIGINT NOT NULL,
+               title VARCHAR(500) NOT NULL, author VARCHAR(300) NOT NULL DEFAULT '', language VARCHAR(20) NOT NULL DEFAULT '',
+               has_cover INTEGER NOT NULL DEFAULT 0, uploaded_by INTEGER NOT NULL, created_at BIGINT NOT NULL)",
+            "CREATE TABLE user_books (user_id INTEGER NOT NULL, book_id INTEGER NOT NULL, added_at BIGINT NOT NULL,
+               PRIMARY KEY (user_id, book_id),
+               FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE)",
+            "CREATE TABLE catalog (book_id INTEGER PRIMARY KEY, status VARCHAR(10) NOT NULL, description VARCHAR(2000) NOT NULL DEFAULT '',
+               submitted_by INTEGER NOT NULL, submitted_at BIGINT NOT NULL, reviewed_by INTEGER NULL, reviewed_at BIGINT NULL,
+               FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE)",
+            "CREATE TABLE progress (user_id INTEGER NOT NULL, book_id INTEGER NOT NULL, cfi VARCHAR(1000) NOT NULL,
+               percentage INTEGER NOT NULL DEFAULT 0, updated_at BIGINT NOT NULL, PRIMARY KEY (user_id, book_id),
+               FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE)",
+            "CREATE TABLE uploads (id CHAR(32) PRIMARY KEY, user_id INTEGER NOT NULL, sha256 CHAR(64) NOT NULL, size BIGINT NOT NULL,
+               meta TEXT NOT NULL, received BIGINT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL)",
+        ],
+    ];
+}
+function migrate(PDO $pdo): void {
+    $sqlite = str_starts_with(config()['db_dsn'], 'sqlite:');
+    $pdo->exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at BIGINT NOT NULL)');
+    $done = array_map('intval', $pdo->query('SELECT version FROM schema_migrations')->fetchAll(PDO::FETCH_COLUMN));
+    $pending = array_diff_key(migrations(), array_flip($done));
+    if (!$pending) return;
+    ksort($pending);
+    $ai = $sqlite ? 'INTEGER PRIMARY KEY AUTOINCREMENT' : 'INTEGER PRIMARY KEY AUTO_INCREMENT';
+    $txt = $sqlite ? 'TEXT' : 'VARCHAR(190)';
+    $suffix = $sqlite ? '' : ' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci';
+    foreach ($pending as $version => $stmts) {
+        foreach ($stmts as $sql) {
+            $sql = str_replace(['{AI}', '{TXT}'], [$ai, $txt], $sql);
+            if (str_starts_with(ltrim($sql), 'CREATE TABLE')) $sql .= $suffix;
+            $pdo->exec($sql);
+        }
+        $st = $pdo->prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)');
+        $st->execute([$version, time()]);
+    }
+}
+
+// ---------- HTTP helpers ----------
+function json_out(int $status, array $body): void {
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    header('X-Content-Type-Options: nosniff');
+    echo json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+function body_json(): array {
+    $raw = file_get_contents('php://input') ?: '';
+    if ($raw === '') return [];
+    if (!str_contains($_SERVER['CONTENT_TYPE'] ?? '', 'application/json')) fail(415, 'bad_content_type', 'JSON body required.');
+    $d = json_decode($raw, true);
+    if (!is_array($d)) fail(400, 'bad_json', 'Invalid JSON.');
+    return $d;
+}
+function str_param(array $d, string $k, int $max = 500, bool $required = true): string {
+    $v = isset($d[$k]) && is_scalar($d[$k]) ? trim((string)$d[$k]) : '';
+    if ($required && $v === '') fail(400, 'missing_' . $k, "Field '$k' is required.");
+    if (mb_strlen($v) > $max) fail(400, 'too_long_' . $k, "Field '$k' is too long.");
+    return $v;
+}
+function int_param($v): int { if (!is_numeric($v)) fail(400, 'bad_id', 'Invalid id.'); return (int)$v; }
+function client_ip(): string { return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0'; }
+
+// ---------- Sessions and auth ----------
+function cookie_name(): string { return 'borg_sid'; }
+function cookie_path(): string {
+    // /borg/api/index.php -> /borg/
+    $p = rtrim(dirname(dirname($_SERVER['SCRIPT_NAME'] ?? '/borg/api/index.php')), '/');
+    return ($p === '' ? '' : $p) . '/';
+}
+function is_https(): bool {
+    return (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+}
+function set_session_cookie(string $token, int $expires): void {
+    setcookie(cookie_name(), $token, [
+        'expires' => $expires, 'path' => cookie_path(), 'secure' => is_https(), 'httponly' => true, 'samesite' => 'Lax',
+    ]);
+}
+function start_session(int $userId): array {
+    $token = bin2hex(random_bytes(32));
+    $csrf = bin2hex(random_bytes(32));
+    $now = time(); $exp = $now + config()['session_days'] * 86400;
+    q('INSERT INTO sessions (id, user_id, csrf, created_at, expires_at, user_agent) VALUES (?, ?, ?, ?, ?, ?)',
+      [hash('sha256', $token), $userId, $csrf, $now, $exp, mb_substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 250)]);
+    set_session_cookie($token, $exp);
+    return ['csrf' => $csrf];
+}
+/** Current session joined with user, or null. */
+function current_session(): ?array {
+    static $cached = false;
+    if ($cached !== false) return $cached;
+    $token = $_COOKIE[cookie_name()] ?? '';
+    if (!is_string($token) || !preg_match('/^[a-f0-9]{64}$/', $token)) return $cached = null;
+    $row = one('SELECT s.id AS sid, s.csrf, s.expires_at, u.id, u.email, u.display_name, u.role, u.disabled
+                FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id = ?', [hash('sha256', $token)]);
+    if (!$row || $row['expires_at'] < time() || (int)$row['disabled'] === 1) return $cached = null;
+    return $cached = $row;
+}
+function require_user(bool $mutating = false): array {
+    $s = current_session();
+    if (!$s) fail(401, 'unauthorized', 'Login required.');
+    if ($mutating) {
+        $h = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+        if (!is_string($h) || !hash_equals($s['csrf'], $h)) fail(403, 'csrf', 'Invalid CSRF token.');
+    }
+    return $s;
+}
+function require_admin(bool $mutating = false): array {
+    $s = require_user($mutating);
+    if ($s['role'] !== 'admin') fail(403, 'forbidden', 'Admins only.');
+    return $s;
+}
+function public_user(array $u): array {
+    return ['id' => (int)$u['id'], 'email' => $u['email'], 'name' => $u['display_name'], 'role' => $u['role']];
+}
+// Rate limit: at most $max attempts per key in $window seconds.
+function rate_limit(string $key, int $max = 10, int $window = 900): void {
+    $h = hash('sha256', $key); $since = time() - $window;
+    q('DELETE FROM login_attempts WHERE at < ?', [time() - 86400]);
+    $n = (int)one('SELECT COUNT(*) AS n FROM login_attempts WHERE key_hash = ? AND at >= ?', [$h, $since])['n'];
+    if ($n >= $max) fail(429, 'rate_limited', 'Too many attempts. Try again later.');
+    q('INSERT INTO login_attempts (key_hash, at) VALUES (?, ?)', [$h, time()]);
+}
+function validate_email(string $e): string {
+    $e = mb_strtolower(trim($e));
+    if (!filter_var($e, FILTER_VALIDATE_EMAIL) || strlen($e) > 190) fail(400, 'bad_email', 'Invalid email.');
+    return $e;
+}
+function validate_password(string $p): string {
+    if (mb_strlen($p) < 8) fail(400, 'weak_password', 'Password must be at least 8 characters.');
+    if (strlen($p) > 200) fail(400, 'bad_password', 'Password too long.');
+    return $p;
+}
+
+// ---------- Storage ----------
+function storage(string $sub = ''): string {
+    $base = rtrim(config()['storage_dir'], '/');
+    $dir = $sub === '' ? $base : "$base/$sub";
+    if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) fail(500, 'storage', 'Storage is not writable.');
+    return $dir;
+}
+function book_path(string $sha): string { return storage('books/' . substr($sha, 0, 2)) . "/$sha.epub"; }
+function cover_path(int $id): string { return storage('covers') . "/$id.img"; }

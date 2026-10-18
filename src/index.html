@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="6.2.0">
+  <meta name="app-version" content="7.0.0">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="assets/icon-192.png">
@@ -19,6 +19,7 @@
     <a class="brand" href="#" aria-label="صفحه اصلی"><span class="brand-mark">ب</span><span>بُرگ</span></a>
     <div class="top-actions">
       <span id="networkStatus" class="network-status">در حال بررسی اتصال…</span>
+      <button id="accountButton" class="secondary-button account-button" type="button">ورود</button>
       <button id="themeToggle" class="icon-button" type="button" aria-label="تغییر حالت شب">◐</button>
     </div>
   </header>
@@ -33,7 +34,7 @@
           <span>＋ افزودن کتاب EPUB</span>
           <input id="epubInput" type="file" accept=".epub,application/epub+zip" hidden>
         </label>
-        <p class="privacy-note">نسخه اولیه: کتاب انتخابی در همین مرورگر ذخیره می‌شود؛ هنوز آپلود ابری و همگام‌سازی حساب کاربری فعال نیست.</p>
+        <p class="privacy-note">کتاب‌ها روی همین دستگاه ذخیره می‌شوند؛ با ورود به حساب، کتاب‌ها و محل مطالعه بین دستگاه‌هایت همگام می‌شوند.</p>
       </div>
       <div class="hero-art" aria-hidden="true">
         <div class="book-stack stack-back"></div>
@@ -45,6 +46,13 @@
     </section>
 
     <section class="library-section">
+      <nav class="view-tabs" role="tablist" aria-label="بخش‌ها">
+        <button type="button" role="tab" data-view="mine" aria-selected="true">کتابخانهٔ من</button>
+        <button type="button" role="tab" data-view="catalog" aria-selected="false" hidden>کتابخانهٔ عمومی</button>
+        <button type="button" role="tab" data-view="admin" aria-selected="false" hidden>مدیریت</button>
+        <span id="syncStatus" class="sync-status" aria-live="polite"></span>
+      </nav>
+      <div id="viewMine" class="view">
       <div class="section-heading">
         <div><p class="eyebrow">مجموعه شخصی</p><h2>کتابخانه</h2></div>
         <div class="library-controls">
@@ -66,6 +74,21 @@
         <h3>کتابخانه‌ات هنوز خالی است</h3>
         <p>یک فایل EPUB انتخاب کن تا اینجا ظاهر شود.</p>
         <label class="secondary-button">انتخاب فایل EPUB<input id="emptyEpubInput" type="file" accept=".epub,application/epub+zip" hidden></label>
+      </div>
+      </div>
+      <div id="viewCatalog" class="view" hidden>
+        <div class="section-heading"><div><p class="eyebrow">برای همه</p><h2>کتابخانهٔ عمومی</h2></div>
+          <p class="muted catalog-hint">برای پیشنهاد یک کتاب، در «کتابخانهٔ من» دکمهٔ ⇪ روی جلد آن را بزن.</p></div>
+        <div id="catalogGrid" class="book-grid"></div>
+        <p id="catalogEmpty" class="muted" hidden>هنوز کتابی در کتابخانهٔ عمومی نیست.</p>
+      </div>
+      <div id="viewAdmin" class="view" hidden>
+        <div class="admin-block"><h3>کتاب‌های در انتظار تأیید</h3><div id="pendingList" class="admin-list"></div></div>
+        <div class="admin-block"><h3>دعوت‌نامه‌ها</h3>
+          <div class="admin-row"><input id="inviteNote" class="admin-input" placeholder="برای چه کسی؟ (اختیاری)" maxlength="120"><button id="createInvite" class="secondary-button" type="button">ساخت کد دعوت</button></div>
+          <p id="inviteResult" class="invite-result" aria-live="polite"></p>
+          <div id="inviteList" class="admin-list"></div></div>
+        <div class="admin-block"><h3>کاربران</h3><div id="userList" class="admin-list"></div></div>
       </div>
     </section>
   </main>
@@ -123,9 +146,35 @@
     </div>
   </section>
 
+  <dialog id="accountDialog" class="account-dialog" aria-labelledby="accountTitle">
+    <button id="accountClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <h2 id="accountTitle">حساب کاربری</h2>
+    <div id="authForms">
+      <div class="segmented auth-tabs" role="group" aria-label="نوع ورود">
+        <button type="button" data-auth="login" aria-pressed="true">ورود</button>
+        <button type="button" data-auth="register" aria-pressed="false">ثبت‌نام با دعوت‌نامه</button>
+        <button type="button" data-auth="setup" aria-pressed="false" hidden>راه‌اندازی اولیه</button>
+      </div>
+      <form id="authForm" class="auth-form" novalidate>
+        <label data-field="setup_key" hidden>کلید راه‌اندازی<input name="setup_key" autocomplete="off" dir="ltr"></label>
+        <label data-field="invite" hidden>کد دعوت<input name="invite" autocomplete="off" dir="ltr"></label>
+        <label data-field="name" hidden>نام<input name="name" autocomplete="name" maxlength="120"></label>
+        <label data-field="email">ایمیل<input name="email" type="email" autocomplete="email" dir="ltr"></label>
+        <label data-field="password">رمز عبور<input name="password" type="password" autocomplete="current-password" dir="ltr"></label>
+        <p id="authError" class="form-error" role="alert"></p>
+        <button id="authSubmit" class="primary-button" type="submit">ورود</button>
+      </form>
+    </div>
+    <div id="accountInfo" hidden>
+      <p id="accountName" class="account-name"></p>
+      <p id="accountEmail" class="muted" dir="ltr"></p>
+      <p class="muted">کتاب‌ها و محل مطالعه بین همهٔ دستگاه‌هایی که با این حساب وارد شده‌اند همگام می‌شوند.</p>
+      <div class="dialog-actions"><button id="syncNow" class="secondary-button" type="button">همگام‌سازی الان</button><button id="logoutButton" class="secondary-button" type="button">خروج</button></div>
+    </div>
+  </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۶.۲.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۷.۰.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

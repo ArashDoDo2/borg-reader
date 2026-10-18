@@ -128,11 +128,13 @@
     const cover = b.cover ? `<img alt="" src="${b.cover}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
     const pct = prog && typeof prog.percentage === "number" ? Math.max(0, Math.min(100, prog.percentage)) : null;
     const bar = pct ? `<div class="cover-progress" aria-hidden="true"><span style="width:${pct}%"></span></div>` : "";
-    const badge = pct ? `${pct.toLocaleString("fa-IR")}٪ خوانده‌شده` : (prog ? "شروع‌شده" : "خوانده‌نشده");
+    const catalogLabel = b.catalogStatus === "approved" ? " · عمومی" : b.catalogStatus === "pending" ? " · در انتظار تأیید" : "";
+    const badge = (pct ? `${pct.toLocaleString("fa-IR")}٪ خوانده‌شده` : (prog ? "شروع‌شده" : "خوانده‌نشده")) + catalogLabel;
     return `<article class="book-card" tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="باز کردن ${esc(b.title)}">
           <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${bar}</div>
           <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p><span class="book-badge">${badge}</span></div>
-          <button class="remove-book" type="button" data-remove="${esc(b.id)}" aria-label="حذف ${esc(b.title)}" title="حذف از دستگاه">×</button>
+          <button class="remove-book" type="button" data-remove="${esc(b.id)}" aria-label="حذف ${esc(b.title)}" title="حذف">×</button>
+          ${account && b.serverId && !b.catalogStatus ? `<button class="share-book" type="button" data-share="${esc(b.id)}" aria-label="پیشنهاد ${esc(b.title)} برای کتابخانهٔ عمومی" title="پیشنهاد برای کتابخانهٔ عمومی">⇪</button>` : ""}
         </article>`;
   }
   function renderLibrary() {
@@ -273,6 +275,7 @@
       }
       renderLibrary();
       requestPersistentStorage();
+      sync();
       showToast("کتاب به کتابخانه همین دستگاه اضافه شد.");
     } catch (err) {
       // Expected outcomes (duplicate, broken file, …) are UserErrors and are not logged as app errors.
@@ -298,6 +301,7 @@
   async function saveProgress(bookId, cfi, pct, bookmark) {
     const old = await getProgress(bookId);
     await put("progress", { bookId, cfi, percentage: pct, updatedAt: Date.now(), bookmark: bookmark !== undefined ? bookmark : (old?.bookmark || null) });
+    scheduleProgressPush(bookId);
   }
   async function prepareLocations(record, token) {
     const book = bookInstance;
@@ -566,12 +570,20 @@
   $("searchInput").addEventListener("input", renderLibrary);
   inputEls.forEach(el => el?.addEventListener("change", e => importFile(e.target.files?.[0])));
   const onLibraryClick = async e => {
+    const shareBtn = e.target.closest("[data-share]");
+    if (shareBtn) { e.stopPropagation(); shareBook(shareBtn.dataset.share); return; }
     const removeBtn = e.target.closest("[data-remove]");
     if (removeBtn) {
       e.stopPropagation();
       const id = removeBtn.dataset.remove;
-      if (confirm("این کتاب از حافظه همین دستگاه حذف شود؟")) {
-        await remove("books", id); await remove("progress", id); renderLibrary(); showToast("کتاب از این دستگاه حذف شد.");
+      const rec = await getBook(id);
+      const cloud = account && rec && rec.serverId;
+      if (confirm(cloud ? "این کتاب از کتابخانه‌ات روی همهٔ دستگاه‌ها حذف شود؟" : "این کتاب از حافظه همین دستگاه حذف شود؟")) {
+        if (cloud) {
+          try { await api("library-remove", { method: "POST", body: { book_id: rec.serverId } }); }
+          catch (err) { showToast(apiMessage(err)); return; }
+        }
+        await remove("books", id); await remove("progress", id); renderLibrary(); showToast("کتاب حذف شد.");
       }
       return;
     }
@@ -589,8 +601,314 @@
   }
   window.addEventListener("online", network); window.addEventListener("offline", network);
   if (localStorage.getItem(THEME_KEY) === "dark") document.body.classList.add("dark");
-  openDB().then(database => { db = database; renderLibrary(); }).catch(err => { console.error(err); showToast("مرورگر اجازه ذخیره محلی نمی‌دهد."); });
+  openDB().then(database => { db = database; renderLibrary(); initAccount(); }).catch(err => { console.error(err); showToast("مرورگر اجازه ذخیره محلی نمی‌دهد."); });
   network();
+
+  // ======================= Account, cloud sync, public catalog, admin (v7) =======================
+  const API = new URL("api/", document.baseURI).href;
+  let account = null;            // { user, csrf } when logged in
+  let syncing = false, syncAgain = false;
+  const progressTimers = new Map();
+  class ApiFail extends Error { constructor(status, code, message) { super(message); this.status = status; this.code = code; } }
+
+  async function api(route, { method = "GET", body, raw, query = "" } = {}) {
+    const headers = {};
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (raw !== undefined) headers["Content-Type"] = "application/octet-stream";
+    if (method !== "GET" && account) headers["X-CSRF-Token"] = account.csrf;
+    const res = await fetch(`${API}?r=${route}${query}`, {
+      method, headers, credentials: "same-origin", cache: "no-store",
+      body: body !== undefined ? JSON.stringify(body) : raw,
+    });
+    const type = res.headers.get("Content-Type") || "";
+    if (!type.includes("json")) {
+      if (!res.ok) throw new ApiFail(res.status, "http", "درخواست ناموفق بود.");
+      return res;
+    }
+    const data = await res.json();
+    if (!res.ok) {
+      if (res.status === 401 && account && route !== "login") setAccount(null);
+      throw new ApiFail(res.status, data.error || "http", data.message || "درخواست ناموفق بود.");
+    }
+    return data;
+  }
+  const AUTH_MESSAGES = {
+    bad_credentials: "ایمیل یا رمز عبور اشتباه است.", rate_limited: "تلاش‌ها زیاد بود؛ چند دقیقه بعد دوباره امتحان کن.",
+    bad_invite: "کد دعوت نامعتبر است یا قبلاً استفاده شده.", email_taken: "این ایمیل قبلاً ثبت شده است.",
+    weak_password: "رمز عبور باید حداقل ۸ کاراکتر باشد.", bad_email: "ایمیل معتبر نیست.",
+    bad_setup_key: "کلید راه‌اندازی اشتباه است.", already_setup: "راه‌اندازی قبلاً انجام شده است.",
+    setup_disabled: "کلید راه‌اندازی روی سرور تنظیم نشده است.", not_configured: "سرور هنوز پیکربندی نشده است.",
+  };
+  function apiMessage(err) {
+    if (err instanceof ApiFail) return AUTH_MESSAGES[err.code] || (err.code.startsWith("missing_") ? "همهٔ فیلدها را پر کن." : err.message);
+    return navigator.onLine ? "ارتباط با سرور برقرار نشد." : "اینترنت قطع است.";
+  }
+  function setSyncStatus(text) { $("syncStatus").textContent = text || ""; }
+
+  function setAccount(acc) {
+    account = acc;
+    const user = acc && acc.user;
+    $("accountButton").textContent = user ? user.name : "ورود";
+    document.querySelector('[data-view="catalog"]').hidden = !user;
+    document.querySelector('[data-view="admin"]').hidden = !(user && user.role === "admin");
+    if (!user) { showView("mine"); setSyncStatus(""); }
+    $("authForms").hidden = !!user;
+    $("accountInfo").hidden = !user;
+    if (user) { $("accountName").textContent = user.name; $("accountEmail").textContent = user.email; }
+    renderLibrary();
+  }
+
+  // ---------- Views ----------
+  function showView(view) {
+    document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.setAttribute("aria-selected", String(t.dataset.view === view)));
+    $("viewMine").hidden = view !== "mine";
+    $("viewCatalog").hidden = view !== "catalog";
+    $("viewAdmin").hidden = view !== "admin";
+    if (view === "catalog") loadCatalog();
+    if (view === "admin") loadAdmin();
+  }
+  document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.addEventListener("click", () => showView(t.dataset.view)));
+
+  // ---------- Account dialog ----------
+  let authMode = "login";
+  const AUTH_FIELDS = { login: ["email", "password"], register: ["invite", "name", "email", "password"], setup: ["setup_key", "name", "email", "password"] };
+  function setAuthMode(mode) {
+    authMode = mode;
+    document.querySelectorAll("[data-auth]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.auth === mode)));
+    document.querySelectorAll("#authForm [data-field]").forEach(l => { l.hidden = !AUTH_FIELDS[mode].includes(l.dataset.field); });
+    $("authForm").password.autocomplete = mode === "login" ? "current-password" : "new-password";
+    $("authSubmit").textContent = mode === "login" ? "ورود" : mode === "register" ? "ساخت حساب" : "ساخت حساب مدیر";
+    $("authError").textContent = "";
+  }
+  document.querySelectorAll("[data-auth]").forEach(b => b.addEventListener("click", () => setAuthMode(b.dataset.auth)));
+  $("accountButton").addEventListener("click", async () => {
+    $("accountDialog").showModal();
+    if (!account) {
+      try { const h = await api("health"); document.querySelector('[data-auth="setup"]').hidden = !h.needs_setup; if (h.needs_setup) setAuthMode("setup"); }
+      catch (_) {}
+    }
+  });
+  $("accountClose").addEventListener("click", () => $("accountDialog").close());
+  $("authForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const f = e.target, body = {};
+    AUTH_FIELDS[authMode].forEach(k => { body[k] = f[k].value.trim(); });
+    body.password = f.password.value;
+    $("authSubmit").disabled = true; $("authError").textContent = "";
+    try {
+      const r = await api(authMode, { method: "POST", body });
+      f.reset();
+      setAccount({ user: r.user, csrf: r.csrf });
+      $("accountDialog").close();
+      showToast(`خوش آمدی، ${r.user.name}.`);
+      sync();
+    } catch (err) {
+      $("authError").textContent = apiMessage(err);
+    } finally { $("authSubmit").disabled = false; }
+  });
+  $("logoutButton").addEventListener("click", async () => {
+    try { await api("logout", { method: "POST" }); } catch (_) {}
+    setAccount(null);
+    $("accountDialog").close();
+    showToast("از حساب خارج شدی. کتاب‌ها روی این دستگاه می‌مانند.");
+  });
+  $("syncNow").addEventListener("click", () => { $("accountDialog").close(); sync(); });
+
+  // ---------- Sync ----------
+  async function ensureHash(b) {
+    if (b.contentHash || !b.file) return b;
+    const h = await sha256(await b.file.arrayBuffer());
+    if (h) { b = { ...b, contentHash: h }; await put("books", b); }
+    return b;
+  }
+  async function uploadBook(b) {
+    const data = await b.file.arrayBuffer();
+    let r = await api("upload-init", { method: "POST", body: {
+      sha256: b.contentHash, size: data.byteLength, title: b.title || "بدون عنوان", author: b.author || "", cover: b.cover || undefined,
+    } });
+    if (r.exists) return r.book;
+    const chunk = r.chunk_bytes, id = r.upload_id;
+    for (let off = 0; off < data.byteLength; off += chunk) {
+      await api("upload-chunk", { method: "POST", raw: data.slice(off, off + chunk), query: `&upload_id=${id}&offset=${off}` });
+    }
+    r = await api("upload-complete", { method: "POST", body: { upload_id: id } });
+    return r.book;
+  }
+  async function downloadBook(sb) {
+    const res = await api("book-file", { query: `&id=${sb.id}` });
+    const blob = await res.blob();
+    let cover = null;
+    if (sb.has_cover) {
+      try { cover = await blobToDataUrl(await (await api("book-cover", { query: `&id=${sb.id}` })).blob()); } catch (_) {}
+    }
+    const record = {
+      id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      title: sb.title, author: sb.author || "نویسنده نامشخص", cover,
+      file: new File([blob], `${sb.title}.epub`, { type: "application/epub+zip" }),
+      size: blob.size, addedAt: Date.now(), contentHash: sb.sha256, serverId: sb.id, catalogStatus: sb.catalog_status || null,
+    };
+    await put("books", record);
+    return record;
+  }
+  async function sync() {
+    if (!account) return;
+    if (syncing) { syncAgain = true; return; }
+    syncing = true;
+    try {
+      setSyncStatus("در حال همگام‌سازی…");
+      const server = (await api("library")).books;
+      const bySha = new Map(server.map(b => [b.sha256, b]));
+      const byId = new Map(server.map(b => [b.id, b]));
+      let local = await getAllBooks();
+      // Books removed from the account on another device.
+      for (const b of local) {
+        if (b.serverId && !byId.has(b.serverId)) { await remove("books", b.id); await remove("progress", b.id); }
+      }
+      local = await getAllBooks();
+      const localSha = new Set();
+      let done = 0;
+      const toUpload = [];
+      for (let b of local) {
+        b = await ensureHash(b);
+        if (b.contentHash) localSha.add(b.contentHash);
+        const sb = b.contentHash && bySha.get(b.contentHash);
+        if (sb) {
+          if (b.serverId !== sb.id || b.catalogStatus !== (sb.catalog_status || null)) await put("books", { ...b, serverId: sb.id, catalogStatus: sb.catalog_status || null });
+        } else if (b.contentHash) toUpload.push(b);
+      }
+      for (const b of toUpload) {
+        setSyncStatus(`در حال آپلود «${b.title}» (${(++done).toLocaleString("fa-IR")} از ${toUpload.length.toLocaleString("fa-IR")})…`);
+        try { const sb = await uploadBook(b); await put("books", { ...b, serverId: sb.id }); byId.set(sb.id, sb); }
+        catch (err) { console.warn("Upload failed:", b.title, err); }
+      }
+      const missing = server.filter(sb => !localSha.has(sb.sha256));
+      done = 0;
+      for (const sb of missing) {
+        setSyncStatus(`در حال دریافت «${sb.title}» (${(++done).toLocaleString("fa-IR")} از ${missing.length.toLocaleString("fa-IR")})…`);
+        try { await downloadBook(sb); } catch (err) { console.warn("Download failed:", sb.title, err); }
+      }
+      // Reading progress: newest timestamp wins, in both directions.
+      local = await getAllBooks();
+      for (const b of local) {
+        if (!b.serverId) continue;
+        const sb = byId.get(b.serverId);
+        const lp = await getProgress(b.id);
+        const sp = sb && sb.progress;
+        if (sp && (!lp || sp.updated_at > (lp.updatedAt || 0))) {
+          await put("progress", { bookId: b.id, cfi: sp.cfi, percentage: sp.percentage, updatedAt: sp.updated_at, bookmark: lp?.bookmark || null });
+        } else if (lp && lp.cfi && (!sp || (lp.updatedAt || 0) > sp.updated_at)) {
+          try { await api("progress", { method: "POST", body: { book_id: b.serverId, cfi: lp.cfi, percentage: lp.percentage || 0, updated_at: lp.updatedAt || Date.now() } }); } catch (_) {}
+        }
+      }
+      setSyncStatus("همگام شد ✓");
+    } catch (err) {
+      setSyncStatus(err instanceof ApiFail && err.status === 401 ? "" : "همگام‌سازی انجام نشد");
+      console.warn("Sync failed:", err);
+    } finally {
+      syncing = false;
+      renderLibrary();
+      if (syncAgain) { syncAgain = false; sync(); }
+    }
+  }
+  /** Debounced push of one book's progress while reading. */
+  function scheduleProgressPush(localBookId) {
+    if (!account) return;
+    clearTimeout(progressTimers.get(localBookId));
+    progressTimers.set(localBookId, setTimeout(async () => {
+      progressTimers.delete(localBookId);
+      try {
+        const b = await getBook(localBookId), p = await getProgress(localBookId);
+        if (b && b.serverId && p && p.cfi) await api("progress", { method: "POST", body: { book_id: b.serverId, cfi: p.cfi, percentage: p.percentage || 0, updated_at: p.updatedAt || Date.now() } });
+      } catch (_) {}
+    }, 4000));
+  }
+
+  // ---------- Public catalog ----------
+  async function loadCatalog() {
+    $("catalogGrid").innerHTML = '<p class="muted">در حال بارگذاری…</p>';
+    try {
+      const books = (await api("catalog")).books;
+      $("catalogEmpty").hidden = books.length > 0;
+      $("catalogGrid").innerHTML = books.map(b => {
+        const [bg, fg] = paletteFor(b.title || String(b.id));
+        const cover = b.has_cover ? `<img alt="" loading="lazy" src="${API}?r=book-cover&id=${b.id}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">`
+          : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
+        const action = b.in_library ? '<span class="book-badge">در کتابخانهٔ تو</span>'
+          : `<button class="secondary-button" type="button" data-catalog-add="${b.id}">＋ افزودن به کتابخانهٔ من</button>`;
+        return `<article class="book-card catalog-card"><div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}</div>
+          <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p>
+          ${b.description ? `<p title="${esc(b.description)}">${esc(b.description)}</p>` : ""}<div class="catalog-actions">${action}</div></div></article>`;
+      }).join("");
+    } catch (err) { $("catalogGrid").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; }
+  }
+  $("catalogGrid").addEventListener("click", async e => {
+    const btn = e.target.closest("[data-catalog-add]");
+    if (!btn) return;
+    btn.disabled = true;
+    try {
+      await api("catalog-add", { method: "POST", body: { book_id: Number(btn.dataset.catalogAdd) } });
+      showToast("به کتابخانه‌ات اضافه شد؛ در حال دریافت…");
+      await sync(); loadCatalog();
+    } catch (err) { btn.disabled = false; showToast(apiMessage(err)); }
+  });
+  async function shareBook(localId) {
+    const b = await getBook(localId);
+    if (!b || !b.serverId) { showToast("اول باید همگام‌سازی کامل شود."); return; }
+    const description = (prompt("یک توضیح کوتاه برای این کتاب (اختیاری):", "") || "").slice(0, 2000);
+    try {
+      const r = await api("catalog-submit", { method: "POST", body: { book_id: b.serverId, description } });
+      await put("books", { ...b, catalogStatus: r.status });
+      showToast(r.status === "approved" ? "به کتابخانهٔ عمومی اضافه شد." : "برای تأیید مدیر ارسال شد.");
+      renderLibrary();
+    } catch (err) { showToast(apiMessage(err)); }
+  }
+
+  // ---------- Admin ----------
+  const fmtDate = s => new Date(s * 1000).toLocaleDateString("fa-IR");
+  async function loadAdmin() {
+    try {
+      const [pending, invites, users] = await Promise.all([api("catalog-pending"), api("invites"), api("users")]);
+      $("pendingList").innerHTML = pending.books.length ? pending.books.map(b => `<div class="admin-item">
+          <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="muted">· ${esc(b.submitter || "")} · ${fmtDate(b.submitted_at)}</span>
+          ${b.description ? `<br><span class="muted">${esc(b.description)}</span>` : ""}</span>
+          <span class="admin-row"><a class="secondary-button" href="${API}?r=book-file&id=${b.id}">دانلود</a>
+          <button class="secondary-button" type="button" data-review="${b.id}" data-approve="1">تأیید</button>
+          <button class="secondary-button" type="button" data-review="${b.id}" data-approve="0">رد</button></span></div>`).join("")
+        : '<p class="muted">موردی در انتظار نیست.</p>';
+      $("inviteList").innerHTML = invites.invites.map(i => `<div class="admin-item"><span>${esc(i.note || "بدون یادداشت")}</span>
+          <span class="muted">${i.used_by ? `استفاده‌شده توسط ${esc(i.used_by)}` : i.expires_at * 1000 < Date.now() ? "منقضی" : `معتبر تا ${fmtDate(i.expires_at)}`}</span></div>`).join("")
+        || '<p class="muted">هنوز دعوت‌نامه‌ای ساخته نشده.</p>';
+      $("userList").innerHTML = users.users.map(u => `<div class="admin-item"><span>${esc(u.name)} <span class="muted" dir="ltr">${esc(u.email)}</span></span>
+          <span class="muted">${u.role === "admin" ? "مدیر" : "کاربر"} · ${u.books.toLocaleString("fa-IR")} کتاب</span></div>`).join("");
+    } catch (err) { $("pendingList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; }
+  }
+  $("pendingList").addEventListener("click", async e => {
+    const btn = e.target.closest("[data-review]");
+    if (!btn) return;
+    try {
+      await api("catalog-review", { method: "POST", body: { book_id: Number(btn.dataset.review), approve: btn.dataset.approve === "1" } });
+      showToast(btn.dataset.approve === "1" ? "تأیید شد و در کتابخانهٔ عمومی قرار گرفت." : "رد شد.");
+      loadAdmin();
+    } catch (err) { showToast(apiMessage(err)); }
+  });
+  $("createInvite").addEventListener("click", async () => {
+    try {
+      const r = await api("invites", { method: "POST", body: { note: $("inviteNote").value.trim(), days: 14 } });
+      $("inviteResult").textContent = `کد دعوت: ${r.code}`;
+      $("inviteNote").value = "";
+      loadAdmin();
+    } catch (err) { showToast(apiMessage(err)); }
+  });
+
+  // ---------- Start ----------
+  async function initAccount() {
+    try {
+      const r = await api("me");
+      if (r.user) { setAccount({ user: r.user, csrf: r.csrf }); sync(); }
+    } catch (_) { /* offline or API not configured: local-only mode */ }
+  }
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && account) sync(); });
+  window.addEventListener("online", () => { if (account) sync(); });
   syncSettingsUI();
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     // The SW activates immediately (skipWaiting); when it replaces an existing one, offer a reload.

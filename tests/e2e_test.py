@@ -8,7 +8,7 @@ progress, bookmark, settings, offline, broken input, mobile layout.
 Usage:  python3 tests/e2e_test.py [--src src] [--base /borg/]
 Exit code is non-zero when any check fails.
 """
-import argparse, asyncio, functools, http.server, os, socketserver, sys, threading
+import argparse, asyncio, os, sys
 from pathlib import Path
 from playwright.async_api import async_playwright
 
@@ -23,23 +23,33 @@ def check(name, ok, info=""):
         # Surfaces as an annotation on the run, readable without downloading logs.
         print(f"::error title=e2e failed::{name} [{str(info)[:300]}]", flush=True)
 
-class SubPathHandler(http.server.SimpleHTTPRequestHandler):
-    base = "/borg/"
-    def translate_path(self, path):
-        clean = path.split("?", 1)[0].split("#", 1)[0]
-        if clean + "/" == self.base: clean = self.base
-        if not clean.startswith(self.base):
-            return str(Path(self.directory) / "__not_found__")
-        return super().translate_path("/" + clean[len(self.base):])
-    def log_message(self, *args): pass
+SETUP_KEY = "e2e-setup-key-0123456789abcdef"
+
+class PhpServer:
+    """php -S with src/ mounted at the base path and a throwaway SQLite config (real API, like production)."""
+    def __init__(self, src, base):
+        import json, shutil, socket, subprocess, tempfile, time
+        self.tmp = Path(tempfile.mkdtemp(prefix="borg-e2e-"))
+        mount = self.tmp / "www" / base.strip("/")
+        mount.parent.mkdir(parents=True)
+        mount.symlink_to(Path(src).resolve(), target_is_directory=True)
+        cfg = self.tmp / "config.php"
+        cfg.write_text("<?php return ['db_dsn' => " + json.dumps("sqlite:" + str(self.tmp / "db.sqlite")) +
+                       ", 'setup_key' => " + json.dumps(SETUP_KEY) + ", 'storage_dir' => " + json.dumps(str(self.tmp / "storage")) + "];\n")
+        s = socket.socket(); s.bind(("127.0.0.1", 0)); self.port = s.getsockname()[1]; s.close()
+        env = dict(os.environ, BORG_CONFIG=str(cfg), PHP_CLI_SERVER_WORKERS="6")
+        self.proc = subprocess.Popen(["php", "-S", f"127.0.0.1:{self.port}", "-t", str(self.tmp / "www")],
+                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(50):
+            try: socket.create_connection(("127.0.0.1", self.port), 0.2).close(); break
+            except OSError: time.sleep(0.1)
+        self._shutil = shutil
+    def shutdown(self):
+        self.proc.terminate(); self.proc.wait(5); self._shutil.rmtree(self.tmp, ignore_errors=True)
 
 def start_server(src, base):
-    SubPathHandler.base = base
-    handler = functools.partial(SubPathHandler, directory=str(src))
-    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler)
-    httpd.daemon_threads = True
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    return httpd, f"http://localhost:{httpd.server_address[1]}{base}"
+    srv = PhpServer(src, base)
+    return srv, f"http://localhost:{srv.port}{base}"
 
 VISIBLE_TEXT_JS = """()=>{const f=document.querySelector('#viewer iframe');if(!f)return null;
   const d=f.contentDocument;const r=f.getBoundingClientRect();

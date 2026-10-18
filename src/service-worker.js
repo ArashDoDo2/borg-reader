@@ -1,5 +1,5 @@
 // Bump this name on every release so old caches are removed.
-const CACHE_NAME = "borg-shell-v6.2.0";
+const CACHE_NAME = "borg-shell-v7.0.0";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -65,6 +65,9 @@ self.addEventListener("fetch", event => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  // Only this app's own files: never other paths on the site, and never the API (always live, per user).
+  const scopePath = new URL(self.registration.scope).pathname;
+  if (!url.pathname.startsWith(scopePath) || url.pathname.startsWith(scopePath + "api/")) return;
   if (req.mode === "navigate") event.respondWith(handleNavigation(req));
   else event.respondWith(handleAsset(req));
 });
