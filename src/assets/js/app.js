@@ -605,7 +605,7 @@
       console.error("EPUB openFailed:", err);
       if (token === openToken) showToast("این فایل EPUB قابل خواندن نیست یا خراب است.");
     });
-    if (DEBUG.tw) patchTextWidth(DEBUG.tw);
+    patchTextWidth(DEBUG.tw || "rects"); // Safari/iPad fix: stock measurement inflates RTL column width to ~500k px → blank page
     rendition = bookInstance.renderTo("viewer", {
       width: "100%", height: "100%", flow: readerPrefs.flow === "scrolled" ? "scrolled-doc" : "paginated",
       spread: readerPrefs.spread === "none" ? "none" : "auto", manager: "default",

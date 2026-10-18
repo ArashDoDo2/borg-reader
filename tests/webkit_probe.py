@@ -38,11 +38,6 @@ DIAG_JS = """() => {
 
 VARIANTS = [
     ("base", {}, {}),
-    ("tw=rects", {"tw": "rects"}, {}),
-    ("tw=elems", {"tw": "elems"}, {}),
-    ("noDir", {"noDir": True}, {}),
-    ("write", {"method": "write"}, {}),
-    ("blobUrl", {"method": "blobUrl"}, {}),
     ("scrolled", {}, {"flow": "scrolled"}),
     ("spreadNone", {}, {"spread": "none"}),
 ]
