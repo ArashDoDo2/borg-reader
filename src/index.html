@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="7.3.0">
+  <meta name="app-version" content="8.0.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -114,6 +114,7 @@
       <button id="tocToggle" class="icon-button toc-toggle" type="button" aria-label="فهرست کتاب" aria-expanded="false" aria-controls="tocPanel">☰</button>
       <div id="readerTitle" class="reader-title">کتاب</div>
       <div class="reader-tools">
+        <button id="ttsToggle" class="icon-button" type="button" aria-label="خواندن با صدا" aria-pressed="false">🔊</button>
         <button id="searchToggle" class="icon-button" type="button" aria-label="جست‌وجو در کتاب" aria-expanded="false" aria-controls="searchPanel">⌕</button>
         <button id="settingsToggle" class="icon-button settings-toggle" type="button" aria-label="تنظیمات نمایش" aria-expanded="false" aria-controls="settingsPanel">Aa</button>
       </div>
@@ -126,6 +127,9 @@
         <div class="setting-row"><label for="readerFont">فونت</label>
           <select id="readerFont" class="reader-select">
             <option value="vazirmatn">وزیرمتن</option>
+            <option value="sahel">ساحل</option>
+            <option value="shabnam">شبنم</option>
+            <option value="samim">صمیم</option>
             <option value="tahoma">Tahoma</option>
             <option value="arial">Arial</option>
             <option value="serif">Serif</option>
@@ -144,8 +148,23 @@
           <div class="segmented" role="group" aria-label="تراز متن"><button type="button" data-align="justify">دوطرفه</button><button type="button" data-align="right">راست‌چین</button></div>
         </div>
         <div class="setting-row"><span>رنگ صفحه</span>
-          <div class="segmented" role="group" aria-label="رنگ صفحه"><button type="button" data-theme="light">روشن</button><button type="button" data-theme="sepia">کرم</button><button type="button" data-theme="dark">تیره</button></div>
+          <div class="segmented" role="group" aria-label="رنگ صفحه"><button type="button" data-theme="light">روشن</button><button type="button" data-theme="sepia">کرم</button><button type="button" data-theme="dark">تیره</button><button type="button" data-theme="black">مشکی</button><button type="button" data-theme="auto">خودکار</button></div>
         </div>
+        <div class="setting-row"><span>حاشیه</span>
+          <div class="segmented" role="group" aria-label="حاشیه"><button type="button" data-margin="s">کم</button><button type="button" data-margin="m">معمولی</button><button type="button" data-margin="l">زیاد</button></div>
+        </div>
+        <div class="setting-row"><span>فاصلهٔ پاراگراف</span>
+          <div class="segmented" role="group" aria-label="فاصلهٔ پاراگراف"><button type="button" data-para="s">کم</button><button type="button" data-para="m">معمولی</button><button type="button" data-para="l">زیاد</button></div>
+        </div>
+        <div class="setting-row"><span>نمایش</span>
+          <div class="segmented" role="group" aria-label="نحوهٔ نمایش"><button type="button" data-flow="paginated">صفحه‌ای</button><button type="button" data-flow="scrolled">پیمایشی</button></div>
+        </div>
+        <div class="setting-row"><span>ستون‌ها</span>
+          <div class="segmented" role="group" aria-label="تعداد ستون"><button type="button" data-spread="auto">خودکار</button><button type="button" data-spread="none">یک ستون</button></div>
+        </div>
+        <label class="setting-check"><input id="prefDigits" type="checkbox"> اعداد متن به فارسی نمایش داده شوند</label>
+        <label class="setting-check"><input id="prefTaps" type="checkbox"> ورق زدن با لمس لبه‌های صفحه</label>
+        <label class="setting-check"><input id="prefWake" type="checkbox"> صفحه هنگام خواندن خاموش نشود</label>
       </div>
     </div>
     <div class="reader-layout">
@@ -169,6 +188,23 @@
           <button id="nextPage" class="nav-button" type="button">بعدی ←</button>
         </div>
         <div id="viewer" class="viewer"></div>
+        <div id="ttsBar" class="tts-bar" role="toolbar" aria-label="خواندن با صدا" hidden>
+          <button id="ttsPlay" type="button" aria-label="مکث">⏸</button>
+          <button id="ttsStop" type="button" aria-label="توقف">■</button>
+          <select id="ttsRate" aria-label="سرعت"><option value="0.8">۰٫۸×</option><option value="1" selected>۱×</option><option value="1.25">۱٫۲۵×</option><option value="1.5">۱٫۵×</option><option value="1.8">۱٫۸×</option></select>
+          <select id="ttsVoice" aria-label="صدا"></select>
+          <span id="ttsStatus" class="tts-status"></span>
+        </div>
+        <div id="notePopup" class="note-popup" role="dialog" aria-label="پانویس" hidden>
+          <div id="notePopupText" class="note-popup-text"></div>
+          <div class="note-popup-actions"><button id="notePopupGo" class="text-button" type="button">رفتن به پانویس</button><button id="notePopupClose" class="text-button" type="button">بستن</button></div>
+        </div>
+        <div id="lookupBox" class="note-popup lookup-box" role="dialog" aria-label="معنی" hidden>
+          <strong id="lookupWord"></strong>
+          <div id="lookupLinks" class="lookup-links"></div>
+          <div class="note-popup-actions"><button id="lookupClose" class="text-button" type="button">بستن</button></div>
+        </div>
+        <div class="immersive-progress" aria-hidden="true"><span id="immersiveBar"></span></div>
         <div id="selectionBar" class="selection-bar" role="toolbar" aria-label="ابزار متن انتخاب‌شده" hidden>
           <span class="sel-new">
             <button type="button" class="hl-swatch" data-hl="yellow" aria-label="هایلایت زرد"></button>
@@ -176,6 +212,8 @@
             <button type="button" class="hl-swatch" data-hl="pink" aria-label="هایلایت صورتی"></button>
             <button type="button" data-sel="note">✎ یادداشت</button>
             <button type="button" data-sel="quote">🖼 کارت نقل‌قول</button>
+            <button type="button" data-sel="define">📖 معنی</button>
+            <button type="button" data-sel="copy">⧉ کپی</button>
           </span>
           <span class="sel-edit" hidden>
             <button type="button" data-sel="edit">✎ ویرایش یادداشت</button>
@@ -214,6 +252,10 @@
       <div class="dialog-actions"><button id="syncNow" class="secondary-button" type="button">همگام‌سازی الان</button><button id="logoutButton" class="secondary-button" type="button">خروج</button></div>
     </div>
   </dialog>
+  <div id="imageViewer" class="image-viewer" role="dialog" aria-label="تصویر" hidden>
+    <button id="imageViewerClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <div class="image-viewer-scroll"><img id="imageViewerImg" alt=""></div>
+  </div>
   <dialog id="bookOptions" class="account-dialog" aria-labelledby="bookOptionsTitle">
     <button id="bookOptionsClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
     <h2 id="bookOptionsTitle"></h2>
@@ -241,7 +283,7 @@
   </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۷.۳.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۰.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

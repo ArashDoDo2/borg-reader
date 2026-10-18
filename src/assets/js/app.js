@@ -10,8 +10,14 @@
   let db, currentBook = null, rendition = null, bookInstance = null, currentProgressKey = null;
   let fontSize = 100, toastTimer;
   const READER_PREFS_KEY = "ketabkhane-reader-preferences" + STORAGE_SUFFIX;
-  const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100, theme: "light", align: "justify", librarySort: "added", libraryFilter: "all", dailyGoal: 20 };
-  const READER_THEMES = { light: ["#fffdf7", "#252923"], sepia: ["#f4ecd8", "#5b4636"], dark: ["#1f2623", "#e6ece7"] };
+  const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100, theme: "light", align: "justify", librarySort: "added", libraryFilter: "all", dailyGoal: 20,
+    margin: "m", para: "m", flow: "paginated", spread: "auto", digits: false, taps: true, wake: true, ttsRate: 1, ttsVoice: "" };
+  const READER_THEMES = { light: ["#fffdf7", "#252923"], sepia: ["#f4ecd8", "#5b4636"], dark: ["#1f2623", "#e6ece7"], black: ["#000000", "#d4d4d4"] };
+  const darkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+  function effectiveTheme() {
+    if (readerPrefs.theme === "auto") return darkQuery && darkQuery.matches ? "dark" : "light";
+    return READER_THEMES[readerPrefs.theme] ? readerPrefs.theme : "light";
+  }
   let readerPrefs = loadReaderPrefs();
   fontSize = Math.min(180, Math.max(70, Number(readerPrefs.fontSize) || 100));
 
@@ -28,15 +34,27 @@
       case "arial": return "Arial, Tahoma, sans-serif";
       case "serif": return "Georgia, 'Times New Roman', serif";
       case "sans-serif": return "sans-serif";
+      case "sahel": return '"Sahel", "Vazirmatn", Tahoma, sans-serif';
+      case "shabnam": return '"Shabnam", "Vazirmatn", Tahoma, sans-serif';
+      case "samim": return '"Samim", "Vazirmatn", Tahoma, sans-serif';
       default: return '"Vazirmatn", Tahoma, Arial, sans-serif';
     }
   }
   function syncSettingsUI() {
-    const theme = READER_THEMES[readerPrefs.theme] ? readerPrefs.theme : "light";
+    const theme = effectiveTheme();
     const reader = document.getElementById("reader");
-    reader.classList.remove("theme-light", "theme-sepia", "theme-dark");
+    reader.classList.remove("theme-light", "theme-sepia", "theme-dark", "theme-black");
     reader.classList.add("theme-" + theme);
-    document.querySelectorAll("[data-theme]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.theme === theme)));
+    document.querySelectorAll("[data-theme]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.theme === (readerPrefs.theme || "light"))));
+    const pressed = (sel, attr, val) => document.querySelectorAll(sel).forEach(b => b.setAttribute("aria-pressed", String(b.dataset[attr] === val)));
+    pressed("[data-margin]", "margin", readerPrefs.margin || "m");
+    pressed("[data-para]", "para", readerPrefs.para || "m");
+    pressed("[data-flow]", "flow", readerPrefs.flow || "paginated");
+    pressed("[data-spread]", "spread", readerPrefs.spread || "auto");
+    const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+    chk("prefDigits", readerPrefs.digits); chk("prefTaps", readerPrefs.taps !== false); chk("prefWake", readerPrefs.wake !== false);
+    const viewer = document.getElementById("viewer");
+    if (viewer) viewer.style.setProperty("--viewer-margin", { s: "0px", m: "2.5%", l: "7%" }[readerPrefs.margin] || "2.5%");
     document.querySelectorAll("[data-align]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.align === readerPrefs.align)));
     const label = document.getElementById("fontSizeLabel");
     if (label) label.textContent = `${fontSize.toLocaleString("fa-IR")}٪`;
@@ -44,14 +62,16 @@
   function applyReaderStyles() {
     syncSettingsUI();
     if (!rendition) return;
-    const [background, ink] = READER_THEMES[readerPrefs.theme] || READER_THEMES.light;
+    const [background, ink] = READER_THEMES[effectiveTheme()];
+    const paraGap = { s: "0 0 .35em", m: "0 0 1em", l: "0 0 1.7em" }[readerPrefs.para] || "0 0 1em";
     const lineHeight = readerPrefs.lineHeight || "1.9";
     const align = readerPrefs.align === "right" ? "right" : "justify";
     rendition.themes.default({
       body: { "font-family": selectedFontStack(), "line-height": lineHeight, "color": ink, "background": background, "direction": "rtl" },
-      p: { "text-align": align, "margin": "0 0 1em", "line-height": lineHeight },
+      p: { "text-align": align, "margin": paraGap, "line-height": lineHeight },
+      img: { "cursor": "zoom-in" },
       "h1,h2,h3,h4": { "line-height": "1.7", "margin": "0 0 1em" },
-      a: { "color": "#397a67" }
+      a: { "color": effectiveTheme() === "light" || effectiveTheme() === "sepia" ? "#397a67" : "#8fd1b5" }
     });
     rendition.themes.fontSize(`${fontSize}%`);
   }
@@ -255,7 +275,8 @@
     if (!disp || !disp.total) return;
     const pagesLeft = Math.max(0, disp.total - disp.page);
     const min = Math.ceil(pagesLeft * secPerPage / 60);
-    $("timeLeft").textContent = pagesLeft === 0 ? "آخرین صفحهٔ این فصل" : `حدود ${min.toLocaleString("fa-IR")} دقیقه تا پایان فصل`;
+    const pageInfo = `صفحهٔ ${disp.page.toLocaleString("fa-IR")} از ${disp.total.toLocaleString("fa-IR")}`;
+    $("timeLeft").textContent = pagesLeft === 0 ? `${pageInfo} · آخرین صفحهٔ این فصل` : `${pageInfo} · حدود ${min.toLocaleString("fa-IR")} دقیقه تا پایان فصل`;
   }
   // ---- Quote card ----
   function wrapLines(ctx, text, maxWidth) {
@@ -488,6 +509,7 @@
     return typeof fallback === "number" ? Math.round(fallback * 100) : 0;
   }
   function showProgress(pct) {
+    const ib = document.getElementById("immersiveBar"); if (ib) ib.style.width = `${pct}%`;
     $("progressBar").style.width = `${pct}%`;
     $("progressText").textContent = `${pct.toLocaleString("fa-IR")}٪`;
   }
@@ -541,9 +563,10 @@
       if (token === openToken) showToast("این فایل EPUB قابل خواندن نیست یا خراب است.");
     });
     rendition = bookInstance.renderTo("viewer", {
-      width: "100%", height: "100%", flow: "paginated",
-      spread: "auto", manager: "default"
+      width: "100%", height: "100%", flow: readerPrefs.flow === "scrolled" ? "scrolled-doc" : "paginated",
+      spread: readerPrefs.spread === "none" ? "none" : "auto", manager: "default"
     });
+    rendition.hooks.content.register(onBookContent);
     // The book is rendered in an iframe; load the bundled font there too.
     rendition.hooks.content.register(contents => contents.addStylesheet(READER_FONTS_URL));
     applyReaderStyles();
@@ -554,7 +577,7 @@
     rendition.on("click", onReaderClick);
     rendition.on("selected", onTextSelected);
     rendition.on("keydown", markActivity); rendition.on("touchstart", markActivity); rendition.on("click", markActivity);
-    lastTurnAt = 0; markActivity();
+    lastTurnAt = 0; markActivity(); updateWakeLock();
     if (!record.status || record.status === "want") setBookMeta(record.id, { status: "reading" }).then(r => { if (r && currentBook && currentBook.id === r.id) currentBook = r; });
     renderedHighlights = new Set();
     rendition.on("relocated", async location => {
@@ -567,6 +590,7 @@
       updateBookmarkButton();
       markActivity();
       updateTimeLeft(location);
+      onTtsRelocated(location);
       if (location.atEnd && currentBook && currentBook.status !== "finished") {
         setBookMeta(currentBook.id, { status: "finished" }).then(r => { if (r) { currentBook = r; showToast("تبریک! این کتاب را تمام کردی."); } });
       }
@@ -618,12 +642,14 @@
     closeSettings(false);
     closeSearch(false);
     hideSelectionBar(); renderedHighlights = new Set();
+    ttsStop(); $("notePopup").hidden = true; $("lookupBox").hidden = true; closeImage();
     $("bookSearchResults").innerHTML = ""; $("bookSearchStatus").textContent = ""; $("bookSearchInput").value = "";
     $("tocToggle").setAttribute("aria-expanded", "false");
     $("reader").classList.add("hidden");
     document.body.style.overflow = "";
     if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
     bookInstance = null; rendition = null; currentBook = null;
+    updateWakeLock();
     renderLibrary();
   }
   // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
@@ -676,7 +702,11 @@
       case "PageUp": goBack(); break;
       case " ": if (e.shiftKey) goBack(); else goForward(); break;
       case "Escape":
-        if (searchOpen()) closeSearch(true);
+        // Innermost layer first; this also runs for keys pressed while focus is inside the book iframe.
+        if (!$("imageViewer").hidden) closeImage();
+        else if (!$("notePopup").hidden || !$("lookupBox").hidden) { $("notePopup").hidden = true; $("lookupBox").hidden = true; }
+        else if (!$("selectionBar").hidden) hideSelectionBar();
+        else if (searchOpen()) closeSearch(true);
         else if (settingsOpen()) closeSettings(true);
         else if ($("reader").classList.contains("toc-open")) closeToc(true);
         else if ($("reader").classList.contains("immersive")) setImmersive(false);
@@ -684,7 +714,9 @@
         break;
       default: handled = false;
     }
-    if (handled) e.preventDefault();
+    // Keys from inside the book iframe arrive through epub.js as passive events; preventDefault is only valid here.
+    const fromPage = e.target === document || (e.target && e.target.ownerDocument === document);
+    if (handled && fromPage && e.cancelable) e.preventDefault();
   }
   function onTouchStart(e) {
     const t = e.changedTouches && e.changedTouches[0];
@@ -705,6 +737,7 @@
     if (Date.now() < suppressClickUntil) return;
     if (settingsOpen() || searchOpen()) { closeSettings(false); closeSearch(false); return; }
     if (!$("selectionBar").hidden) { hideSelectionBar(); return; }
+    if (!$("notePopup").hidden || !$("lookupBox").hidden) { $("notePopup").hidden = true; $("lookupBox").hidden = true; return; }
     if (e.target && e.target.closest && e.target.closest("a, button, input, select, textarea, audio, video, label")) return;
     try {
       const win = (contents && contents.window) || e.view;
@@ -714,7 +747,9 @@
     const box = $("viewer").getBoundingClientRect();
     if (!frame || !box.width) return;
     const ratio = (frame.getBoundingClientRect().left + e.clientX - box.left) / box.width;
-    if (ratio < EDGE_ZONE) goLeft();
+    const edges = readerPrefs.taps !== false && readerPrefs.flow !== "scrolled";
+    if (!edges) setImmersive(!$("reader").classList.contains("immersive"));
+    else if (ratio < EDGE_ZONE) goLeft();
     else if (ratio > 1 - EDGE_ZONE) goRight();
     else setImmersive(!$("reader").classList.contains("immersive"));
   }
@@ -722,6 +757,299 @@
   $("tocBackdrop").addEventListener("click", () => closeToc(true));
   document.addEventListener("keydown", handleReaderKey);
   document.addEventListener("keydown", () => { if (currentBook) markActivity(); });
+
+  // ======================= Reading features (v8) =======================
+  function reopenCurrentBook() {
+    if (!currentBook || !rendition) return;
+    const id = currentBook.id, loc = rendition.currentLocation();
+    const done = loc?.start?.cfi ? saveProgress(id, loc.start.cfi, percentFor(loc.start.cfi, loc.start.percentage)) : Promise.resolve();
+    done.then(() => openReader(id)).catch(err => console.warn("Reopen failed:", err));
+  }
+  function setPref(key, value, how) {
+    readerPrefs[key] = value; saveReaderPrefs(); syncSettingsUI();
+    if (how === "styles") applyReaderStyles();
+    if (how === "resize") requestAnimationFrame(() => { try { rendition && rendition.resize(); } catch (_) {} });
+    if (how === "reopen") reopenCurrentBook();
+  }
+  document.querySelectorAll("[data-margin]").forEach(b => b.addEventListener("click", () => setPref("margin", b.dataset.margin, "resize")));
+  document.querySelectorAll("[data-para]").forEach(b => b.addEventListener("click", () => setPref("para", b.dataset.para, "styles")));
+  document.querySelectorAll("[data-flow]").forEach(b => b.addEventListener("click", () => { if (readerPrefs.flow !== b.dataset.flow) setPref("flow", b.dataset.flow, "reopen"); }));
+  document.querySelectorAll("[data-spread]").forEach(b => b.addEventListener("click", () => { if (readerPrefs.spread !== b.dataset.spread) setPref("spread", b.dataset.spread, "reopen"); }));
+  $("prefDigits").addEventListener("change", e => setPref("digits", e.target.checked, "reopen"));
+  $("prefTaps").addEventListener("change", e => setPref("taps", e.target.checked));
+  $("prefWake").addEventListener("change", e => { setPref("wake", e.target.checked); updateWakeLock(); });
+  if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener("change", () => { if (readerPrefs.theme === "auto") applyReaderStyles(); });
+
+  // ---- Keep the screen on while reading ----
+  let wakeLock = null;
+  async function updateWakeLock() {
+    const want = readerPrefs.wake !== false && !!currentBook && document.visibilityState === "visible";
+    try {
+      if (want && !wakeLock && navigator.wakeLock) {
+        wakeLock = await navigator.wakeLock.request("screen");
+        wakeLock.addEventListener("release", () => { wakeLock = null; });
+      } else if (!want && wakeLock) { const w = wakeLock; wakeLock = null; await w.release(); }
+    } catch (_) { wakeLock = null; }
+  }
+  document.addEventListener("visibilitychange", updateWakeLock);
+
+  // ---- Content hook: Persian digits, footnote popups, image viewer ----
+  const OPS_NS = "http://www.idpf.org/2007/ops";
+  function epubType(el) { return ((el.getAttributeNS && el.getAttributeNS(OPS_NS, "type")) || el.getAttribute("epub:type") || "") + " " + (el.getAttribute("role") || ""); }
+  function isNoteRef(a) {
+    if (/noteref/.test(epubType(a))) return true;
+    const href = a.getAttribute("href") || "";
+    if (!href.includes("#")) return false;
+    if (/#(fn|footnote|note|endnote|ftn|en)[-_]?\d/i.test(href)) return true;
+    const label = a.textContent.trim();
+    return /^[\[(]?[\d۰-۹٠-٩*†]{1,4}[\])]?$/.test(label) && !!(a.closest("sup") || a.querySelector("sup") || /note|fn/i.test(a.className));
+  }
+  function toPersianDigits(doc) {
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
+      acceptNode: n => n.parentElement && /^(SCRIPT|STYLE|CODE|PRE|KBD|SAMP)$/.test(n.parentElement.tagName) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+    });
+    const nodes = [];
+    while (walker.nextNode()) if (/\d/.test(walker.currentNode.nodeValue)) nodes.push(walker.currentNode);
+    for (const n of nodes) n.nodeValue = n.nodeValue.replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[d]);
+  }
+  let noteTarget = null;
+  async function showFootnote(contents, a) {
+    const href = a.getAttribute("href") || "";
+    const [path, id] = href.split("#");
+    if (!id) return false;
+    let doc = contents.document, sectionHref = null;
+    if (path) {
+      const here = bookInstance.spine.get(contents.sectionIndex);
+      const resolved = decodeURIComponent(new URL(path, "https://book.invalid/" + (here ? here.href : "")).pathname.slice(1));
+      const target = bookInstance.spine.get(resolved);
+      if (!target) return false;
+      await target.load(bookInstance.load.bind(bookInstance));
+      doc = target.document; sectionHref = target.href;
+    }
+    let el = doc && (doc.getElementById(id) || doc.querySelector(`[name="${CSS.escape(id)}"]`));
+    if (!el) return false;
+    if (el.tagName === "A" || el.tagName === "SPAN" || el.tagName === "SUP") el = el.closest("aside, li, p, div, section") || el;
+    const text = el.textContent.replace(/[↩↑⮐]/g, "").replace(/\s+/g, " ").trim();
+    if (!text) return false;
+    $("notePopupText").textContent = text.length > 2000 ? text.slice(0, 2000) + " …" : text;
+    noteTarget = (sectionHref || (bookInstance.spine.get(contents.sectionIndex) || {}).href || "") + "#" + id;
+    $("lookupBox").hidden = true;
+    $("notePopup").hidden = false;
+    return true;
+  }
+  $("notePopupClose").addEventListener("click", () => { $("notePopup").hidden = true; });
+  $("notePopupGo").addEventListener("click", () => { $("notePopup").hidden = true; if (rendition && noteTarget) rendition.display(noteTarget); });
+  function openImage(src) {
+    if (!src) return;
+    $("imageViewerImg").src = src;
+    $("imageViewerImg").classList.remove("zoomed");
+    $("imageViewer").hidden = false;
+  }
+  function closeImage() { $("imageViewer").hidden = true; $("imageViewerImg").removeAttribute("src"); }
+  $("imageViewerClose").addEventListener("click", closeImage);
+  $("imageViewer").addEventListener("click", e => {
+    if (e.target === $("imageViewerImg")) $("imageViewerImg").classList.toggle("zoomed");
+    else if (e.target.closest(".image-viewer-scroll") === null || e.target.classList.contains("image-viewer-scroll")) closeImage();
+  });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("imageViewer").hidden) { e.stopImmediatePropagation(); closeImage(); } }, true);
+  function onBookContent(contents) {
+    const doc = contents.document;
+    if (!doc || !doc.body) return;
+    if (readerPrefs.digits) { try { toPersianDigits(doc); } catch (_) {} }
+    // Capture phase: runs before epub.js' own link handling, so footnotes open in place instead of jumping.
+    doc.addEventListener("click", e => {
+      const a = e.target.closest && e.target.closest("a[href]");
+      if (a && isNoteRef(a)) {
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+        showFootnote(contents, a).then(ok => { if (!ok && rendition) rendition.display(a.getAttribute("href")); }).catch(() => {});
+        return;
+      }
+      const img = !a && e.target.closest && e.target.closest("img, image");
+      if (img) {
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+        openImage(img.currentSrc || img.src || (img.getAttribute && (img.getAttribute("href") || img.getAttributeNS("http://www.w3.org/1999/xlink", "href"))));
+      }
+    }, true);
+  }
+
+  // ---- Word lookup ----
+  function showLookup(text) {
+    const word = String(text || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    if (!word) return;
+    const q = encodeURIComponent(word);
+    const latin = /[A-Za-z]/.test(word) && !/[؀-ۿ]/.test(word);
+    const links = [
+      ...(latin ? [["ترجمهٔ گوگل", `https://translate.google.com/?sl=auto&tl=fa&text=${q}`]] : []),
+      ["آبادیس", `https://abadis.ir/fatofa/${q}/`],
+      ["واژه‌یاب", `https://vajehyab.com/?q=${q}`],
+      ["ویکی‌واژه", `https://fa.wiktionary.org/wiki/${q}`],
+      ...(latin ? [] : [["ترجمهٔ گوگل", `https://translate.google.com/?sl=fa&tl=en&text=${q}`]]),
+    ];
+    $("lookupWord").textContent = word;
+    $("lookupLinks").innerHTML = links.map(([l, u]) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(l)}</a>`).join("");
+    $("notePopup").hidden = true;
+    $("lookupBox").hidden = false;
+  }
+  $("lookupClose").addEventListener("click", () => { $("lookupBox").hidden = true; });
+
+  // ---- Read aloud (Web Speech API) ----
+  const tts = { active: false, paused: false, queue: [], idx: 0, contents: null, utter: null, hlCfi: null, selfNav: false, awaitIndex: null };
+  const ttsSupported = () => "speechSynthesis" in window && typeof window.SpeechSynthesisUtterance === "function";
+  function ttsVoice() {
+    const vs = ttsSupported() ? window.speechSynthesis.getVoices() : [];
+    return vs.find(v => v.voiceURI === readerPrefs.ttsVoice) || vs.find(v => /^fa/i.test(v.lang)) || null;
+  }
+  function fillVoices() {
+    if (!ttsSupported()) return;
+    const vs = window.speechSynthesis.getVoices();
+    const cur = ttsVoice();
+    const sorted = [...vs].sort((a, b) => (/^fa/i.test(b.lang) - /^fa/i.test(a.lang)) || a.name.localeCompare(b.name));
+    $("ttsVoice").innerHTML = sorted.length ? sorted.map(v => `<option value="${esc(v.voiceURI)}" ${cur && cur.voiceURI === v.voiceURI ? "selected" : ""}>${/^fa/i.test(v.lang) ? "🇮🇷 " : ""}${esc(v.name)} (${esc(v.lang)})</option>`).join("")
+      : '<option value="">صدای پیش‌فرض</option>';
+  }
+  if (ttsSupported()) { try { window.speechSynthesis.addEventListener("voiceschanged", fillVoices); } catch (_) {} }
+  function textNodesOf(el) {
+    const w = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT), out = [];
+    while (w.nextNode()) out.push(w.currentNode);
+    return out;
+  }
+  function blockVisible(el, contents) {
+    const frame = contents.window.frameElement, box = $("viewer").getBoundingClientRect();
+    if (!frame) return true;
+    const fr = frame.getBoundingClientRect(), r = el.getBoundingClientRect();
+    const x = fr.left + r.left, y = fr.top + r.top;
+    return x < box.right - 2 && x + r.width > box.left + 2 && y < box.bottom - 2 && y + r.height > box.top + 2;
+  }
+  function buildQueue(contents, fromVisible) {
+    const doc = contents.document;
+    const blocks = [...doc.body.querySelectorAll("h1,h2,h3,h4,h5,h6,p,li,blockquote,dd,dt,figcaption,td")]
+      .filter(el => el.textContent.trim() && !el.querySelector("p,li,blockquote"));
+    let start = 0;
+    if (fromVisible) { const i = blocks.findIndex(el => blockVisible(el, contents)); start = i < 0 ? 0 : i; }
+    const queue = [];
+    for (const el of blocks.slice(start)) {
+      const nodes = textNodesOf(el);
+      const full = nodes.map(n => n.nodeValue).join("");
+      const re = /[^.!?؟…;؛\n]+[.!?؟…;؛]*/g;
+      let m;
+      while ((m = re.exec(full))) {
+        const text = m[0].trim();
+        if (text.replace(/[\s\d۰-۹.,،:]/g, "").length < 1) continue;
+        queue.push({ el, nodes, start: m.index, end: m.index + m[0].length, text });
+      }
+    }
+    return queue;
+  }
+  function rangeFor(item, doc) {
+    const range = doc.createRange();
+    let pos = 0, startSet = false;
+    for (const n of item.nodes) {
+      const len = n.nodeValue.length;
+      if (!startSet && item.start <= pos + len) { range.setStart(n, Math.max(0, item.start - pos)); startSet = true; }
+      if (startSet && item.end <= pos + len) { range.setEnd(n, Math.max(0, item.end - pos)); return range; }
+      pos += len;
+    }
+    const last = item.nodes[item.nodes.length - 1];
+    if (last) range.setEnd(last, last.nodeValue.length);
+    return range;
+  }
+  function ttsClearHighlight() {
+    if (tts.hlCfi && rendition) { try { rendition.annotations.remove(tts.hlCfi, "highlight"); } catch (_) {} }
+    tts.hlCfi = null;
+  }
+  function ttsUi() {
+    $("ttsBar").hidden = !tts.active;
+    $("ttsToggle").setAttribute("aria-pressed", String(tts.active));
+    $("ttsPlay").textContent = tts.paused ? "▶" : "⏸";
+    $("ttsPlay").setAttribute("aria-label", tts.paused ? "ادامه" : "مکث");
+  }
+  function contentsForIndex(index) {
+    const all = rendition ? rendition.getContents() : [];
+    return all.find(c => c.sectionIndex === index) || all[0] || null;
+  }
+  function speakNext() {
+    if (!tts.active || tts.paused || !rendition) return;
+    if (tts.idx >= tts.queue.length) {
+      const cur = tts.contents ? tts.contents.sectionIndex : null;
+      const next = cur != null ? bookInstance.spine.get(cur + 1) : null;
+      if (!next) { ttsStop(); showToast("خواندن کتاب تمام شد."); return; }
+      tts.awaitIndex = next.index; tts.selfNav = true;
+      rendition.display(next.href);
+      return;
+    }
+    const item = tts.queue[tts.idx];
+    const doc = tts.contents.document;
+    try {
+      const range = rangeFor(item, doc);
+      const cfi = tts.contents.cfiFromRange(range);
+      ttsClearHighlight();
+      rendition.annotations.highlight(cfi, {}, null, "tts-hl", { fill: "#7fc8a9", "fill-opacity": "0.35", "mix-blend-mode": "multiply" });
+      tts.hlCfi = cfi;
+      if (!blockVisible(item.el, tts.contents)) { tts.selfNav = true; rendition.display(cfi); }
+    } catch (_) {}
+    const u = new window.SpeechSynthesisUtterance(item.text);
+    const v = ttsVoice();
+    if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "fa-IR";
+    u.rate = Number(readerPrefs.ttsRate) || 1;
+    u.onend = () => { if (tts.utter !== u) return; tts.idx++; speakNext(); };
+    u.onerror = e => { if (tts.utter !== u || (e && (e.error === "interrupted" || e.error === "canceled"))) return; tts.idx++; speakNext(); };
+    tts.utter = u;
+    markActivity();
+    window.speechSynthesis.speak(u);
+  }
+  function ttsStartFromVisible() {
+    const loc = rendition && rendition.currentLocation();
+    const contents = contentsForIndex(loc?.start?.index);
+    if (!contents) return;
+    tts.contents = contents;
+    tts.queue = buildQueue(contents, true);
+    tts.idx = 0;
+    speakNext();
+  }
+  function ttsStart() {
+    if (!ttsSupported()) { showToast("مرورگر این دستگاه خواندن با صدا را پشتیبانی نمی‌کند."); return; }
+    if (!rendition) return;
+    fillVoices();
+    if (!ttsVoice()) showToast("صدای فارسی روی این دستگاه پیدا نشد؛ از فهرست صداها یکی را انتخاب کن.");
+    tts.active = true; tts.paused = false;
+    ttsUi();
+    ttsStartFromVisible();
+  }
+  function ttsStop() {
+    const was = tts.active;
+    tts.active = false; tts.paused = false; tts.utter = null; tts.queue = []; tts.awaitIndex = null;
+    if (ttsSupported() && was) { try { window.speechSynthesis.cancel(); } catch (_) {} }
+    ttsClearHighlight();
+    ttsUi();
+  }
+  function ttsPauseToggle() {
+    if (!tts.active) return;
+    if (tts.paused) { tts.paused = false; ttsUi(); speakNext(); }
+    else { tts.paused = true; tts.utter = null; try { window.speechSynthesis.cancel(); } catch (_) {} ttsUi(); }
+  }
+  function onTtsRelocated(location) {
+    if (!tts.active) return;
+    if (tts.awaitIndex != null) {
+      if (location?.start?.index !== tts.awaitIndex) return;
+      tts.awaitIndex = null; tts.selfNav = false;
+      tts.contents = contentsForIndex(location.start.index);
+      tts.queue = tts.contents ? buildQueue(tts.contents, false) : [];
+      tts.idx = 0;
+      setTimeout(speakNext, 50);
+      return;
+    }
+    if (tts.selfNav) { tts.selfNav = false; return; }
+    // The reader moved by hand: continue reading from the new page.
+    tts.utter = null;
+    try { window.speechSynthesis.cancel(); } catch (_) {}
+    if (!tts.paused) setTimeout(ttsStartFromVisible, 80);
+  }
+  $("ttsToggle").addEventListener("click", () => { if (tts.active) ttsStop(); else ttsStart(); });
+  $("ttsStop").addEventListener("click", ttsStop);
+  $("ttsPlay").addEventListener("click", ttsPauseToggle);
+  $("ttsRate").value = String(readerPrefs.ttsRate || 1);
+  $("ttsRate").addEventListener("change", e => { readerPrefs.ttsRate = Number(e.target.value) || 1; saveReaderPrefs(); });
+  $("ttsVoice").addEventListener("change", e => { readerPrefs.ttsVoice = e.target.value; saveReaderPrefs(); });
 
   // ---- In-book search (v7.1) ----
   function searchOpen() { return !$("searchPanel").hidden; }
@@ -959,6 +1287,15 @@
     if (sw) { await createHighlight(sw.dataset.hl, ""); return; }
     const act = e.target.closest("[data-sel]")?.dataset.sel;
     if (act === "close") { try { pendingSelection?.contents.window.getSelection().removeAllRanges(); } catch (_) {} hideSelectionBar(); }
+    else if ((act === "define" || act === "copy") && pendingSelection) {
+      let text = "";
+      try { text = String(pendingSelection.contents.window.getSelection()).trim(); } catch (_) {}
+      if (!text) { try { text = String(await bookInstance.getRange(pendingSelection.cfiRange) || "").trim(); } catch (_) {} }
+      hideSelectionBar();
+      if (act === "copy") {
+        try { await navigator.clipboard.writeText(text); showToast("کپی شد."); } catch (_) { showToast("کپی ممکن نشد."); }
+      } else showLookup(text);
+    }
     else if (act === "quote" && pendingSelection) {
       let quote = "";
       try { quote = String(await bookInstance.getRange(pendingSelection.cfiRange) || "").trim(); } catch (_) {}

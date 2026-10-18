@@ -1,2 +1,9 @@
 /* Injected into the EPUB iframe so the reader can use the bundled font offline. */
 @font-face{font-family:"Vazirmatn";src:url("../fonts/Vazirmatn-Variable.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
+@font-face{font-family:"Sahel";src:url("../fonts/Sahel-VF.woff2") format("woff2");font-weight:300 900;font-display:swap}
+@font-face{font-family:"Shabnam";src:url("../fonts/Shabnam.woff2") format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"Shabnam";src:url("../fonts/Shabnam-Bold.woff2") format("woff2");font-weight:700;font-display:swap}
+@font-face{font-family:"Samim";src:url("../fonts/Samim.woff2") format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"Samim";src:url("../fonts/Samim-Bold.woff2") format("woff2");font-weight:700;font-display:swap}
+/* Highlight of the sentence being read aloud */
+.tts-hl{fill:#7fc8a9}

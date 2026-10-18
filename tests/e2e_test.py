@@ -70,6 +70,11 @@ async def poll(fn, timeout=10000, step=200):
         await asyncio.sleep(step / 1000)
     raise TimeoutError("condition not met")
 
+async def open_settings(pg):
+    """Open the reader settings panel if it is not already open (it stays open across a book reopen)."""
+    if not await pg.is_visible("#settingsPanel"):
+        await pg.click("#settingsToggle"); await pg.wait_for_timeout(200)
+
 async def _contains(pg, sel, text): return text in (await pg.inner_text(sel))
 async def _count_gt(pg, sel, n): return await pg.locator(sel).count() > n
 
@@ -300,8 +305,9 @@ async def run(url):
         await pg.click("#settingsToggle"); await pg.wait_for_timeout(200)
         box = await pg.locator("#viewer").bounding_box()
         p_before = await page_pos(pg)
-        await pg.mouse.click(box["x"] + box["width"] * 0.1, box["y"] + box["height"] / 2); await pg.wait_for_timeout(500)
-        check("tap in book while settings open only closes the panel", not await pg.is_visible("#settingsPanel") and await page_pos(pg) == p_before)
+        # Tap the book where the (left-anchored) panel does not cover it: middle-right, which would normally toggle immersive mode.
+        await pg.mouse.click(box["x"] + box["width"] * 0.62, box["y"] + box["height"] / 2); await pg.wait_for_timeout(500)
+        check("tap in book while settings open only closes the panel", not await pg.is_visible("#settingsPanel") and await page_pos(pg) == p_before and await pg.is_visible(".reader-toolbar"))
         await pg.click("#nextPage"); await pg.wait_for_timeout(1500)
         await pg.click("#closeReader"); await pg.wait_for_timeout(800)
         check("continue-reading shelf shows the book", await pg.locator("#continueShelf .book-card").count() == 1)
@@ -633,6 +639,110 @@ async def run(url):
         allerrs = errsF + errsG
         check("v7.3 sync: no JS errors", len(allerrs) == 0, str(allerrs[:3]))
         await ctxF.close(); await ctxG.close()
+
+        # 14. v8 reading features: footnotes, images, lookup/copy, digits, layout/themes, read-aloud
+        notes = str(FIX / "sample-notes.epub")
+        TTS_STUB = """(() => { const spoken = []; window.__spoken = spoken;
+          class U { constructor(t) { this.text = t; this.onend = null; this.onerror = null; } }
+          const synth = { _t: null,
+            getVoices() { return [{ name: 'Test Farsi', lang: 'fa-IR', voiceURI: 'test-fa', default: true }]; },
+            speak(u) { spoken.push(u.text); this._t = setTimeout(() => { u.onend && u.onend({}); }, 15); },
+            cancel() { clearTimeout(this._t); }, pause() {}, resume() {}, addEventListener() {}, removeEventListener() {} };
+          Object.defineProperty(window, 'speechSynthesis', { value: synth, configurable: true });
+          window.SpeechSynthesisUtterance = U; })();"""
+        ext, errs = [], []
+        ctx, pg = await new_ctx(b, url, ext, errs)
+        await ctx.grant_permissions(["clipboard-read", "clipboard-write"])
+        await ctx.add_init_script(TTS_STUB)
+        await pg.goto(url); await pg.wait_for_timeout(800)
+        await pg.set_input_files("#epubInput", notes); await pg.wait_for_timeout(2000)
+        await pg.click("#bookGrid .book-card"); await pg.wait_for_timeout(2500)
+        fr = pg.frame_locator("#viewer iframe")
+        await fr.locator("#r1").click(); await pg.wait_for_timeout(1200)
+        check("EPUB3 footnote opens in a popup", await pg.is_visible("#notePopup") and "پانویس اول" in await pg.inner_text("#notePopupText"), await pg.inner_text("#notePopupText"))
+        check("footnote click does not navigate away", await pg.inner_text("#chapterLabel") == "بخش ۱")
+        await pg.click("#notePopupClose"); await pg.wait_for_timeout(200)
+        await fr.locator("#r2").click(); await pg.wait_for_timeout(800)
+        check("classic #fn footnote opens in a popup", await pg.is_visible("#notePopup") and "پانویس دوم" in await pg.inner_text("#notePopupText"))
+        await pg.click("#notePopupGo"); await pg.wait_for_timeout(800)
+        check("'go to footnote' closes the popup", not await pg.is_visible("#notePopup"))
+        await fr.locator("#pic").click(); await pg.wait_for_timeout(500)
+        check("tapping an image opens the viewer", await pg.is_visible("#imageViewer") and bool(await pg.get_attribute("#imageViewerImg", "src")))
+        await pg.keyboard.press("Escape"); await pg.wait_for_timeout(300)
+        check("Escape closes the image viewer, reader stays", not await pg.is_visible("#imageViewer") and await pg.is_visible("#reader"))
+        await pg.evaluate(SELECT_JS, [0, 10]); await pg.wait_for_timeout(800)
+        await pg.click('[data-sel="define"]'); await pg.wait_for_timeout(300)
+        links = await pg.locator("#lookupLinks a").count()
+        href = await pg.get_attribute("#lookupLinks a >> nth=0", "href")
+        check("meaning lookup offers dictionaries", await pg.is_visible("#lookupBox") and links >= 3 and "abadis" in href, f"{links} {href}")
+        await pg.click("#lookupClose")
+        await pg.evaluate(SELECT_JS, [0, 10]); await pg.wait_for_timeout(800)
+        await pg.click('[data-sel="copy"]'); await pg.wait_for_timeout(400)
+        clip = await pg.evaluate("navigator.clipboard.readText()")
+        check("copy puts the selection on the clipboard", clip.strip() == "این جمله ی"[:len(clip.strip())] and len(clip.strip()) >= 5, repr(clip))
+        await open_settings(pg); await pg.click("#prefDigits"); await pg.wait_for_timeout(3000)
+        txt = await pg.frame_locator("#viewer iframe").locator("#p1").inner_text()
+        check("Persian digits option converts numbers in the text", "۱۴۰۴" in txt and "1404" not in txt, txt[-30:])
+        await open_settings(pg); await pg.click("#prefDigits"); await pg.wait_for_timeout(3000)
+        await pg.click("#closeReader"); await pg.wait_for_timeout(500)
+        check("footnotes/images/lookup: no JS errors", len(errs) == 0, str(errs[:3]))
+
+        # Layout and themes on the long sample
+        await pg.set_input_files("#epubInput", sample); await pg.wait_for_timeout(2000)
+        await pg.click('#bookGrid .book-card:has-text("کتاب آزمایشی")'); await pg.wait_for_timeout(2500)
+        await open_settings(pg); await pg.wait_for_timeout(200)
+        await pg.click('[data-theme="black"]'); await pg.wait_for_timeout(400)
+        bg = await pg.evaluate("getComputedStyle(document.querySelector('#viewer iframe').contentDocument.body).backgroundColor")
+        check("black (OLED) theme", bg == "rgb(0, 0, 0)", bg)
+        await pg.click('[data-margin="l"]'); await pg.wait_for_timeout(600)
+        pad = await pg.evaluate("parseFloat(getComputedStyle(document.getElementById('viewer')).paddingLeft)")
+        check("wide margins applied", pad > 20 and bool(await visible_text(pg)), str(pad))
+        await pg.click('[data-para="l"]'); await pg.wait_for_timeout(400)
+        mb = await pg.evaluate("parseFloat(getComputedStyle(document.querySelector('#viewer iframe').contentDocument.querySelector('p')).marginBottom)")
+        check("paragraph spacing applied", mb > 20, str(mb))
+        await pg.click('[data-margin="m"]'); await pg.click('[data-para="m"]')
+        await pg.click('[data-spread="none"]'); await pg.wait_for_timeout(3000)
+        await pg.click("#readerTitle"); await pg.wait_for_timeout(300)
+        ratio = await pg.evaluate("""() => { const f = document.querySelector('#viewer iframe'); const p = f.contentDocument.querySelector('p');
+            return p.getBoundingClientRect().width / document.getElementById('viewer').getBoundingClientRect().width; }""")
+        check("single-column layout uses the full width", ratio > 0.7, f"{ratio:.2f}")
+        await open_settings(pg); await pg.click('[data-spread="auto"]'); await pg.wait_for_timeout(3000)
+        await open_settings(pg); await pg.click('[data-flow="scrolled"]'); await pg.wait_for_timeout(3000)
+        scrollable = await pg.evaluate("(() => { const c = document.querySelector('#viewer .epub-container'); return c ? c.scrollHeight > c.clientHeight : false; })()")
+        check("scrolled mode renders a scrollable chapter", scrollable)
+        await open_settings(pg); await pg.click('[data-flow="paginated"]'); await pg.wait_for_timeout(3000)
+        await open_settings(pg); await pg.click('[data-theme="light"]'); await pg.keyboard.press("Escape")
+        tl = await pg.inner_text("#timeLeft")
+        check("page number within chapter shown", "صفحهٔ" in tl and "از" in tl, tl)
+        # Read aloud (speech engine stubbed)
+        await pg.click("#ttsToggle"); await pg.wait_for_timeout(1500)
+        spoken = await pg.evaluate("window.__spoken.slice()")
+        check("read-aloud starts from the visible page", len(spoken) >= 3 and await pg.is_visible("#ttsBar"), str(spoken[:2]))
+        check("sentence being read is highlighted", await pg.locator("#viewer svg .tts-hl, #viewer svg g.tts-hl").count() >= 1)
+        try:
+            await poll(lambda: pg.evaluate("window.__spoken.some(t => t.includes('فصل دوم'))"), 30000)
+            reached = True
+        except TimeoutError:
+            reached = False
+        check("read-aloud turns pages and continues into the next chapter", reached and await pg.inner_text("#chapterLabel") == "بخش ۲", await pg.inner_text("#chapterLabel"))
+        await pg.click("#ttsPlay"); await pg.wait_for_timeout(300)
+        n1 = await pg.evaluate("window.__spoken.length"); await pg.wait_for_timeout(600)
+        n2 = await pg.evaluate("window.__spoken.length")
+        check("pause stops speaking", n1 == n2)
+        await pg.click("#ttsPlay"); await pg.wait_for_timeout(600)
+        check("resume continues", await pg.evaluate("window.__spoken.length") > n2)
+        await pg.click("#ttsStop"); await pg.wait_for_timeout(300)
+        check("stop hides the bar and the highlight", not await pg.is_visible("#ttsBar") and await pg.locator("#viewer svg .tts-hl, #viewer svg g.tts-hl").count() == 0)
+        check("v8 reading features: no JS errors", len(errs) == 0, str(errs[:3]))
+        await ctx.close()
+        # Auto theme follows the system colour scheme
+        ext, errs = [], []
+        ctx, pg = await new_ctx(b, url, ext, errs, color_scheme="dark")
+        await open_sample(pg, url, sample)
+        await open_settings(pg); await pg.click('[data-theme="auto"]'); await pg.wait_for_timeout(400)
+        bg = await pg.evaluate("getComputedStyle(document.querySelector('#viewer iframe').contentDocument.body).backgroundColor")
+        check("auto theme uses dark when the system is dark", bg == "rgb(31, 38, 35)", bg)
+        await ctx.close()
         await b.close()
 
 def main():
