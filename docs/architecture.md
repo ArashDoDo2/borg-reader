@@ -77,6 +77,13 @@ Migration rules:
 - **Library (v6.2):** "continue reading" shelf (books with a saved CFI and < 100%, newest first), progress bar and
   badge on every card, sort by newest added / last read / title. Duplicate imports are refused by size + SHA-256.
   After the first import the app requests persistent storage; usage is shown under the grid.
+- **Library search (v8.5):** `#searchInput` filters the grid live (180 ms debounce) by title, author, publisher and
+  shelf names, combined with the filter chips and sort. Query and fields go through `libFold()`: `normalizeForSearch`
+  (ی/ي/ى, ک/ك, RLM half-space) then spaces/ZWNJ/bidi marks/tatweel/harakat dropped, Persian/Arabic digits → 0-9,
+  Latin lower-cased; the match is marked in title/author (`libMarkHtml`, built from `esc()` pieces). Shows «N کتاب
+  پیدا شد» or an empty state with a clear button; × and Escape clear; "/" focuses it (library view, reader closed, no
+  dialog, not typing). The «ادامهٔ مطالعه» shelf is hidden while searching. The query lives in sessionStorage
+  `borg-library-search` only.
 - **Updates (v6.2):** when a new Service Worker takes control of a page that already had one, a banner offers a reload;
   `reg.update()` runs whenever the app becomes visible.
 - **Catalog book page (v8.1):** `#viewBook` (tab "catalog" stays selected), deep link `#catalog/book/<id>`, catalog

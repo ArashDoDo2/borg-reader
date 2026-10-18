@@ -455,3 +455,14 @@ body.dark .clean-broad{background:#3d3220;color:#f0d9a8}
 .err-meta code{font-size:11px}
 .err-stack{margin:4px 0 0;padding:8px 10px;max-height:220px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:10px;font-size:11px;white-space:pre-wrap;word-break:break-word;text-align:left}
 #errorsMore{margin-top:10px}
+/* v8.5 library search */
+.lib-search{position:relative}
+.lib-search input::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none}
+.lib-search-clear{flex-shrink:0;width:32px;height:32px;margin-inline-end:-6px;border:0;border-radius:50%;background:var(--mint);color:var(--ink);font-size:19px;line-height:1;display:grid;place-items:center;cursor:pointer}
+.lib-search-clear[hidden]{display:none}
+.lib-search-clear:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.lib-search-count{margin:-6px 0 14px;font-size:13px;color:var(--muted)}
+.lib-search-empty{text-align:center;padding:30px 12px;color:var(--muted)}
+.lib-search-empty p{margin:0 0 12px;font-size:15px}
+.book-meta mark{background:#f0d9a8;color:#3b2a06;border-radius:3px;padding:0 1px}
+@media(max-width:700px){.library-controls{flex-wrap:wrap}.lib-search{order:-1;flex:1 1 100%}}
