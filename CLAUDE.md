@@ -1,12 +1,12 @@
 # CLAUDE.md — Borg (بُرگ)
 
 Persian (RTL) EPUB reader, shipped as an offline-capable PWA. Static files only; no build step, no backend yet.
-Owner and final decision-maker: Volgash. Do not change files outside the agreed scope.
+Owner and final decision-maker: Arash Naderpour. Do not change files outside the agreed scope.
 
 ## Read first
 1. `docs/architecture.md` — components, data model, Service Worker, deployment.
 2. `docs/decisions/` — ADRs. Do not contradict one without proposing a new ADR.
-3. `docs/context/product-spec-v1.1-fa.docx` — product spec (Persian), priorities and roadmap.
+3. Product spec (Persian: priorities, roadmap, ideas) is kept privately, outside this public repo. If a copy is placed in `docs/private/` (git-ignored), read it; never commit it.
 
 ## Layout
 - `src/` — exactly what is deployed to `public_html/borg/`. Nothing else goes to the server.
