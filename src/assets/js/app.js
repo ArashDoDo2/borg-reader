@@ -410,6 +410,8 @@
     openToken++;
     $("reader").classList.remove("toc-open", "immersive");
     closeSettings(false);
+    closeSearch(false);
+    $("bookSearchResults").innerHTML = ""; $("bookSearchStatus").textContent = ""; $("bookSearchInput").value = "";
     $("tocToggle").setAttribute("aria-expanded", "false");
     $("reader").classList.add("hidden");
     document.body.style.overflow = "";
@@ -467,7 +469,8 @@
       case "PageUp": goBack(); break;
       case " ": if (e.shiftKey) goBack(); else goForward(); break;
       case "Escape":
-        if (settingsOpen()) closeSettings(true);
+        if (searchOpen()) closeSearch(true);
+        else if (settingsOpen()) closeSettings(true);
         else if ($("reader").classList.contains("toc-open")) closeToc(true);
         else if ($("reader").classList.contains("immersive")) setImmersive(false);
         else closeReader();
@@ -493,7 +496,7 @@
   }
   function onReaderClick(e, contents) {
     if (Date.now() < suppressClickUntil) return;
-    if (settingsOpen()) { closeSettings(false); return; }
+    if (settingsOpen() || searchOpen()) { closeSettings(false); closeSearch(false); return; }
     if (e.target && e.target.closest && e.target.closest("a, button, input, select, textarea, audio, video, label")) return;
     try {
       const win = (contents && contents.window) || e.view;
@@ -511,8 +514,69 @@
   $("tocBackdrop").addEventListener("click", () => closeToc(true));
   document.addEventListener("keydown", handleReaderKey);
 
+  // ---- In-book search (v7.1) ----
+  function searchOpen() { return !$("searchPanel").hidden; }
+  function openSearch() {
+    closeSettings(false);
+    $("searchPanel").hidden = false;
+    $("searchToggle").setAttribute("aria-expanded", "true");
+    setTimeout(() => $("bookSearchInput").focus(), 30);
+  }
+  function closeSearch(returnFocus) {
+    if (!searchOpen()) return;
+    $("searchPanel").hidden = true;
+    $("searchToggle").setAttribute("aria-expanded", "false");
+    if (returnFocus) $("searchToggle").focus({ preventScroll: true });
+  }
+  // Many Persian EPUBs use Arabic code points for ی and ک; search both spellings.
+  function searchVariants(q) {
+    const arabic = q.replace(/ی/g, "ي").replace(/ک/g, "ك");
+    const persian = q.replace(/ي/g, "ی").replace(/ك/g, "ک");
+    return [...new Set([q, arabic, persian])];
+  }
+  const escapeRegExp = t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  async function searchBook(query) {
+    const book = bookInstance;
+    if (!book || !query) return [];
+    const results = [], seen = new Set();
+    for (const item of book.spine.spineItems) {
+      if (results.length >= 100) break;
+      try {
+        await item.load(book.load.bind(book));
+        for (const v of searchVariants(query)) {
+          for (const r of item.find(v)) { if (!seen.has(r.cfi)) { seen.add(r.cfi); results.push({ ...r, index: item.index }); } }
+        }
+      } catch (_) {} finally { try { item.unload(); } catch (_) {} }
+    }
+    return results.slice(0, 100);
+  }
+  $("searchToggle").addEventListener("click", () => { if (searchOpen()) closeSearch(true); else openSearch(); });
+  $("bookSearchForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const q = $("bookSearchInput").value.trim();
+    if (q.length < 2) { $("bookSearchStatus").textContent = "حداقل دو حرف بنویس."; return; }
+    $("bookSearchStatus").textContent = "در حال جست‌وجو…";
+    $("bookSearchResults").innerHTML = "";
+    const token = openToken;
+    const results = await searchBook(q);
+    if (token !== openToken) return;
+    $("bookSearchStatus").textContent = results.length ? `${results.length.toLocaleString("fa-IR")} نتیجه${results.length >= 100 ? " (۱۰۰ مورد اول)" : ""}` : "چیزی پیدا نشد.";
+    const pattern = new RegExp(searchVariants(q).map(v => escapeRegExp(esc(v))).join("|"), "g");
+    $("bookSearchResults").innerHTML = results.map(r => `<button type="button" data-cfi="${esc(r.cfi)}"><small>بخش ${(r.index + 1).toLocaleString("fa-IR")}</small>${esc(r.excerpt).replace(pattern, m => `<mark>${m}</mark>`)}</button>`).join("");
+  });
+  $("bookSearchResults").addEventListener("click", e => {
+    const btn = e.target.closest("[data-cfi]");
+    if (!btn || !rendition) return;
+    closeSearch(false);
+    rendition.display(btn.dataset.cfi);
+  });
+  document.addEventListener("click", e => {
+    if (searchOpen() && !$("searchPanel").contains(e.target) && !$("searchToggle").contains(e.target)) closeSearch(false);
+  });
+
   function settingsOpen() { return !$("settingsPanel").hidden; }
   function openSettings() {
+    closeSearch(false);
     $("settingsPanel").hidden = false;
     $("settingsToggle").setAttribute("aria-expanded", "true");
     syncSettingsUI();
@@ -601,7 +665,12 @@
   }
   window.addEventListener("online", network); window.addEventListener("offline", network);
   if (localStorage.getItem(THEME_KEY) === "dark") document.body.classList.add("dark");
-  openDB().then(database => { db = database; renderLibrary(); initAccount(); }).catch(err => { console.error(err); showToast("مرورگر اجازه ذخیره محلی نمی‌دهد."); });
+  openDB().then(async database => {
+    db = database; renderLibrary();
+    await importSharedFiles();
+    await initAccount();
+    setTimeout(repairMetadata, 1200);
+  }).catch(err => { console.error(err); showToast("مرورگر اجازه ذخیره محلی نمی‌دهد."); });
   network();
 
   // ======================= Account, cloud sync, public catalog, admin (v7) =======================
@@ -773,7 +842,18 @@
         if (b.contentHash) localSha.add(b.contentHash);
         const sb = b.contentHash && bySha.get(b.contentHash);
         if (sb) {
-          if (b.serverId !== sb.id || b.catalogStatus !== (sb.catalog_status || null)) await put("books", { ...b, serverId: sb.id, catalogStatus: sb.catalog_status || null });
+          const upd = { ...b, serverId: sb.id, catalogStatus: sb.catalog_status || null };
+          const serverAuthor = sb.author || "نویسنده نامشخص";
+          if (b.metaRepaired && !b.metaPushed) {
+            try { await api("book-meta", { method: "POST", body: { book_id: sb.id, title: b.title, author: b.author === "نویسنده نامشخص" ? "" : (b.author || ""), cover: b.cover || undefined } }); } catch (_) {}
+            upd.metaPushed = true;
+          } else if (!b.metaRepaired && (sb.title !== b.title || serverAuthor !== (b.author || "نویسنده نامشخص"))) {
+            upd.title = sb.title; upd.author = serverAuthor;
+          }
+          if (!b.cover && sb.has_cover) {
+            try { upd.cover = await blobToDataUrl(await (await api("book-cover", { query: `&id=${sb.id}` })).blob()); } catch (_) {}
+          }
+          if (["serverId", "catalogStatus", "title", "author", "cover", "metaPushed"].some(k => upd[k] !== b[k])) await put("books", upd);
         } else if (b.contentHash) toUpload.push(b);
       }
       for (const b of toUpload) {
@@ -901,6 +981,54 @@
   });
 
   // ---------- Start ----------
+  // ---- Repair titles/authors/covers of books imported by old versions that could not read metadata ----
+  const UNKNOWN_AUTHOR = "نویسنده نامشخص";
+  const looksLikeFilename = t => /_|\.epub$/i.test(t || "");
+  async function repairMetadata() {
+    let changed = false;
+    for (const b of await getAllBooks()) {
+      if (b.metaChecked || !b.file) continue;
+      const rec = { ...b, metaChecked: true };
+      const weak = !b.cover || !b.author || b.author === UNKNOWN_AUTHOR || looksLikeFilename(b.title);
+      if (weak) {
+        try {
+          const file = b.file instanceof File ? b.file : new File([b.file], "book.epub", { type: "application/epub+zip" });
+          const fromName = file.name.replace(/\.epub$/i, "");
+          const m = await extractMetadata(file);
+          if (m.title && m.title !== fromName && (looksLikeFilename(b.title) || b.title === fromName)) rec.title = m.title;
+          if (m.author && m.author !== UNKNOWN_AUTHOR && (!b.author || b.author === UNKNOWN_AUTHOR)) rec.author = m.author;
+          if (!b.cover && m.cover) rec.cover = m.cover;
+          if (rec.title !== b.title || rec.author !== b.author || rec.cover !== b.cover) { rec.metaRepaired = true; rec.metaPushed = false; changed = true; }
+        } catch (_) { /* unreadable file: keep what we have */ }
+      }
+      await put("books", rec);
+    }
+    if (changed) { renderLibrary(); if (account) sync(); }
+  }
+  // ---- Files shared from other apps (Android share sheet) or opened with the installed app (desktop) ----
+  async function importSharedFiles() {
+    if (!new URLSearchParams(location.search).has("shared") || !("caches" in window)) return;
+    history.replaceState(null, "", location.pathname);
+    try {
+      const cache = await caches.open("borg-share");
+      for (const req of await cache.keys()) {
+        const res = await cache.match(req);
+        await cache.delete(req);
+        if (!res) continue;
+        const name = decodeURIComponent(res.headers.get("X-File-Name") || "book.epub");
+        const blob = await res.blob();
+        await importFile(new File([blob], name, { type: blob.type || "application/epub+zip" }));
+      }
+    } catch (err) { console.warn("Shared file import failed:", err); }
+  }
+  if ("launchQueue" in window) {
+    window.launchQueue.setConsumer(async params => {
+      for (const handle of (params && params.files) || []) {
+        try { await importFile(await handle.getFile()); } catch (err) { console.warn("Open-with import failed:", err); }
+      }
+    });
+  }
+
   async function initAccount() {
     if (!navigator.onLine) return; // offline: local-only until the connection returns
     try {

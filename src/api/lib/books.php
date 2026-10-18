@@ -215,6 +215,21 @@ function handle_books_route(string $route): bool {
             $now = one('SELECT cfi, percentage, updated_at FROM progress WHERE user_id = ? AND book_id = ?', [$s['id'], $bookId]);
             json_out(200, ['progress' => ['cfi' => $now['cfi'], 'percentage' => (int)$now['percentage'], 'updated_at' => (int)$now['updated_at']]]);
 
+        case 'book-meta':
+            // Correct title/author/cover. Allowed for the uploader (if the book is in their library) and admins.
+            method('POST');
+            $s = require_user(true);
+            $d = body_json();
+            $bookId = int_param($d['book_id'] ?? '');
+            $b = one('SELECT * FROM books WHERE id = ?', [$bookId]);
+            $owner = $b && user_has_book((int)$s['id'], $bookId) && (int)$b['uploaded_by'] === (int)$s['id'];
+            if (!$b || !($owner || $s['role'] === 'admin')) fail(404, 'not_found', 'Book not found.');
+            $title = str_param($d, 'title', 500);
+            $author = str_param($d, 'author', 300, false);
+            q('UPDATE books SET title = ?, author = ? WHERE id = ?', [$title, $author, $bookId]);
+            if (!empty($d['cover']) && is_string($d['cover']) && store_cover($bookId, $d['cover'])) q('UPDATE books SET has_cover = 1 WHERE id = ?', [$bookId]);
+            json_out(200, ['book' => book_out(one('SELECT * FROM books WHERE id = ?', [$bookId]))]);
+
         // ---------- Public catalog ----------
         case 'catalog':
             method('GET');

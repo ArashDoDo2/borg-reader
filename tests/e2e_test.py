@@ -402,6 +402,54 @@ async def run(url):
         allerrs = errsA + errsB + errsC
         check("accounts flow: no JS errors", len(allerrs) == 0, str(allerrs[:3]))
         for c in (ctxA, ctxB, ctxC): await c.close()
+
+        # 11. In-book search, metadata repair, files shared from other apps
+        import base64
+        ext, errs = [], []
+        ctx, pg = await new_ctx(b, url, ext, errs)
+        await open_sample(pg, url, sample)
+        await pg.click("#searchToggle"); await pg.wait_for_timeout(200)
+        check("search panel opens", await pg.is_visible("#searchPanel"))
+        await pg.fill("#bookSearchInput", "شماره 35 از فصل دوم"); await pg.press("#bookSearchInput", "Enter")
+        await pg.wait_for_function("document.querySelectorAll('#bookSearchResults button').length > 0", timeout=10000)
+        n = await pg.locator("#bookSearchResults button").count()
+        check("search finds the text", n == 1, str(n))
+        check("search result is highlighted", await pg.locator("#bookSearchResults mark").count() >= 1)
+        await pg.click("#bookSearchResults button"); await pg.wait_for_timeout(1200)
+        pos = await page_pos(pg)
+        check("clicking a result jumps there", await pg.inner_text("#chapterLabel") == "بخش ۲" and pos is not None and 26 <= pos <= 35, f"{await pg.inner_text('#chapterLabel')} pos={pos}")
+        check("search panel closes after jumping", not await pg.is_visible("#searchPanel"))
+        await pg.click("#searchToggle"); await pg.fill("#bookSearchInput", "نیست-در-کتاب"); await pg.press("#bookSearchInput", "Enter")
+        await pg.wait_for_function("document.getElementById('bookSearchStatus').textContent.includes('پیدا نشد')", timeout=10000)
+        check("search reports no results", True)
+        await pg.keyboard.press("Escape"); await pg.click("#closeReader"); await pg.wait_for_timeout(400)
+        # Simulate a book imported by an old version: filename as title, unknown author, never checked.
+        await pg.evaluate("""() => new Promise((res, rej) => {
+            const r = indexedDB.open('ketabkhane-db'); r.onsuccess = () => {
+              const tx = r.result.transaction('books', 'readwrite'); const st = tx.objectStore('books');
+              st.getAll().onsuccess = e => { for (const b of e.target.result) { b.title = 'my_old_file_name'; b.author = 'نویسنده نامشخص'; delete b.metaChecked; st.put(b); } };
+              tx.oncomplete = () => res(); tx.onerror = () => rej(tx.error); }; })""")
+        await pg.reload(); await pg.wait_for_timeout(1000)
+        check("legacy title shown before repair", "my_old_file_name" in " ".join(await pg.locator("#bookGrid h3").all_inner_texts()))
+        await pg.wait_for_timeout(3500)
+        titles = await pg.locator("#bookGrid h3").all_inner_texts()
+        authors = await pg.locator("#bookGrid .book-meta p").all_inner_texts()
+        check("metadata repaired from the file", titles == ["کتاب آزمایشی"] and authors[0] == "نویسنده تست", f"{titles} {authors[:1]}")
+        manifest = await pg.evaluate("fetch('manifest.webmanifest').then(r => r.json())")
+        check("manifest declares share target and file handler", manifest.get("share_target", {}).get("method") == "POST" and bool(manifest.get("file_handlers")))
+        b64 = base64.b64encode(open(sample2, "rb").read()).decode()
+        status = await pg.evaluate("""async b64 => {
+            const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+            const fd = new FormData(); fd.append('epub', new File([bytes], 'shared-book.epub', { type: 'application/epub+zip' }));
+            const r = await fetch('share-target', { method: 'POST', body: fd, redirect: 'manual' });
+            return r.type + ':' + r.status; }""", b64)
+        check("service worker accepts a shared file", status.startswith("opaqueredirect") or status.endswith(":303") or status.endswith(":200"), status)
+        await pg.goto(url + "?shared=1"); await pg.wait_for_timeout(3000)
+        titles = await pg.locator("#bookGrid h3").all_inner_texts()
+        check("shared file imported into the library", "الف کتاب دوم" in titles, str(titles))
+        check("shared URL cleaned up", "shared" not in pg.url, pg.url)
+        check("search/repair/share: no JS errors", len(errs) == 0, str(errs[:3]))
+        await ctx.close()
         await b.close()
 
 def main():

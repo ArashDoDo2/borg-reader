@@ -159,8 +159,17 @@ def run(base, tmp):
     check("other user cannot download a private book", st == 404)
     st, _ = other.call("GET", "book-cover", query=f"&id={book1}")
     check("other user cannot see a private cover", st == 404)
+    st, _ = other.call("POST", "book-meta", {"book_id": book1, "title": "hacked"})
+    check("other user cannot change metadata", st == 404)
     st, _ = user.call("GET", "book-cover", query=f"&id={book1}")
     check("owner can see the cover", st == 200)
+
+    # Metadata correction
+    st, r = user.call("POST", "book-meta", {"book_id": book1, "title": "عنوان درست", "author": "نویسندهٔ درست", "cover": PNG})
+    check("uploader corrects metadata", st == 200 and r["book"]["title"] == "عنوان درست" and r["book"]["author"] == "نویسندهٔ درست")
+    st, r = admin.call("POST", "book-meta", {"book_id": book1, "title": "کتاب آزمایشی", "author": "نویسنده تست"})
+    check("admin can correct any book", st == 200 and r["book"]["title"] == "کتاب آزمایشی")
+    # admin has book1 in library (dedupe link) but is not the uploader; still allowed as admin
 
     # Progress: last write wins by client timestamp
     now = int(time.time() * 1000)

@@ -1,11 +1,11 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v6.2.0. Product goals, roadmap and ideas live in the
+Status: describes the code in `src/` as of v7.1.0. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
 ## 1. Overview
 A static PWA. The browser does everything: parse EPUB, render, store books and progress.
-No server code yet; the planned PHP API (spec §9–10) is out of scope until phase 5.
+Since v7 an optional PHP API (`src/api/`) adds accounts, cloud library, progress sync and a public catalog; without an account the app stays fully local.
 
 ```
 index.html ──> assets/js/app.js ──> epub.js (+ JSZip) ──> book rendered in a sandboxed iframe
@@ -92,3 +92,31 @@ missing JSZip, mobile layout, keyboard, edge taps, immersive mode, mobile TOC dr
 ## 8. Known gaps
 - Single bookmark per book (multiple bookmarks need IndexedDB schema v2).
 - Not yet tested on real Android/iPad devices or large real-world Persian EPUBs.
+
+## 9. Backend (v7)
+- **Stack:** PHP 8.1+ (production runs 8.4), PDO, MySQL/MariaDB in production, SQLite in tests. No framework, no Composer.
+- **Entry:** `src/api/index.php?r=<route>`; `src/api/lib/` is denied by `.htaccess` and guarded by `BORG_API`.
+- **Config:** `/home/<user>/borg-config/config.php` (outside the web root; `BORG_CONFIG` overrides in tests):
+  `db_dsn`, `db_user`, `db_pass`, `setup_key`, optional `storage_dir` (default `~/borg-storage`), `max_book_bytes`,
+  `catalog_requires_approval` (default true), `session_days`.
+- **Schema:** created/migrated automatically on first request (`schema_migrations`); DDL is portable via `{AI}`/`{TXT}`.
+  Tables: users, sessions, invites, login_attempts, books (unique `sha256`), user_books, catalog, progress, uploads.
+- **Auth:** invite-only. First admin via `setup` (needs `setup_key`, only while no users exist). Session token in an
+  HttpOnly/Secure/SameSite=Lax cookie scoped to the app path; DB stores only its SHA-256. Mutating routes need the
+  per-session CSRF token in `X-CSRF-Token`; JSON routes reject non-JSON bodies. Login/register/setup are rate limited.
+- **Books:** chunked upload (`upload-init` → `upload-chunk` × n → `upload-complete`), chunk ≤ min(2 MB, 80% of PHP
+  limits). Server verifies size, SHA-256 and EPUB structure (no extraction), stores `~/borg-storage/books/xx/<sha>.epub`.
+  Same file = one copy for everyone (dedupe by hash). Downloads/covers go through PHP with a permission check
+  (own library, approved catalog entry, or admin). Unreferenced books are garbage-collected.
+- **Progress:** last write wins by client timestamp (ms); older writes are ignored.
+- **Catalog:** user submissions are `pending` until an admin approves; admin submissions are approved directly.
+- **Metadata:** `book-meta` lets the uploader or an admin correct title/author/cover.
+
+## 10. Client sync (v7)
+- `me` on start (skipped offline); when logged in, `sync()` runs on login, start, import, visibility and reconnect.
+- Order: drop local books removed from the account → hash local books → upload missing ones → download missing
+  ones (with cover) → reconcile progress both ways by timestamp → push corrected metadata / adopt server metadata.
+- Progress is pushed 4 s after the last page turn. Deleting a synced book removes it from the account (confirmation).
+- Without an account or offline, everything works locally exactly as before.
+- Share target (`share-target`, POST multipart) is handled by the Service Worker: files are parked in the
+  `borg-share` cache and imported by the page on `?shared=1`. Desktop "open with" uses `launchQueue`.

@@ -1,5 +1,7 @@
 // Bump this name on every release so old caches are removed.
-const CACHE_NAME = "borg-shell-v7.0.0";
+const CACHE_NAME = "borg-shell-v7.1.0";
+// Files shared to the app (Android share sheet) wait here until the page imports them.
+const SHARE_CACHE = "borg-share";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -26,7 +28,7 @@ self.addEventListener("install", event => {
 self.addEventListener("activate", event => {
   event.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))))
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME && key !== SHARE_CACHE).map(key => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });
@@ -60,8 +62,27 @@ async function handleAsset(req) {
   }
 }
 
+async function handleShare(req) {
+  try {
+    const form = await req.formData();
+    const cache = await caches.open(SHARE_CACHE);
+    let i = 0;
+    for (const f of form.getAll("epub")) {
+      if (!f || typeof f !== "object") continue;
+      await cache.put(new Request(`shared/${Date.now()}-${i++}`), new Response(f, {
+        headers: { "Content-Type": f.type || "application/epub+zip", "X-File-Name": encodeURIComponent(f.name || "book.epub") },
+      }));
+    }
+  } catch (_) {}
+  return Response.redirect(new URL("./?shared=1", self.registration.scope).href, 303);
+}
+
 self.addEventListener("fetch", event => {
   const req = event.request;
+  if (req.method === "POST" && new URL(req.url).pathname === new URL("share-target", self.registration.scope).pathname) {
+    event.respondWith(handleShare(req));
+    return;
+  }
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;

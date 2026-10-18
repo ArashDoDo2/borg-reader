@@ -199,3 +199,16 @@ body.dark .empty-state{background:#202b2570}
 .account-name{font-weight:800;font-size:16px;margin:0 0 2px}
 .dialog-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 @media(max-width:700px){.account-button{max-width:110px;padding:7px 10px}.top-actions{gap:8px}}
+
+/* v7.1: in-book search */
+.search-panel{width:380px;max-height:70vh;overflow:auto}
+.search-form{display:flex;gap:8px}
+.search-form input{flex:1;min-width:0;border:1px solid var(--line);border-radius:10px;padding:9px 11px;background:var(--bg);color:var(--ink);font:inherit}
+.search-form .secondary-button{padding:8px 14px}
+.search-status{font-size:12px;margin:0}
+.search-results{display:flex;flex-direction:column;gap:2px}
+.search-results button{display:block;text-align:right;width:100%;border:0;background:transparent;padding:8px 10px;border-radius:9px;font-size:12px;line-height:1.9;color:var(--ink)}
+.search-results button:hover,.search-results button:focus-visible{background:var(--mint)}
+.search-results mark{background:#f0d9a8;color:inherit;border-radius:3px;padding:0 2px}
+.search-results small{display:block;color:var(--muted);font-size:10px}
+@media(max-width:700px){.search-panel{max-height:75vh}}
