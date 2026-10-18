@@ -238,10 +238,21 @@
       req.onerror = () => reject(req.error);
     });
   }
+  // v8.5: caches derived from the book file (epub.js locations, detected direction). A write from an older copy of
+  // the record (e.g. read by sync before the book was opened) must not drop them while the file is the same.
+  const FILE_CACHES = ["locations", "dirCache"];
   function putRaw(store, value) {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(store, "readwrite");
-      tx.objectStore(store).put(value);
+      if (store === "books" && value && value.id && FILE_CACHES.some(k => value[k] === undefined)) {
+        const os = tx.objectStore(store), g = os.get(value.id);
+        g.onsuccess = () => {
+          const old = g.result;
+          const same = old && old.size === value.size && (!old.contentHash || !value.contentHash || old.contentHash === value.contentHash);
+          const keep = same ? Object.fromEntries(FILE_CACHES.filter(k => value[k] === undefined && old[k] !== undefined).map(k => [k, old[k]])) : {};
+          os.put(Object.keys(keep).length ? { ...value, ...keep } : value);
+        };
+      } else tx.objectStore(store).put(value);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -333,6 +344,7 @@
   }
   let metaTimer = null;
   function scheduleMetaPush() {
+    refreshSyncChip();
     if (!account || !navigator.onLine) return;
     clearTimeout(metaTimer);
     metaTimer = setTimeout(() => { syncLibraryMeta(null).catch(err => { console.warn("Meta sync failed:", err); reportError("sync", err, "library-meta"); }); }, 2000);
@@ -836,12 +848,18 @@
     await put("progress", { bookId, cfi, percentage: pct, updatedAt: Date.now(), bookmark: bookmark !== undefined ? bookmark : (old?.bookmark || null) });
     scheduleProgressPush(bookId);
   }
+  // v8.5 diagnostics: how often the expensive open steps really ran (read by the e2e tests when borg-debug has "stats").
+  const openStats = { detect: 0, locGen: 0 };
+  function countOpenStat(k) { openStats[k]++; if (DEBUG.stats) document.documentElement.dataset["borg" + k[0].toUpperCase() + k.slice(1)] = String(openStats[k]); }
   async function prepareLocations(record, token) {
     const book = bookInstance;
     try {
       if (record.locations) {
         book.locations.load(record.locations);
       } else {
+        countOpenStat("locGen");
+        // epub.js waits 100 ms after every spine item (80 chapters = 8 s idle); a short pause still yields to the UI.
+        book.locations.pause = 8;
         await book.locations.generate(1600);
         if (token !== openToken) return;
         const latest = record.preview ? null : await getBook(record.id);
@@ -878,22 +896,40 @@
     document.body.style.overflow = "hidden";
     $("tocList").innerHTML = '<p class="muted">در حال ساخت فهرست…</p>';
     $("viewer").innerHTML = "";
+    showOpening();
     $("chapterLabel").textContent = "شروع مطالعه";
     tocFlat = []; resetSeek();
     $("prevPage").disabled = true; $("nextPage").disabled = false;
     showProgress(0);
     if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
     const bookFile = fileOf(record);
-    if (!bookFile) { showToast("فایل این کتاب روی دستگاه پیدا نشد."); return; }
+    if (!bookFile) { hideOpening(); showToast("فایل این کتاب روی دستگاه پیدا نشد."); return; }
+    // The saved position is read while the file is (they are independent).
+    const savedP = record.preview ? Promise.resolve(previewPos ? { cfi: previewPos } : null) : getProgress(record.id).catch(() => null);
     const epubBytes = await bookFile.arrayBuffer();
     if (token !== openToken) return;
     bookInstance = ePub(epubBytes);
     bookInstance.on("openFailed", err => {
       console.error("EPUB openFailed:", err);
       reportError("epub", err, "reader:openFailed");
-      if (token === openToken) showToast("این فایل EPUB قابل خواندن نیست یا خراب است.");
+      if (token === openToken) { hideOpening(); showToast("این فایل EPUB قابل خواندن نیست یا خراب است."); }
     });
-    bookDir = await detectBookDirection(bookInstance);
+    // v8.5: the detected direction is cached on the book record (per file and detector version).
+    const dc = record.dirCache, dirKey = record.contentHash || `size:${record.size || 0}`;
+    if (dc && dc.v === DIR_DETECT_V && dc.key === dirKey && (dc.dir === "rtl" || dc.dir === "ltr")) {
+      bookDir = dc.dir;
+    } else {
+      countOpenStat("detect");
+      bookDir = await detectBookDirection(bookInstance);
+      if (!record.preview) {
+        const cache = { dir: bookDir, v: DIR_DETECT_V, key: dirKey };
+        // One read-write transaction that only adds the field, so it cannot undo a concurrent write (status etc.).
+        try {
+          const os = db.transaction("books", "readwrite").objectStore("books"), g = os.get(record.id);
+          g.onsuccess = () => { const cur = g.result; if (cur && (cur.contentHash || `size:${cur.size || 0}`) === dirKey) os.put({ ...cur, dirCache: cache }); };
+        } catch (err) { console.warn("Caching the book direction failed:", err); }
+      }
+    }
     if (token !== openToken) return;
     $("bookSeek").dir = bookIsRtl() ? "rtl" : "ltr"; // RTL books fill the seek bar from the right
     patchTextWidth(DEBUG.tw || "rects"); // Safari/iPad fix: stock measurement inflates RTL column width to ~500k px → blank page
@@ -916,7 +952,7 @@
     rendition.hooks.content.register(onBookContent);
     // The book is rendered in an iframe; load the bundled font there too, then lift the veil.
     rendition.hooks.content.register(contents => {
-      const doc = contents.document, reveal = () => { const v = doc && doc.getElementById("borg-veil"); if (v) v.remove(); };
+      const doc = contents.document, reveal = () => { const v = doc && doc.getElementById("borg-veil"); if (v) v.remove(); if (token === openToken) hideOpening(); };
       const safety = setTimeout(reveal, 1500); // never leave a page hidden
       return contents.addStylesheet(READER_FONTS_URL)
         .then(() => new Promise(r => { void doc.body.offsetHeight; (contents.window.requestAnimationFrame || setTimeout)(r); }))
@@ -969,12 +1005,13 @@
         });
       } catch (_) {}
     });
-    const saved = record.preview ? (previewPos ? { cfi: previewPos } : null) : await getProgress(record.id);
+    const saved = await savedP;
     let shown = false;
     if (saved?.cfi) {
       try { await rendition.display(saved.cfi); shown = true; } catch (err) { console.warn("Saved location could not be restored:", err); }
     }
-    if (!shown) await rendition.display();
+    // The indicator goes when the first chapter's veil is lifted; this is only its safety net (the veil's is 1.5 s).
+    try { if (!shown) await rendition.display(); } finally { setTimeout(() => { if (token === openToken) hideOpening(); }, 1600); }
     if (token !== openToken) return;
     maybeShowGuide();
     const nav = await bookInstance.loaded.navigation;
@@ -991,6 +1028,9 @@
     updateBookmarkButton();
     prepareLocations(record, token);
   }
+  // v8.5: «در حال باز کردن کتاب…» over the page from the click until the first page is shown.
+  function showOpening() { $("openingIndicator").hidden = false; renderSyncChip(); }
+  function hideOpening() { $("openingIndicator").hidden = true; }
   function getProgress(id) {
     return new Promise((resolve, reject) => {
       const req = db.transaction("progress", "readonly").objectStore("progress").get(id);
@@ -1005,7 +1045,7 @@
         if (loc?.start?.cfi) await saveProgress(currentBook.id, loc.start.cfi, percentFor(loc.start.cfi, loc.start.percentage));
       } catch (_) {}
     }
-    openToken++;
+    openToken++; hideOpening();
     $("reader").classList.remove("toc-open", "immersive");
     closeSettings(false);
     closeSearch(false);
@@ -1015,6 +1055,7 @@
     $("bookSearchResults").innerHTML = ""; $("bookSearchStatus").textContent = ""; $("bookSearchInput").value = "";
     $("tocToggle").setAttribute("aria-expanded", "false");
     $("reader").classList.add("hidden");
+    renderSyncChip();
     document.body.style.overflow = "";
     if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
     bookInstance = null; rendition = null; currentBook = null; previewPos = null;
@@ -1030,6 +1071,7 @@
   function bookIsRtl() { return bookDir === "rtl"; }
   // A book's declared page-progression-direction wins. Otherwise look at the actual text of the first chapters:
   // the language tag is unreliable (Persian books tagged "en" exist). Image-only books fall back to the tag, then RTL.
+  const DIR_DETECT_V = 1; // bump when detectBookDirection() changes, so cached directions are re-detected
   async function detectBookDirection(book) {
     try {
       await book.opened;
@@ -2028,7 +2070,55 @@
     if (err instanceof ApiFail) return AUTH_MESSAGES[err.code] || (err.code.startsWith("missing_") ? "همهٔ فیلدها را پر کن." : err.message);
     return navigator.onLine ? "ارتباط با سرور برقرار نشد." : "اینترنت قطع است.";
   }
-  function setSyncStatus(text) { $("syncStatus").textContent = text || ""; }
+  // v8.5 sync chip (library tabs row + reader toolbar): synced (with relative time) / syncing / waiting for a
+  // connection (offline with local changes) / failed (tap retries). Derived from sync(), navigator.onLine and pending work.
+  const syncChip = { at: 0, failed: false, detail: "", pending: false };
+  const unpushedProgress = new Set(); // local book ids whose reading position has not reached the server yet
+  function setSyncStatus(text) { syncChip.detail = text || ""; renderSyncChip(); }
+  async function hasPendingSync() {
+    if (unpushedProgress.size) return true;
+    const books = await getAllBooks();
+    if (books.some(b => b.cleanPending || b.metaDirty || (!b.serverId && fileOf(b)))) return true;
+    const synced = new Set(books.filter(b => b.serverId).map(b => b.id));
+    if ((await getAllAnnotations()).some(a => a.dirty && synced.has(a.bookId))) return true;
+    return (await getAllShelves()).some(x => x.dirty);
+  }
+  function syncAgo(ms) {
+    const m = Math.floor(Math.max(0, Date.now() - ms) / 60000);
+    if (m < 1) return "همین حالا";
+    if (m < 60) return `${faNum(m)} دقیقه پیش`;
+    const h = Math.floor(m / 60);
+    return h < 24 ? `${faNum(h)} ساعت پیش` : `${faNum(Math.floor(h / 24))} روز پیش`;
+  }
+  function renderSyncChip() {
+    let state = "", text = "", tip = "";
+    if (account) {
+      if (syncing || (!syncChip.at && !syncChip.failed && navigator.onLine)) { state = "syncing"; text = "در حال همگام‌سازی…"; tip = syncChip.detail; }
+      else if (!navigator.onLine && syncChip.pending) { state = "offline"; text = "در انتظار اتصال"; tip = "تغییرهای این دستگاه بعد از وصل شدن اینترنت همگام می‌شوند."; }
+      else if (syncChip.failed) { state = "error"; text = "خطای همگام‌سازی"; tip = "برای تلاش دوباره بزن."; }
+      else { state = "synced"; text = syncChip.at ? `همگام شد · ${syncAgo(syncChip.at)}` : "همگام شد"; tip = "برای همگام‌سازی دوباره بزن."; }
+    }
+    const inReader = !$("reader").classList.contains("hidden");
+    for (const [id, live] of [["syncStatus", !inReader], ["readerSync", inReader]]) {
+      const el = $(id);
+      el.hidden = !state; el.dataset.state = state;
+      if (el.textContent !== text) el.textContent = text;
+      el.title = tip || text; el.setAttribute("aria-label", tip && state !== "syncing" ? `${text}. ${tip}` : text);
+      el.parentElement.setAttribute("aria-live", live ? "polite" : "off"); // one announcement, from the visible chip
+    }
+  }
+  /** Re-check pending local work (cheap IndexedDB reads) and redraw the chip. */
+  let pendingCheck = null;
+  function refreshSyncChip() {
+    if (!account) { renderSyncChip(); return; }
+    clearTimeout(pendingCheck);
+    pendingCheck = setTimeout(() => {
+      hasPendingSync().then(p => { syncChip.pending = p; }).catch(() => {}).then(renderSyncChip);
+    }, 150);
+  }
+  ["syncStatus", "readerSync"].forEach(id => $(id).addEventListener("click", () => { if (account && navigator.onLine) sync(); else refreshSyncChip(); }));
+  window.addEventListener("online", refreshSyncChip); window.addEventListener("offline", refreshSyncChip);
+  setInterval(() => { if (account && document.visibilityState === "visible") renderSyncChip(); }, 30000);
 
   function setAccount(acc) {
     account = acc;
@@ -2037,7 +2127,7 @@
     document.querySelector('[data-view="catalog"]').hidden = !user;
     document.querySelector('[data-view="admin"]').hidden = !(user && user.role === "admin");
     if (!user) {
-      showView("mine"); setSyncStatus("");
+      showView("mine"); syncChip.at = 0; syncChip.failed = false; unpushedProgress.clear(); setSyncStatus("");
       catalogBooks = []; catalogLoaded = false; previewCache = null;
       if (location.hash.startsWith("#catalog")) setHash("", false);
     }
@@ -2153,9 +2243,11 @@
     return record;
   }
   async function sync() {
-    if (!account || !navigator.onLine) return;
+    if (!account || !navigator.onLine) { refreshSyncChip(); return; }
     if (syncing) { syncAgain = true; return; }
     syncing = true;
+    const progressSnapshot = [...unpushedProgress];
+    let partialFail = false, ok = false;
     try {
       setSyncStatus("در حال همگام‌سازی…");
       const server = (await api("library")).books;
@@ -2172,7 +2264,7 @@
         if (!b.cleanPending || !b.serverId) continue;
         replacedOld.add(b.serverId); // never re-download the old server copy
         try { const nb = await replaceOnServer(b); if (nb) { bySha.set(nb.sha256, nb); byId.set(nb.id, nb); } }
-        catch (err) { console.warn("Book replace failed:", b.title, err); reportError("sync", err, "sync:book-replace"); }
+        catch (err) { partialFail = true; console.warn("Book replace failed:", b.title, err); reportError("sync", err, "sync:book-replace"); }
       }
       local = await getAllBooks();
       const localSha = new Set();
@@ -2209,13 +2301,13 @@
       for (const b of toUpload) {
         setSyncStatus(`در حال آپلود «${b.title}» (${(++done).toLocaleString("fa-IR")} از ${toUpload.length.toLocaleString("fa-IR")})…`);
         try { const sb = await uploadBook(b); await put("books", { ...b, serverId: sb.id }); byId.set(sb.id, sb); }
-        catch (err) { console.warn("Upload failed:", b.title, err); reportError("sync", err, "sync:upload"); }
+        catch (err) { partialFail = true; console.warn("Upload failed:", b.title, err); reportError("sync", err, "sync:upload"); }
       }
       const missing = server.filter(sb => !localSha.has(sb.sha256) && !replacedOld.has(sb.id));
       done = 0;
       for (const sb of missing) {
         setSyncStatus(`در حال دریافت «${sb.title}» (${(++done).toLocaleString("fa-IR")} از ${missing.length.toLocaleString("fa-IR")})…`);
-        try { await downloadBook(sb); } catch (err) { console.warn("Download failed:", sb.title, err); reportError("sync", err, "sync:download"); }
+        try { await downloadBook(sb); } catch (err) { partialFail = true; console.warn("Download failed:", sb.title, err); reportError("sync", err, "sync:download"); }
       }
       // Reading progress: newest timestamp wins, in both directions.
       local = await getAllBooks();
@@ -2233,13 +2325,17 @@
       await syncLibraryMeta(byId);
       await syncStats();
       await syncAnnotations();
-      setSyncStatus("همگام شد ✓");
+      ok = true;
+      progressSnapshot.forEach(id => unpushedProgress.delete(id)); // pushed (or older than the server's) above
+      syncChip.at = Date.now(); syncChip.failed = partialFail;
     } catch (err) {
-      setSyncStatus(err instanceof ApiFail && err.status === 401 ? "" : "همگام‌سازی انجام نشد");
+      syncChip.failed = !(err instanceof ApiFail && err.status === 401);
       console.warn("Sync failed:", err);
       reportError("sync", err, "sync");
     } finally {
       syncing = false;
+      if (!ok && !navigator.onLine) syncChip.failed = false; // lost the connection mid-way: «در انتظار اتصال», not an error
+      setSyncStatus(""); refreshSyncChip();
       renderLibrary();
       if (syncAgain) { syncAgain = false; sync(); }
     }
@@ -2322,19 +2418,24 @@
   }
   let annTimer = null;
   function scheduleAnnotationPush() {
+    refreshSyncChip();
     if (!account || !navigator.onLine) return;
     clearTimeout(annTimer);
     annTimer = setTimeout(() => { syncAnnotations().catch(err => { console.warn("Annotation sync failed:", err); reportError("sync", err, "annotations"); }); }, 2500);
   }
   /** Debounced push of one book's progress while reading. */
   function scheduleProgressPush(localBookId) {
+    if (account && !unpushedProgress.has(localBookId)) { unpushedProgress.add(localBookId); refreshSyncChip(); }
     if (!account || !navigator.onLine) return;
     clearTimeout(progressTimers.get(localBookId));
     progressTimers.set(localBookId, setTimeout(async () => {
       progressTimers.delete(localBookId);
       try {
         const b = await getBook(localBookId), p = await getProgress(localBookId);
-        if (b && b.serverId && p && p.cfi) await api("progress", { method: "POST", body: { book_id: b.serverId, cfi: p.cfi, percentage: p.percentage || 0, updated_at: p.updatedAt || Date.now() } });
+        if (b && b.serverId && p && p.cfi) {
+          await api("progress", { method: "POST", body: { book_id: b.serverId, cfi: p.cfi, percentage: p.percentage || 0, updated_at: p.updatedAt || Date.now() } });
+          if (!progressTimers.has(localBookId)) { unpushedProgress.delete(localBookId); refreshSyncChip(); }
+        }
       } catch (_) {}
     }, 4000));
   }
@@ -3060,7 +3161,7 @@
     const name = (file.name || latest.fileName || "book.epub");
     const upd = { ...latest, file: new File([res.blob], name, { type: "application/epub+zip" }), size: res.blob.size, contentHash: hash,
                   sourceHash: latest.sourceHash || latest.contentHash || null, cleanedAt: Date.now() };
-    delete upd.fileBuffer; delete upd.fileName; delete upd.locations;
+    delete upd.fileBuffer; delete upd.fileName; delete upd.locations; delete upd.dirCache;
     if (upd.serverId) { upd.cleanPending = true; upd.cleanAnns = [...new Set([...(latest.cleanAnns || []), ...anns.map(a => a.uid)])]; }
     await put("books", upd);
     for (const a of anns) await saveAnnotation(a);
