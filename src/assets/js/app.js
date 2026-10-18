@@ -8,6 +8,7 @@
   const THEME_KEY = "ketab-theme" + STORAGE_SUFFIX;
   const DB_VERSION = 3; // v2 (7.2): annotations; v3 (7.3): shelves
   let db, currentBook = null, rendition = null, bookInstance = null, currentProgressKey = null;
+  let bookDir = "rtl"; // reading direction of the open book, decided by detectBookDirection()
   let fontSize = 100, toastTimer;
   const READER_PREFS_KEY = "ketabkhane-reader-preferences" + STORAGE_SUFFIX;
   const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100, theme: "light", align: "justify", librarySort: "added", libraryFilter: "all", dailyGoal: 20,
@@ -89,9 +90,9 @@
     const [background, ink] = READER_THEMES[effectiveTheme()];
     const paraGap = { s: "0 0 .35em", m: "0 0 1em", l: "0 0 1.7em" }[readerPrefs.para] || "0 0 1em";
     const lineHeight = readerPrefs.lineHeight || "1.9";
-    const align = readerPrefs.align === "right" ? "right" : "justify";
+    const align = readerPrefs.align === "right" ? "start" : "justify"; // "start" = right in RTL books, left in LTR ones
     rendition.themes.default({
-      body: Object.assign({ "font-family": selectedFontStack(), "line-height": lineHeight, "color": ink, "background": background }, DEBUG.noDir ? {} : { "direction": "rtl" }),
+      body: Object.assign({ "font-family": selectedFontStack(), "line-height": lineHeight, "color": ink, "background": background }, DEBUG.noDir ? {} : { "direction": bookDir }),
       p: { "text-align": align, "margin": paraGap, "line-height": lineHeight },
       img: { "cursor": "zoom-in" },
       "h1,h2,h3,h4": { "line-height": "1.7", "margin": "0 0 1em" },
@@ -633,6 +634,8 @@
       console.error("EPUB openFailed:", err);
       if (token === openToken) showToast("این فایل EPUB قابل خواندن نیست یا خراب است.");
     });
+    bookDir = await detectBookDirection(bookInstance);
+    if (token !== openToken) return;
     patchTextWidth(DEBUG.tw || "rects"); // Safari/iPad fix: stock measurement inflates RTL column width to ~500k px → blank page
     rendition = bookInstance.renderTo("viewer", {
       width: "100%", height: "100%", flow: readerPrefs.flow === "scrolled" ? "scrolled-doc" : "paginated",
@@ -640,7 +643,7 @@
       ...(DEBUG.method ? { method: DEBUG.method } : {}),
       // Many Persian EPUBs omit page-progression-direction (some even claim lang="en"); without RTL here the
       // chapter start sits off-screen and TOC jumps land on the chapter's last page. A book's own direction still wins.
-      defaultDirection: DEBUG.direction || "rtl",
+      defaultDirection: DEBUG.direction || bookDir,
     });
     // Keep each newly loaded chapter invisible until the reader font and theme are applied, so the text
     // doesn't first paint in the fallback font and then visibly re-flow.
@@ -699,7 +702,7 @@
     rendition.on("rendered", () => {
       try {
         rendition.getContents().forEach(c => {
-          if (!DEBUG.noDir) c.addStylesheetRules({ "body": { "direction": "rtl" } });
+          if (!DEBUG.noDir) c.addStylesheetRules({ "body": { "direction": bookDir } });
         });
       } catch (_) {}
     });
@@ -713,7 +716,10 @@
     const nav = await bookInstance.loaded.navigation;
     if (token !== openToken) return;
     const toc = nav.toc || [];
-    $("tocList").innerHTML = toc.length ? toc.map((item, i) => `<button class="toc-link" type="button" data-href="${esc(item.href)}">${esc(item.label || `بخش ${i+1}`)}</button>`).join("") : '<p class="muted">فهرست فصل‌ها در این EPUB وجود ندارد.</p>';
+    // Nested entries (e.g. articles under a section) are listed too, indented by depth (max 3 levels).
+    const flat = [];
+    (function walk(items, depth) { (items || []).forEach(it => { flat.push({ it, depth }); if (depth < 2) walk(it.subitems, depth + 1); }); })(toc, 0);
+    $("tocList").innerHTML = flat.length ? flat.map(({ it, depth }, i) => `<button class="toc-link${depth ? " toc-sub toc-d" + depth : ""}" type="button" data-href="${esc(it.href)}">${esc((it.label || "").trim() || `بخش ${i+1}`)}</button>`).join("") : '<p class="muted">فهرست فصل‌ها در این EPUB وجود ندارد.</p>';
     $("tocList").querySelectorAll("[data-href]").forEach(btn => btn.addEventListener("click", () => { closeToc(false); if (rendition) rendition.display(btn.dataset.href); }));
     await renderBookAnnotations();
     updateBookmarkButton();
@@ -754,13 +760,27 @@
   // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
   const SWIPE_MIN_PX = 50, EDGE_ZONE = 0.25;
   let touchStart = null, suppressClickUntil = 0;
-  function bookIsRtl() {
+  function bookIsRtl() { return bookDir === "rtl"; }
+  // A book's declared page-progression-direction wins. Otherwise look at the actual text of the first chapters:
+  // the language tag is unreliable (Persian books tagged "en" exist). Image-only books fall back to the tag, then RTL.
+  async function detectBookDirection(book) {
     try {
-      const meta = ((bookInstance && (bookInstance.packaging || bookInstance.package)) || {}).metadata || {};
-      if (meta.direction === "rtl") return true;
-      if (meta.direction === "ltr") return false;
-      return /^(fa|ar|he|ur|ps|ku)/i.test(meta.language || "fa");
-    } catch (_) { return true; }
+      await book.opened;
+      const meta = (book.package && book.package.metadata) || {};
+      if (meta.direction === "rtl" || meta.direction === "ltr") return meta.direction;
+      let rtl = 0, ltr = 0;
+      for (const item of (book.spine.spineItems || []).slice(0, 8)) {
+        try {
+          const node = await item.load(book.load.bind(book)); // resolves to the section's <html> element
+          const text = (node && (node.body || node.documentElement || node).textContent) || "";
+          rtl += (text.match(/[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFF]/g) || []).length;
+          ltr += (text.match(/[A-Za-z\u00C0-\u024F\u0370-\u03FF\u0400-\u04FF]/g) || []).length;
+        } catch (_) {} finally { try { item.unload(); } catch (_) {} }
+        if (rtl + ltr > 5000) break;
+      }
+      if (rtl + ltr > 50) return rtl >= ltr ? "rtl" : "ltr";
+      return !meta.language || /^(fa|ar|he|ur|ps|ku|ckb|yi|dv|sd|ug)/i.test(meta.language) ? "rtl" : "ltr";
+    } catch (_) { return "rtl"; }
   }
   function goForward() { if (rendition) rendition.next(); }
   function goBack() { if (rendition) rendition.prev(); }

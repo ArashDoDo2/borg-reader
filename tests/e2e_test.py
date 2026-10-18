@@ -313,7 +313,7 @@ async def run(url):
         check("sepia button pressed", await pg.get_attribute('[data-theme="sepia"]', "aria-pressed") == "true")
         await pg.click('[data-align="right"]'); await pg.wait_for_timeout(400)
         ta = await pg.evaluate("getComputedStyle(document.querySelector('#viewer iframe').contentDocument.querySelector('p')).textAlign")
-        check("text alignment applied", ta == "right", ta)
+        check("text alignment applied", ta in ("right", "start"), ta)
         await pg.click("#fontUp"); await pg.wait_for_timeout(200)
         check("font size label updates", "۱۱۰" in await pg.inner_text("#fontSizeLabel"), await pg.inner_text("#fontSizeLabel"))
         await pg.click("#readerTitle"); await pg.wait_for_timeout(200)
@@ -928,6 +928,7 @@ async def run(url):
         await D_.goto(url); await D_.wait_for_timeout(1200)
         await D_.set_input_files("#epubInput", nodir); await D_.wait_for_timeout(2500)
         await D_.click("#bookGrid .book-card"); await D_.wait_for_timeout(3000)
+        BODY_DIR = "()=>{const d=document.querySelector('#viewer iframe').contentDocument;return d.defaultView.getComputedStyle(d.body).direction}"
         H1_VISIBLE = """(t)=>{const f=document.querySelector('#viewer iframe');if(!f)return false;const r=f.getBoundingClientRect();
           const box=document.querySelector('#viewer').getBoundingClientRect();const h=[...f.contentDocument.querySelectorAll('h1')].find(x=>x.textContent.includes(t));
           if(!h)return false;const x=h.getBoundingClientRect();return x.right+r.left>box.left&&x.left+r.left<box.right}"""
@@ -941,6 +942,26 @@ async def run(url):
         veil = await D_.evaluate("""()=>{const d=document.querySelector('#viewer iframe').contentDocument;
           return {veil: !!d.getElementById('borg-veil'), vis: d.defaultView.getComputedStyle(d.documentElement).visibility}}""")
         check("v8.1.2: chapter veil is lifted once styles load", not veil["veil"] and veil["vis"] == "visible", str(veil))
+        check("Persian book tagged lang=en is laid out RTL", await D_.evaluate(BODY_DIR) == "rtl")
+        # English book (no declared direction): detected as LTR from its text; nested TOC entries are listed
+        import zipfile
+        en = tmpd / "english.epub"
+        with zipfile.ZipFile(en, "w") as z:
+            z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+            z.writestr("content.opf", '<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">en-1</dc:identifier><dc:title>English Weekly</dc:title><dc:language>en</dc:language></metadata><manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/><item id="a" href="a.html" media-type="application/xhtml+xml"/><item id="b" href="b.html" media-type="application/xhtml+xml"/></manifest><spine toc="ncx"><itemref idref="a"/><itemref idref="b"/></spine></package>')
+            z.writestr("toc.ncx", '<?xml version="1.0" encoding="utf-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head/><docTitle><text>English Weekly</text></docTitle><navMap><navPoint id="n1" playOrder="1"><navLabel><text>Leaders</text></navLabel><content src="a.html"/><navPoint id="n2" playOrder="2"><navLabel><text>Second article</text></navLabel><content src="b.html"/></navPoint></navPoint></navMap></ncx>')
+            for f, h in (("a.html", "Leaders"), ("b.html", "Second article")):
+                body = "".join(f"<p>This is paragraph {k} of the section called {h}, written in plain English.</p>" for k in range(40))
+                z.writestr(f, f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><title>{h}</title></head><body><h1>{h}</h1>{body}</body></html>')
+        await D_.click("#closeReader") if await D_.is_visible("#closeReader") else None
+        await D_.goto(url); await D_.wait_for_timeout(1200)
+        await D_.set_input_files("#epubInput", str(en)); await D_.wait_for_timeout(2500)
+        await D_.click('#bookGrid .book-card:has-text("English Weekly")'); await D_.wait_for_timeout(3000)
+        check("English book is laid out LTR", await D_.evaluate(BODY_DIR) == "ltr")
+        check("nested TOC entries are listed", await D_.locator("#tocList .toc-sub", has_text="Second article").count() == 1)
+        await D_.locator("#tocList .toc-sub", has_text="Second article").click(); await D_.wait_for_timeout(2000)
+        check("English book: nested TOC entry opens its section at the start", await D_.evaluate(H1_VISIBLE, "Second article"))
         check("v8.1.1 direction: no JS errors", len(errsD) == 0, str(errsD[:3]))
         await ctxD.close(); shutil.rmtree(tmpd, ignore_errors=True)
         await b.close()
