@@ -8,9 +8,10 @@
   const THEME_KEY = "ketab-theme" + STORAGE_SUFFIX;
   const DB_VERSION = 1;
   let db, currentBook = null, rendition = null, bookInstance = null, currentProgressKey = null;
-  let fontSize = 100, isReaderDark = false, toastTimer;
+  let fontSize = 100, toastTimer;
   const READER_PREFS_KEY = "ketabkhane-reader-preferences" + STORAGE_SUFFIX;
-  const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100 };
+  const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100, theme: "light", align: "justify", librarySort: "added" };
+  const READER_THEMES = { light: ["#fffdf7", "#252923"], sepia: ["#f4ecd8", "#5b4636"], dark: ["#1f2623", "#e6ece7"] };
   let readerPrefs = loadReaderPrefs();
   fontSize = Math.min(180, Math.max(70, Number(readerPrefs.fontSize) || 100));
 
@@ -30,14 +31,25 @@
       default: return '"Vazirmatn", Tahoma, Arial, sans-serif';
     }
   }
+  function syncSettingsUI() {
+    const theme = READER_THEMES[readerPrefs.theme] ? readerPrefs.theme : "light";
+    const reader = document.getElementById("reader");
+    reader.classList.remove("theme-light", "theme-sepia", "theme-dark");
+    reader.classList.add("theme-" + theme);
+    document.querySelectorAll("[data-theme]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.theme === theme)));
+    document.querySelectorAll("[data-align]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.align === readerPrefs.align)));
+    const label = document.getElementById("fontSizeLabel");
+    if (label) label.textContent = `${fontSize.toLocaleString("fa-IR")}٪`;
+  }
   function applyReaderStyles() {
+    syncSettingsUI();
     if (!rendition) return;
-    const ink = isReaderDark ? "#edf1ed" : "#252923";
-    const background = isReaderDark ? "#202825" : "#fffdf7";
+    const [background, ink] = READER_THEMES[readerPrefs.theme] || READER_THEMES.light;
     const lineHeight = readerPrefs.lineHeight || "1.9";
+    const align = readerPrefs.align === "right" ? "right" : "justify";
     rendition.themes.default({
       body: { "font-family": selectedFontStack(), "line-height": lineHeight, "color": ink, "background": background, "direction": "rtl" },
-      p: { "text-align": "justify", "margin": "0 0 1em", "line-height": lineHeight },
+      p: { "text-align": align, "margin": "0 0 1em", "line-height": lineHeight },
       "h1,h2,h3,h4": { "line-height": "1.7", "margin": "0 0 1em" },
       a: { "color": "#397a67" }
     });
@@ -104,20 +116,41 @@
     let n = 0; for (const c of seed) n = (n * 31 + c.charCodeAt(0)) >>> 0;
     return colors[n % colors.length];
   }
-  function renderLibrary() {
-    const query = $("searchInput").value.trim().toLocaleLowerCase();
-    getAllBooks().then(books => {
-      books.sort((a,b) => (b.addedAt || 0) - (a.addedAt || 0));
-      const filtered = books.filter(b => `${b.title} ${b.author}`.toLocaleLowerCase().includes(query));
-      $("bookGrid").innerHTML = filtered.map(b => {
-        const [bg, fg] = paletteFor(b.title || b.id);
-        const cover = b.cover ? `<img alt="" src="${b.cover}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
-        return `<article class="book-card" tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="باز کردن ${esc(b.title)}">
-          <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}</div>
-          <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p><span class="book-badge">ذخیره‌شده روی دستگاه</span></div>
+  function getAllProgress() {
+    return new Promise((resolve, reject) => {
+      const req = db.transaction("progress", "readonly").objectStore("progress").getAll();
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  function bookCardHtml(b, prog) {
+    const [bg, fg] = paletteFor(b.title || b.id);
+    const cover = b.cover ? `<img alt="" src="${b.cover}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
+    const pct = prog && typeof prog.percentage === "number" ? Math.max(0, Math.min(100, prog.percentage)) : null;
+    const bar = pct ? `<div class="cover-progress" aria-hidden="true"><span style="width:${pct}%"></span></div>` : "";
+    const badge = pct ? `${pct.toLocaleString("fa-IR")}٪ خوانده‌شده` : (prog ? "شروع‌شده" : "خوانده‌نشده");
+    return `<article class="book-card" tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="باز کردن ${esc(b.title)}">
+          <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${bar}</div>
+          <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p><span class="book-badge">${badge}</span></div>
           <button class="remove-book" type="button" data-remove="${esc(b.id)}" aria-label="حذف ${esc(b.title)}" title="حذف از دستگاه">×</button>
         </article>`;
-      }).join("");
+  }
+  function renderLibrary() {
+    const query = $("searchInput").value.trim().toLocaleLowerCase();
+    Promise.all([getAllBooks(), getAllProgress()]).then(([books, progressList]) => {
+      const prog = new Map(progressList.map(p => [p.bookId, p]));
+      const lastRead = b => (prog.get(b.id) && prog.get(b.id).updatedAt) || 0;
+      const sort = readerPrefs.librarySort;
+      if (sort === "title") books.sort((a, b) => String(a.title).localeCompare(String(b.title), "fa"));
+      else if (sort === "read") books.sort((a, b) => lastRead(b) - lastRead(a) || (b.addedAt || 0) - (a.addedAt || 0));
+      else books.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+      const filtered = books.filter(b => `${b.title} ${b.author}`.toLocaleLowerCase().includes(query));
+      $("bookGrid").innerHTML = filtered.map(b => bookCardHtml(b, prog.get(b.id))).join("");
+      const reading = query ? [] : books.filter(b => { const p = prog.get(b.id); return p && p.cfi && (p.percentage || 0) < 100; })
+        .sort((a, b) => lastRead(b) - lastRead(a)).slice(0, 8);
+      $("continueSection").hidden = reading.length === 0;
+      $("continueShelf").innerHTML = reading.map(b => bookCardHtml(b, prog.get(b.id))).join("");
+      updateStorageInfo();
       $("emptyState").classList.toggle("visible", books.length === 0);
       $("bookGrid").style.display = books.length ? "grid" : "none";
       if (books.length && !filtered.length) {
@@ -171,6 +204,43 @@
       const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsDataURL(blob);
     });
   }
+  async function sha256(buffer) {
+    try {
+      if (!crypto.subtle) return null;
+      const digest = await crypto.subtle.digest("SHA-256", buffer);
+      return [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, "0")).join("");
+    } catch (_) { return null; }
+  }
+  // Same size first (cheap), then hash; books imported before v6.2 get their hash filled in lazily.
+  async function findDuplicate(size, hash) {
+    const books = await getAllBooks();
+    for (const b of books) {
+      if (b.size !== size) continue;
+      let h = b.contentHash;
+      if (!h && b.file) {
+        h = await sha256(await b.file.arrayBuffer());
+        if (h) { try { await put("books", { ...b, contentHash: h }); } catch (_) {} }
+      }
+      if (h === hash) return b;
+    }
+    return null;
+  }
+  async function requestPersistentStorage() {
+    try {
+      if (navigator.storage && navigator.storage.persist && !(await navigator.storage.persisted())) await navigator.storage.persist();
+    } catch (_) {}
+    updateStorageInfo();
+  }
+  async function updateStorageInfo() {
+    const el = $("storageInfo");
+    try {
+      if (!navigator.storage || !navigator.storage.estimate) { el.textContent = ""; return; }
+      const { usage = 0 } = await navigator.storage.estimate();
+      const persisted = navigator.storage.persisted ? await navigator.storage.persisted() : false;
+      const mb = (usage / 1048576).toLocaleString("fa-IR", { maximumFractionDigits: 1 });
+      el.textContent = `فضای استفاده‌شده روی این دستگاه: ${mb} مگابایت` + (persisted ? " · ذخیره‌سازی ماندگار فعال است" : "");
+    } catch (_) { el.textContent = ""; }
+  }
   function resetInputs() { inputEls.forEach(el => { if (el) el.value = ""; }); }
   async function importFile(file) {
     try {
@@ -183,11 +253,15 @@
       }
       if (!db) { showToast("ذخیره‌سازی مرورگر آماده نیست."); return; }
       showToast("در حال بررسی کتاب…");
+      const contentHash = await sha256(await file.arrayBuffer());
+      if (contentHash && await findDuplicate(file.size, contentHash)) {
+        throw new UserError("این کتاب قبلاً در کتابخانه هست.");
+      }
       const metadata = await extractMetadata(file);
       const record = {
         id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         title: metadata.title, author: metadata.author, cover: metadata.cover,
-        file: file, size: file.size, addedAt: Date.now()
+        file: file, size: file.size, addedAt: Date.now(), contentHash
       };
       try {
         await put("books", record);
@@ -198,9 +272,11 @@
           : "ذخیره کتاب در مرورگر انجام نشد.");
       }
       renderLibrary();
+      requestPersistentStorage();
       showToast("کتاب به کتابخانه همین دستگاه اضافه شد.");
     } catch (err) {
-      console.error(err);
+      // Expected outcomes (duplicate, broken file, …) are UserErrors and are not logged as app errors.
+      if (!(err instanceof UserError)) console.error(err);
       showToast(err instanceof UserError ? err.message : "افزودن کتاب انجام نشد.");
     } finally {
       resetInputs();
@@ -329,11 +405,13 @@
     }
     openToken++;
     $("reader").classList.remove("toc-open", "immersive");
+    closeSettings(false);
     $("tocToggle").setAttribute("aria-expanded", "false");
     $("reader").classList.add("hidden");
     document.body.style.overflow = "";
     if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
     bookInstance = null; rendition = null; currentBook = null;
+    renderLibrary();
   }
   // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
   const SWIPE_MIN_PX = 50, EDGE_ZONE = 0.25;
@@ -385,7 +463,8 @@
       case "PageUp": goBack(); break;
       case " ": if (e.shiftKey) goBack(); else goForward(); break;
       case "Escape":
-        if ($("reader").classList.contains("toc-open")) closeToc(true);
+        if (settingsOpen()) closeSettings(true);
+        else if ($("reader").classList.contains("toc-open")) closeToc(true);
         else if ($("reader").classList.contains("immersive")) setImmersive(false);
         else closeReader();
         break;
@@ -410,6 +489,7 @@
   }
   function onReaderClick(e, contents) {
     if (Date.now() < suppressClickUntil) return;
+    if (settingsOpen()) { closeSettings(false); return; }
     if (e.target && e.target.closest && e.target.closest("a, button, input, select, textarea, audio, video, label")) return;
     try {
       const win = (contents && contents.window) || e.view;
@@ -427,15 +507,30 @@
   $("tocBackdrop").addEventListener("click", () => closeToc(true));
   document.addEventListener("keydown", handleReaderKey);
 
-  function setReaderTheme() {
-    isReaderDark = !isReaderDark;
-    applyReaderStyles();
+  function settingsOpen() { return !$("settingsPanel").hidden; }
+  function openSettings() {
+    $("settingsPanel").hidden = false;
+    $("settingsToggle").setAttribute("aria-expanded", "true");
+    syncSettingsUI();
   }
+  function closeSettings(returnFocus) {
+    if (!settingsOpen()) return;
+    $("settingsPanel").hidden = true;
+    $("settingsToggle").setAttribute("aria-expanded", "false");
+    if (returnFocus) $("settingsToggle").focus({ preventScroll: true });
+  }
+  $("settingsToggle").addEventListener("click", () => { if (settingsOpen()) closeSettings(true); else openSettings(); });
+  document.addEventListener("click", e => {
+    if (settingsOpen() && !$("settingsPanel").contains(e.target) && !$("settingsToggle").contains(e.target)) closeSettings(false);
+  });
+  document.querySelectorAll("[data-theme]").forEach(b => b.addEventListener("click", () => { readerPrefs.theme = b.dataset.theme; saveReaderPrefs(); applyReaderStyles(); }));
+  document.querySelectorAll("[data-align]").forEach(b => b.addEventListener("click", () => { readerPrefs.align = b.dataset.align; saveReaderPrefs(); applyReaderStyles(); }));
+  $("librarySort").value = readerPrefs.librarySort;
+  $("librarySort").addEventListener("change", e => { readerPrefs.librarySort = e.target.value; saveReaderPrefs(); renderLibrary(); });
   $("themeToggle").addEventListener("click", () => {
     document.body.classList.toggle("dark");
     localStorage.setItem(THEME_KEY, document.body.classList.contains("dark") ? "dark" : "light");
   });
-  $("readerTheme").addEventListener("click", setReaderTheme);
   $("readerFont").value = readerPrefs.font;
   $("readerLineHeight").value = readerPrefs.lineHeight;
   $("readerFont").addEventListener("change", e => {
@@ -453,6 +548,7 @@
     readerPrefs.fontSize = fontSize;
     saveReaderPrefs();
     if (rendition) rendition.themes.fontSize(`${fontSize}%`);
+    syncSettingsUI();
   }
   $("fontUp").addEventListener("click", () => setFontSize(fontSize + 10));
   $("fontDown").addEventListener("click", () => setFontSize(fontSize - 10));
@@ -469,7 +565,7 @@
   });
   $("searchInput").addEventListener("input", renderLibrary);
   inputEls.forEach(el => el?.addEventListener("change", e => importFile(e.target.files?.[0])));
-  $("bookGrid").addEventListener("click", async e => {
+  const onLibraryClick = async e => {
     const removeBtn = e.target.closest("[data-remove]");
     if (removeBtn) {
       e.stopPropagation();
@@ -481,10 +577,11 @@
     }
     const card = e.target.closest("[data-open]");
     if (card) openReader(card.dataset.open).catch(err => { console.error(err); showToast("بازکردن کتاب ناموفق بود."); });
-  });
-  $("bookGrid").addEventListener("keydown", e => {
+  };
+  const onLibraryKey = e => {
     if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-open]")) { e.preventDefault(); openReader(e.target.dataset.open).catch(err => { console.error(err); showToast("بازکردن کتاب ناموفق بود."); }); }
-  });
+  };
+  ["bookGrid", "continueShelf"].forEach(id => { $(id).addEventListener("click", onLibraryClick); $(id).addEventListener("keydown", onLibraryKey); });
   function network() {
     const online = navigator.onLine;
     $("networkStatus").textContent = online ? "● آنلاین" : "● آفلاین";
@@ -494,7 +591,14 @@
   if (localStorage.getItem(THEME_KEY) === "dark") document.body.classList.add("dark");
   openDB().then(database => { db = database; renderLibrary(); }).catch(err => { console.error(err); showToast("مرورگر اجازه ذخیره محلی نمی‌دهد."); });
   network();
+  syncSettingsUI();
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
-    window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js").catch(err => console.warn("Service worker registration failed", err)));
+    // The SW activates immediately (skipWaiting); when it replaces an existing one, offer a reload.
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController) $("updateBanner").hidden = false; });
+    $("updateReload").addEventListener("click", () => location.reload());
+    window.addEventListener("load", () => navigator.serviceWorker.register("./service-worker.js").then(reg => {
+      document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
+    }).catch(err => console.warn("Service worker registration failed", err)));
   }
 })();

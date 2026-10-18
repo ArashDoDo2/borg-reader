@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="6.1.0">
+  <meta name="app-version" content="6.2.0">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="assets/icon-192.png">
@@ -48,11 +48,19 @@
       <div class="section-heading">
         <div><p class="eyebrow">مجموعه شخصی</p><h2>کتابخانه</h2></div>
         <div class="library-controls">
+          <select id="librarySort" class="reader-select sort-select" aria-label="مرتب‌سازی کتاب‌ها">
+            <option value="added">تازه‌ترین افزوده</option><option value="read">آخرین مطالعه</option><option value="title">عنوان</option>
+          </select>
           <label class="search-box"><span>⌕</span><input id="searchInput" type="search" placeholder="جست‌وجوی کتاب…" autocomplete="off"></label>
           <label class="secondary-button import-button">افزودن EPUB<input id="epubInputSmall" type="file" accept=".epub,application/epub+zip" hidden></label>
         </div>
       </div>
+      <div id="continueSection" class="continue-section" hidden>
+        <h3 class="shelf-title">ادامهٔ مطالعه</h3>
+        <div id="continueShelf" class="continue-shelf"></div>
+      </div>
       <div id="bookGrid" class="book-grid"></div>
+      <p id="storageInfo" class="storage-info" aria-live="polite"></p>
       <div id="emptyState" class="empty-state">
         <div class="empty-icon">▤</div>
         <h3>کتابخانه‌ات هنوز خالی است</h3>
@@ -68,23 +76,32 @@
       <button id="tocToggle" class="icon-button toc-toggle" type="button" aria-label="فهرست کتاب" aria-expanded="false" aria-controls="tocPanel">☰</button>
       <div id="readerTitle" class="reader-title">کتاب</div>
       <div class="reader-tools">
-        <label class="reader-setting-label" for="readerFont">فونت
-          <select id="readerFont" class="reader-select" aria-label="انتخاب فونت متن کتاب">
+        <button id="settingsToggle" class="icon-button settings-toggle" type="button" aria-label="تنظیمات نمایش" aria-expanded="false" aria-controls="settingsPanel">Aa</button>
+      </div>
+      <div id="settingsPanel" class="settings-panel" role="dialog" aria-label="تنظیمات نمایش" hidden>
+        <div class="setting-row"><label for="readerFont">فونت</label>
+          <select id="readerFont" class="reader-select">
             <option value="vazirmatn">وزیرمتن</option>
             <option value="tahoma">Tahoma</option>
             <option value="arial">Arial</option>
             <option value="serif">Serif</option>
             <option value="sans-serif">Sans-serif</option>
           </select>
-        </label>
-        <button id="fontDown" class="icon-button" type="button" aria-label="کوچک کردن فونت">A−</button>
-        <button id="fontUp" class="icon-button" type="button" aria-label="بزرگ کردن فونت">A+</button>
-        <label class="reader-setting-label" for="readerLineHeight">فاصلهٔ خطوط
-          <select id="readerLineHeight" class="reader-select" aria-label="تنظیم فاصلهٔ خطوط">
+        </div>
+        <div class="setting-row"><span>اندازه</span>
+          <div class="stepper"><button id="fontDown" class="icon-button" type="button" aria-label="کوچک کردن فونت">A−</button><output id="fontSizeLabel" aria-live="polite">۱۰۰٪</output><button id="fontUp" class="icon-button" type="button" aria-label="بزرگ کردن فونت">A+</button></div>
+        </div>
+        <div class="setting-row"><label for="readerLineHeight">فاصلهٔ خطوط</label>
+          <select id="readerLineHeight" class="reader-select">
             <option value="1.6">کم</option><option value="1.9" selected>معمولی</option><option value="2.2">زیاد</option>
           </select>
-        </label>
-        <button id="readerTheme" class="icon-button" type="button" aria-label="تغییر رنگ صفحه">◐</button>
+        </div>
+        <div class="setting-row"><span>تراز متن</span>
+          <div class="segmented" role="group" aria-label="تراز متن"><button type="button" data-align="justify">دوطرفه</button><button type="button" data-align="right">راست‌چین</button></div>
+        </div>
+        <div class="setting-row"><span>رنگ صفحه</span>
+          <div class="segmented" role="group" aria-label="رنگ صفحه"><button type="button" data-theme="light">روشن</button><button type="button" data-theme="sepia">کرم</button><button type="button" data-theme="dark">تیره</button></div>
+        </div>
       </div>
     </div>
     <div class="reader-layout">
@@ -107,7 +124,8 @@
   </section>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <footer><span>بُرگ · نسخهٔ ۶.۱.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
+  <footer><span>بُرگ · نسخهٔ ۶.۲.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

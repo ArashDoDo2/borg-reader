@@ -1,5 +1,5 @@
 // Bump this name on every release so old caches are removed.
-const CACHE_NAME = "borg-shell-v6.1.0";
+const CACHE_NAME = "borg-shell-v6.2.0";
 const APP_SHELL = [
   "./",
   "./index.html",

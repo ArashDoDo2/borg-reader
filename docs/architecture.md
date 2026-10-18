@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v6.1.0. Product goals, roadmap and ideas live in the
+Status: describes the code in `src/` as of v6.2.0. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
 ## 1. Overview
@@ -33,10 +33,10 @@ staging uses `ketabkhane-db-test`, ADR 0005):
 
 | Store | Key | Fields |
 |---|---|---|
-| `books` | `id` (UUID) | `title`, `author`, `cover` (data URL), `file` (Blob), `size`, `addedAt`, `locations` (cached epub.js locations, JSON) |
+| `books` | `id` (UUID) | `title`, `author`, `cover` (data URL), `file` (Blob), `size`, `addedAt`, `locations` (cached epub.js locations, JSON), `contentHash` (SHA-256, v6.2; filled lazily for older books) |
 | `progress` | `bookId` | `cfi`, `percentage`, `updatedAt`, `bookmark` (single CFI) |
 
-localStorage: `ketabkhane-reader-preferences` → `{font, lineHeight, fontSize}`; `ketab-theme` → `light|dark`.
+localStorage: `ketabkhane-reader-preferences` → `{font, lineHeight, fontSize, theme, align, librarySort}`; `ketab-theme` → `light|dark`.
 
 Target schema v2 and the mandatory migration rules are in spec §8. Rules that apply now:
 - Never delete/recreate the database; bump `DB_VERSION` and migrate step by step in `onupgradeneeded`.
@@ -56,6 +56,14 @@ Target schema v2 and the mandatory migration rules are in spec §8. Rules that a
   calls `rendition.resize()` because the viewer changes size without a window resize.
 - **Mobile TOC:** below 700 px the TOC panel becomes a right-side drawer (`.toc-open`), with a backdrop, focus moved
   into it on open and back to the toggle on close.
+- **Settings panel (v6.2):** one `Aa` button opens a panel (bottom sheet on phones) with font, size, line height,
+  alignment and page colour (light / sepia / dark). Escape priority: settings → TOC drawer → immersive → close reader.
+  A tap inside the book while the panel is open only closes the panel.
+- **Library (v6.2):** "continue reading" shelf (books with a saved CFI and < 100%, newest first), progress bar and
+  badge on every card, sort by newest added / last read / title. Duplicate imports are refused by size + SHA-256.
+  After the first import the app requests persistent storage; usage is shown under the grid.
+- **Updates (v6.2):** when a new Service Worker takes control of a page that already had one, a banner offers a reload;
+  `reg.update()` runs whenever the app becomes visible.
 - **Race guard:** `openToken` invalidates async work when the reader is closed or another book opens.
 
 ## 5. Service Worker
@@ -77,11 +85,10 @@ and forces permissions to 644/755 (v5 shipped files with 600 → HTTP 403, ADR 0
 2026-10-18 (ADR 0002).
 
 ## 7. Testing
-`tests/e2e_test.py` serves `src/` under `/borg/`, blocks all non-local requests and runs 53 checks
+`tests/e2e_test.py` serves `src/` under `/borg/`, blocks all non-local requests and runs 75 checks
 (import, render, TOC, font in iframe, paging, progress, bookmark, persistence, offline, corrupt file,
 missing JSZip, mobile layout, keyboard, edge taps, immersive mode, mobile TOC drawer, swipe via CDP touch events). Checks assert visibility (non-zero viewer height), not just DOM presence.
 
 ## 8. Known gaps
-- Reader toolbar is crowded on phones (settings panel planned).
-- Single bookmark per book; no sepia theme; no text alignment setting.
+- Single bookmark per book (multiple bookmarks need IndexedDB schema v2).
 - Not yet tested on real Android/iPad devices or large real-world Persian EPUBs.
