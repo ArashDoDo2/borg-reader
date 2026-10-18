@@ -176,6 +176,7 @@
       body: Object.assign({ "font-family": selectedFontStack(), "line-height": lineHeight, "color": ink, "background": background }, DEBUG.noDir ? {} : { "direction": bookDir }),
       p: { "text-align": align, "margin": paraGap, "line-height": lineHeight },
       img: { "cursor": "zoom-in" },
+      "img.borg-blockimg": { "display": "block", "margin-left": "auto", "margin-right": "auto" },
       "h1,h2,h3,h4": { "line-height": "1.7", "margin": "0 0 1em" },
       a: { "color": effectiveTheme() === "light" || effectiveTheme() === "sepia" ? "#397a67" : "#8fd1b5" }
     });
@@ -798,6 +799,7 @@
     const label = entry ? entry.label : (st && st.index != null ? `بخش ${faNum(st.index + 1)}` : "مطالعه");
     $("chapterLabel").textContent = label;
     $("chapterLabel").title = label;
+    $("readerChapter").textContent = label; // v8.6: the same title as the toolbar's second line on phones
     let changed = false;
     $("tocList").querySelectorAll(".toc-link[data-href]").forEach((b, i) => {
       const on = !!entry && entry.i === i;
@@ -944,6 +946,7 @@
     $("viewer").innerHTML = "";
     showOpening();
     $("chapterLabel").textContent = "شروع مطالعه";
+    $("readerChapter").textContent = "";
     tocFlat = []; resetSeek();
     $("prevPage").disabled = true; $("nextPage").disabled = false;
     showProgress(0);
@@ -1509,10 +1512,23 @@
   function fixHalfSpaces(doc) { eachTextNode(doc, v => v.indexOf("\u200F") < 0 ? v : v.replace(RLM_AS_ZWNJ, "$1\u200C")); }
   /** For search only: one spelling for ی/ي/ى, ک/ك and half-spaces (all single characters, so offsets are unchanged). */
   function normalizeForSearch(t) { return t.replace(/[يى]/g, "ی").replace(/ك/g, "ک").replace(RLM_AS_ZWNJ, "$1\u200C"); }
+  // v8.6: an image that is the only content of its block (cover pages, figures) is centred as a block (theme rule
+  // img.borg-blockimg); book CSS like `body{text-indent:2em}` pushed such images off-centre. Images inside running
+  // text stay inline. Only a class is added, so CFIs are unchanged.
+  const INLINE_WRAP = /^(A|SPAN|B|I|EM|STRONG|FONT|SMALL|BIG|U|SUP|SUB)$/;
+  function markBlockImages(doc) {
+    doc.querySelectorAll("img").forEach(img => {
+      let block = img.parentElement;
+      while (block && INLINE_WRAP.test(block.tagName.toUpperCase()) && block.parentElement && block.parentElement !== doc.documentElement) block = block.parentElement;
+      if (!block || block.querySelectorAll("img").length !== 1 || block.textContent.replace(/[\s\u200b-\u200f\u00a0]/g, "") !== "") return;
+      img.classList.add("borg-blockimg");
+    });
+  }
   function onBookContent(contents) {
     const doc = contents.document;
     if (!doc || !doc.body) return;
     try { fixHalfSpaces(doc); } catch (_) {}
+    try { markBlockImages(doc); } catch (_) {}
     if (readerPrefs.digits) { try { toPersianDigits(doc); } catch (_) {} }
     // Capture phase: runs before epub.js' own link handling, so footnotes open in place instead of jumping.
     doc.addEventListener("click", e => {
@@ -1789,6 +1805,7 @@
     if (returnFocus) $("settingsToggle").focus({ preventScroll: true });
   }
   $("settingsToggle").addEventListener("click", () => { if (settingsOpen()) closeSettings(true); else openSettings(); });
+  $("settingsClose").addEventListener("click", () => closeSettings(true));
   document.addEventListener("click", e => {
     if (settingsOpen() && !$("settingsPanel").contains(e.target) && !$("settingsToggle").contains(e.target)) closeSettings(false);
   });
@@ -1837,7 +1854,9 @@
   }
   async function updateBookmarkButton() {
     const bm = await bookmarkOnPage().catch(() => null);
-    $("bookmarkButton").textContent = bm ? "★ نشانک ذخیره شد" : "☆ نشانک";
+    // v8.6: star icon (filled through aria-pressed in CSS) + label; phones show only the icon, the label stays for screen readers.
+    $("bookmarkLabel").textContent = bm ? "نشانک ذخیره شد" : "نشانک";
+    $("bookmarkButton").title = bm ? "نشانک ذخیره شد" : "نشانک";
     $("bookmarkButton").setAttribute("aria-pressed", String(!!bm));
   }
   async function saveAnnotation(rec) {

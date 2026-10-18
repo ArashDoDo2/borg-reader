@@ -633,4 +633,140 @@ body.dark .import-button,body.dark .import-button:hover{color:#132019}
  #viewMine>.section-heading{flex-direction:column;align-items:stretch;gap:12px}
  #viewMine .library-controls{flex-wrap:wrap}
  #viewMine .lib-search{flex:1 1 240px;min-width:0}
+/* v8.6 mobile: reader */
+/* All widths: toolbar heading (title + chapter line), icon back button, bookmark star, sheet head, focus, safe areas. */
+.reader-heading{flex:0 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;line-height:1.4}
+.reader-heading .reader-title{flex:none;min-width:0}
+.reader-chapter{display:none;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:11.5px;font-weight:500;color:var(--muted)}
+.reader-chapter:empty{display:none!important}
+.close-reader{flex-shrink:0;min-height:44px}
+.close-reader .ico,.bookmark-button .ico,.sheet-close .ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;pointer-events:none;flex-shrink:0}
+.reader-toolbar>.icon-button,.reader-tools>.icon-button{min-width:44px;height:44px}
+.reader{color:var(--ink)}
+.reader .search-results mark{color:#3b2a06}
+.bookmark-button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.bookmark-button .ico{stroke-width:1.8}
+.bookmark-button[aria-pressed="true"] .ico{fill:var(--gold);stroke:#b48a3c}
+.sheet-head{display:flex;align-items:center;gap:8px}
+.sheet-title{flex:1;margin:0;font-size:14px;font-weight:800;line-height:1.6;color:var(--ink)}
+.sheet-grab{display:none}
+.sheet-close{min-width:36px;width:36px;height:36px;padding:0;border:0;background:transparent;color:var(--muted);margin-inline-end:-6px}
+.sheet-close:hover{background:var(--mint);color:var(--ink)}
+.reader .setting-check input{accent-color:var(--green2)}
+.settings-panel [data-theme]{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;line-height:1.3}
+.settings-panel [data-theme]::before{content:"";width:12px;height:12px;border-radius:50%;border:1px solid rgba(0,0,0,.28);box-sizing:border-box;flex-shrink:0}
+.settings-panel .setting-row{display:grid;grid-template-columns:72px minmax(0,1fr);gap:10px}
+.settings-panel .setting-row>label,.settings-panel .setting-row>span{white-space:normal;line-height:1.5}
+.settings-panel .reader-select{max-width:none;width:100%}
+.settings-panel .stepper{width:100%;gap:6px}
+.settings-panel .stepper .icon-button{flex:1 1 0;min-width:0}
+.settings-panel .stepper output{flex:1 1 0}
+.settings-panel .segmented{width:100%;flex-wrap:nowrap}
+.settings-panel .segmented button{flex:1 1 0;min-width:0;padding:6px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.settings-panel [data-theme]{font-size:11.5px}
+.settings-panel [data-theme="light"]::before{background:#fffdf7}
+.settings-panel [data-theme="sepia"]::before{background:#f4ecd8}
+.settings-panel [data-theme="dark"]::before{background:#1f2623}
+.settings-panel [data-theme="black"]::before{background:#000}
+.settings-panel [data-theme="auto"]::before{background:linear-gradient(90deg,#1f2623 50%,#fffdf7 50%)}
+.settings-panel [data-theme][aria-pressed="true"]::before{border-color:rgba(255,255,255,.75)}
+/* Focus: the reader's own green ring instead of the browser's (orange in Chrome); the back chip keeps its gold ring. */
+.reader :is(button,select,a,[tabindex]):not(.back-chip):focus-visible{outline:2px solid var(--green2);outline-offset:2px}
+.reader .search-form input:focus,.reader .search-form input:focus-visible{outline:none;border-color:var(--green2);box-shadow:0 0 0 3px color-mix(in srgb,var(--green2) 22%,transparent)}
+/* Reader themes also colour the chrome around the page (toolbar, bars, sheets, drawer) so a dark page is not framed in white. */
+.reader.theme-dark{color-scheme:dark;--bg:#171e1b;--paper:#1f2623;--ink:#e6ece7;--muted:#9fada5;--line:#33413a;--green:#b9d7c7;--green2:#9bc9ae;--mint:#29382f;--shadow:0 18px 45px #0004}
+.reader.theme-black{color-scheme:dark;--bg:#000;--paper:#0d0f0e;--ink:#d4d4d4;--muted:#8e9691;--line:#252b28;--green:#b9d7c7;--green2:#8fc2a6;--mint:#18231d;--shadow:none}
+body:not(.dark) .reader.theme-sepia{--bg:#eee4cd;--paper:#f8f0de;--ink:#4a3a2c;--muted:#8a7660;--line:#e0d0b0;--mint:#ece0c3;--green2:#3d6b55}
+body.dark .reader .segmented button[aria-pressed="true"],.reader.theme-dark .segmented button[aria-pressed="true"],.reader.theme-black .segmented button[aria-pressed="true"],
+body.dark #ttsToggle[aria-pressed="true"],.reader.theme-dark #ttsToggle[aria-pressed="true"],.reader.theme-black #ttsToggle[aria-pressed="true"]{color:#10201a}
+.reader.theme-dark .icon-button:hover,.reader.theme-dark .secondary-button:hover,.reader.theme-black .icon-button:hover,.reader.theme-black .secondary-button:hover,
+body.dark .reader .icon-button:hover,body.dark .reader .secondary-button:hover{background:var(--mint);border-color:var(--line)}
+/* Safe areas (viewport-fit=cover): nothing under the notch / home indicator / rounded corners in landscape. */
+.reader-toolbar{height:calc(70px + env(safe-area-inset-top));padding-top:env(safe-area-inset-top);padding-left:max(20px,env(safe-area-inset-left));padding-right:max(20px,env(safe-area-inset-right))}
+.reader-bottom{padding-bottom:env(safe-area-inset-bottom)}
+@media(min-width:1101px){.reader-bottom{height:calc(50px + env(safe-area-inset-bottom))}}
+.reading-area{padding-left:max(clamp(12px,3vw,40px),env(safe-area-inset-left))}
+.reader.immersive .reading-area{padding-top:max(8px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom))}
+.reader.immersive .back-chip{margin-bottom:env(safe-area-inset-bottom)}
+.reader.immersive .immersive-progress{bottom:calc(2px + env(safe-area-inset-bottom))}
+.image-viewer .dialog-close{top:calc(12px + env(safe-area-inset-top));left:calc(12px + env(safe-area-inset-left));min-width:44px;width:44px;height:44px;font-size:20px;color:#173b35}
+.reader-guide{padding:max(16px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom))}
+.reader-guide-card .primary-button{min-height:46px}
+.note-popup-actions .text-button{min-height:40px}
+@media(max-width:700px){
+ /* Toolbar: icon-only back button, flat 44px icon buttons, the title gets the freed space with the chapter under it. */
+ .reader-toolbar{height:auto;min-height:0;gap:0;padding:calc(5px + env(safe-area-inset-top)) max(4px,env(safe-area-inset-right)) 5px max(4px,env(safe-area-inset-left))}
+ .reader-toolbar>.icon-button,.reader-tools>.icon-button,.reader-toolbar>.close-reader{min-width:44px;width:44px;height:44px;padding:0;border:0;border-radius:12px;background:transparent;color:var(--ink);font-size:inherit}
+ .reader-toolbar>.icon-button:hover,.reader-tools>.icon-button:hover,.reader-toolbar>.close-reader:hover{background:transparent}
+ .reader-toolbar>.icon-button:active,.reader-tools>.icon-button:active,.reader-toolbar>.close-reader:active,.reader-toolbar>.icon-button[aria-expanded="true"],.reader-tools>.icon-button[aria-expanded="true"]{background:var(--mint);color:var(--green2)}
+ .reader-tools>.settings-toggle{font-size:17px}
+ .reader-toolbar>.close-reader .ico{width:22px;height:22px}
+ .close-reader-label,.bookmark-label{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+ .reader-tools{gap:0;flex-shrink:0}
+ .reader-heading{flex:1 1 auto;padding:0 6px;text-align:right}
+ .reader-heading .reader-title{font-size:14px;line-height:1.45;flex:none}
+ .reader-chapter{display:block}
+ /* Page-nav row: taps, swipes and the seek bar cover it on phones; it stays in the DOM for screen readers and
+    reappears if a keyboard user tabs into it. The chapter title moved to the toolbar. */
+ .page-nav{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+ .page-nav:focus-within{position:relative;width:auto;height:48px;margin:0;padding:0 8px;overflow:visible;clip:auto;clip-path:none;background:var(--paper)}
+ /* The page fills the space between the bars. */
+ /* (Extra padding on .viewer itself broke swipes in the epub.js layout, so the gutter is on the reading area.) */
+ .reading-area{padding:0 max(8px,env(safe-area-inset-right)) 0 max(8px,env(safe-area-inset-left));background:var(--reader-bg)}
+ .viewer{border:0;border-radius:0;box-shadow:none}
+ .reader-bottom,.preview-banner{margin-left:calc(-1 * max(8px,env(safe-area-inset-left)));margin-right:calc(-1 * max(8px,env(safe-area-inset-right)))}
+ .preview-banner{margin-top:6px;border-radius:0;border-width:0 0 1px}
+ /* Bottom bar: full-width seek bar, one info line, star icon for the bookmark. */
+ .reader-bottom{display:block;position:relative;height:auto;min-height:0;padding:2px max(12px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(12px,env(safe-area-inset-left));background:var(--paper);border-top:1px solid var(--line)}
+ .reader-bottom #timeLeft{display:none}
+ .reader-seek{display:flex;flex-wrap:wrap;gap:0}
+ .reader-seek input[type=range]{flex:1 1 100%;height:30px}
+ .seek-info{flex:1 1 0;min-width:0;max-width:none;height:42px;line-height:42px;font-size:11.5px;padding-inline-end:50px}
+ .reader-bottom #bookmarkButton{position:absolute;bottom:env(safe-area-inset-bottom);inset-inline-end:max(2px,env(safe-area-inset-left));width:44px;height:44px;padding:0;border:0;background:transparent;border-radius:12px}
+ .reader-bottom #bookmarkButton .ico{width:23px;height:23px}
+ .reader-bottom #bookmarkButton:active{background:var(--mint)}
+ /* Floating bars and popups sit above the bottom bar, full width, with 40px+ targets. */
+ .tts-bar{top:8px}
+ .selection-bar{bottom:calc(84px + env(safe-area-inset-bottom));width:calc(100% - 16px);max-width:none;padding:8px;gap:6px}
+ .selection-bar span{flex-wrap:wrap;justify-content:center}
+ .selection-bar button{min-height:40px;padding:7px 11px;font-size:12.5px}
+ .selection-bar .hl-swatch{width:38px;height:38px;min-height:38px}
+ .note-popup{bottom:calc(84px + env(safe-area-inset-bottom));width:calc(100% - 16px);max-height:55%;padding:14px 16px 10px;font-size:14px}
+ .note-popup-actions .text-button{min-height:44px;flex:1}
+ .reader.immersive .selection-bar,.reader.immersive .note-popup{bottom:calc(12px + env(safe-area-inset-bottom))}
+ .reader.immersive .reading-area{padding:max(4px,env(safe-area-inset-top)) 4px max(4px,env(safe-area-inset-bottom))}
+ /* Settings sheet: handle, title and close button; label column + full-width controls with equal segments. */
+ .settings-panel:not(.search-panel){padding:0 16px calc(16px + env(safe-area-inset-bottom));gap:8px;max-height:min(80vh,680px);box-shadow:0 -10px 40px rgba(0,0,0,.18)}
+ .sheet-head{position:sticky;top:0;z-index:2;background:var(--paper);padding:20px 0 6px;margin-bottom:2px;border-bottom:1px solid var(--line)}
+ .sheet-grab{display:block;position:absolute;top:8px;left:50%;width:40px;height:4px;margin-left:-20px;border-radius:4px;background:var(--line)}
+ .sheet-title{font-size:15px}
+ .sheet-close{width:44px;min-width:44px;height:44px;margin-inline-end:-10px}
+ .setting-row{display:grid;grid-template-columns:84px minmax(0,1fr);gap:10px;min-height:46px}
+ .setting-row>label,.setting-row>span{white-space:normal;line-height:1.5;font-size:12.5px}
+ .settings-panel .reader-select{max-width:none;width:100%;min-height:44px;font-size:16px;padding:6px 10px}
+ .settings-panel .stepper{width:100%;gap:6px}
+ .settings-panel .stepper .icon-button{flex:1 1 0;min-width:0;height:44px}
+ .settings-panel .stepper output{flex:1 1 0}
+ .settings-panel .segmented{width:100%;flex-wrap:nowrap}
+ .settings-panel .segmented button{flex:1 1 0;min-width:0;min-height:44px;padding:6px 2px;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .settings-panel [data-theme]{font-size:11.5px!important}
+ .setting-check{min-height:44px;gap:12px;font-size:13px;line-height:1.6}
+ .setting-check input{width:20px;height:20px}
+ .show-guide{align-self:stretch;min-height:44px;margin-top:4px}
+ /* Search: drops down under the toolbar (the on-screen keyboard covers the bottom of the screen). */
+ .search-panel{position:absolute;top:100%;bottom:auto;left:0;right:0;width:auto;max-width:none;max-height:70vh;border-radius:0 0 18px 18px;border-top:0;padding:10px max(12px,env(safe-area-inset-right)) 12px max(12px,env(safe-area-inset-left));box-shadow:0 18px 40px rgba(0,0,0,.18)}
+ .search-form input{font-size:16px;min-height:44px;padding:8px 12px}
+ .search-form .secondary-button{min-height:44px;padding:8px 16px}
+ .search-results button{padding:10px 12px;font-size:13px}
+ /* TOC drawer: safe areas, 44px rows, the progress line becomes the drawer's footer. */
+ .toc-panel{display:flex;flex-direction:column;padding:calc(20px + env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) 0 16px}
+ .toc-panel>*{flex-shrink:0}
+ .toc-panel .panel-tabs button{min-height:44px}
+ .toc-link{padding:11px 12px;font-size:13px}
+ .toc-link.toc-sub{font-size:12.5px;padding-top:9px;padding-bottom:9px}
+ .reader-progress{position:sticky;bottom:0;display:flex;align-items:center;gap:10px;margin:auto -16px 0;padding:12px 16px calc(12px + env(safe-area-inset-bottom));background:var(--paper);border-top:1px solid var(--line)}
+ .reader-progress::before{content:"پیشرفت کتاب";font-size:12px;color:var(--muted);white-space:nowrap}
+ .reader-progress .progress-track{flex:1 1 auto}
+ .reader-progress small{margin:0;min-width:2.6em;text-align:left;font-size:12px;font-weight:700;color:var(--green2)}
+ .reader-guide{padding:max(10px,env(safe-area-inset-top)) 10px max(10px,env(safe-area-inset-bottom))}
 }

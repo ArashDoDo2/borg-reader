@@ -157,9 +157,9 @@
 
   <section id="reader" class="reader hidden" aria-label="کتاب‌خوان">
     <div class="reader-toolbar">
-      <button id="closeReader" class="secondary-button" type="button">← بازگشت به کتابخانه</button>
+      <button id="closeReader" class="secondary-button close-reader" type="button" aria-label="بازگشت به کتابخانه" title="بازگشت به کتابخانه"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span class="close-reader-label">بازگشت به کتابخانه</span></button>
       <button id="tocToggle" class="icon-button toc-toggle" type="button" aria-label="فهرست کتاب" aria-expanded="false" aria-controls="tocPanel"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
-      <div id="readerTitle" class="reader-title" dir="auto">کتاب</div>
+      <div class="reader-heading"><div id="readerTitle" class="reader-title" dir="auto">کتاب</div><div id="readerChapter" class="reader-chapter" dir="auto" aria-hidden="true"></div></div>
       <span class="sync-wrap reader-sync-wrap" role="status" aria-live="polite"><button id="readerSync" class="sync-chip reader-sync" type="button" data-state="" hidden></button></span>
       <div class="reader-tools">
         <button id="ttsToggle" class="icon-button" type="button" aria-label="خواندن با صدا" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18.3 6.3a8 8 0 0 1 0 11.4"/></svg></button>
@@ -167,11 +167,12 @@
         <button id="settingsToggle" class="icon-button settings-toggle" type="button" aria-label="تنظیمات نمایش" aria-expanded="false" aria-controls="settingsPanel">Aa</button>
       </div>
       <div id="searchPanel" class="settings-panel search-panel" role="dialog" aria-label="جست‌وجو در کتاب" hidden>
-        <form id="bookSearchForm" class="search-form"><input id="bookSearchInput" type="search" placeholder="جست‌وجو در متن کتاب…" autocomplete="off"><button class="secondary-button" type="submit">بگرد</button></form>
+        <form id="bookSearchForm" class="search-form"><input id="bookSearchInput" type="search" placeholder="جست‌وجو در متن کتاب…" aria-label="جست‌وجو در متن کتاب" enterkeyhint="search" autocomplete="off"><button class="secondary-button" type="submit">بگرد</button></form>
         <p id="bookSearchStatus" class="muted search-status" aria-live="polite"></p>
         <div id="bookSearchResults" class="search-results"></div>
       </div>
       <div id="settingsPanel" class="settings-panel" role="dialog" aria-label="تنظیمات نمایش" hidden>
+        <div class="sheet-head"><span class="sheet-grab" aria-hidden="true"></span><h2 class="sheet-title">تنظیمات نمایش</h2><button id="settingsClose" class="icon-button sheet-close" type="button" aria-label="بستن تنظیمات"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
         <div class="setting-row"><label for="readerFont">فونت</label>
           <select id="readerFont" class="reader-select">
             <option value="vazirmatn">وزیرمتن</option>
@@ -286,7 +287,7 @@
           </span>
           <button type="button" data-sel="close" aria-label="بستن">×</button>
         </div>
-        <div class="reader-bottom"><span id="timeLeft">برای هایلایت یا یادداشت، متن را انتخاب کن.</span><div class="reader-seek"><input id="bookSeek" type="range" min="0" max="1000" step="1" value="0" disabled aria-label="پیشرفت کتاب" aria-valuetext="در حال محاسبهٔ صفحه‌ها…" aria-describedby="seekInfo"><span id="seekInfo" class="seek-info">در حال محاسبهٔ صفحه‌ها…</span><div id="seekPreview" class="seek-preview" dir="auto" aria-hidden="true" hidden></div></div><button id="bookmarkButton" class="text-button" type="button">☆ نشانک</button></div>
+        <div class="reader-bottom"><span id="timeLeft">برای هایلایت یا یادداشت، متن را انتخاب کن.</span><div class="reader-seek"><input id="bookSeek" type="range" min="0" max="1000" step="1" value="0" disabled aria-label="پیشرفت کتاب" aria-valuetext="در حال محاسبهٔ صفحه‌ها…" aria-describedby="seekInfo"><span id="seekInfo" class="seek-info">در حال محاسبهٔ صفحه‌ها…</span><div id="seekPreview" class="seek-preview" dir="auto" aria-hidden="true" hidden></div></div><button id="bookmarkButton" class="text-button bookmark-button" type="button" aria-pressed="false" title="نشانک"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.8l2.5 5.1 5.6.8-4 3.9.9 5.6-5-2.6-5 2.6.9-5.6-4-3.9 5.6-.8z"/></svg><span id="bookmarkLabel" class="bookmark-label">نشانک</span></button></div>
       </div>
     </div>
   </section>
