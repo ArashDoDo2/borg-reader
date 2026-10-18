@@ -1655,6 +1655,45 @@ async def run(url):
         await SP.wait_for_timeout(800)
         check("v8.6.1: still no book script ran after interaction", await SP.evaluate("window.__pwned||null") is None)
         await ctxS.close(); shutil.rmtree(tmps, ignore_errors=True)
+        # 23. v8.6.2: every link inside a chapter is handled by the app (never by the browser inside the iframe)
+        import zipfile as _zf23
+        tmpl = Path(tempfile.mkdtemp(prefix="borg-e2e-links-"))
+        lb = tmpl / "links.epub"
+        with _zf23.ZipFile(lb, "w") as z:
+            z.writestr(_zf23.ZipInfo("mimetype"), "application/epub+zip", compress_type=_zf23.ZIP_STORED)
+            z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+            z.writestr("OEBPS/content.opf", '<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">links-1</dc:identifier><dc:title>Link Test</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="a" href="feed_1/article_0/a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="feed_4/article_0/b.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/><itemref idref="b"/></spine></package>')
+            z.writestr("OEBPS/nav.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>TOC</title></head><body><nav epub:type="toc"><ol><li><a href="feed_1/article_0/a.xhtml">Leaders</a></li><li><a href="feed_4/article_0/b.xhtml">Briefing</a></li></ol></nav></body></html>')
+            filler = "".join(f"<p>Filler paragraph {k} with enough words to make this chapter longer than one page.</p>" for k in range(60))
+            z.writestr("OEBPS/feed_1/article_0/a.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><title>Leaders</title></head><body><h1>Leaders</h1><p>As we <a id="cross" href="../../feed_4/article_0/b.xhtml#deep">report in our Briefing</a>, see also <a id="ext" href="https://example.com/x">the web</a> and <a id="broken" href="../../nowhere/x.xhtml">a broken link</a>.</p>' + filler + '</body></html>')
+            z.writestr("OEBPS/feed_4/article_0/b.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><title>Briefing</title></head><body><h1>Briefing</h1><p><a id="same" href="#deep">Jump down</a></p>' + filler + '<h2 id="deep">Deep section</h2><p>Target text.</p>' + filler + '</body></html>')
+        errsL, extL = [], []
+        ctxL, LP = await new_ctx(b, url, extL, errsL)
+        popups = []
+        ctxL.on("page", lambda p_: popups.append(p_))
+        await LP.goto(url); await LP.wait_for_timeout(1000)
+        await LP.set_input_files("#epubInput", str(lb)); await LP.wait_for_timeout(2500)
+        await LP.click('#bookGrid .book-card:has-text("Link Test")'); await LP.wait_for_timeout(3000)
+        FR = "()=>{const f=document.querySelector('#viewer iframe');return {url:(f.contentWindow&&f.contentWindow.location.href)||'', h1:(f.contentDocument.querySelector('h1')||{}).textContent||''}}"
+        DEEP = """()=>{const f=document.querySelector('#viewer iframe');const r=f.getBoundingClientRect();const box=document.getElementById('viewer').getBoundingClientRect();
+          const h=f.contentDocument.getElementById('deep');if(!h)return false;const x=h.getBoundingClientRect();return x.right+r.left>box.left&&x.left+r.left<box.right}"""
+        await LP.frame_locator("#viewer iframe").locator("#cross").click(); await LP.wait_for_timeout(2000)
+        st = await LP.evaluate(FR)
+        check("v8.6.2: cross-folder link opens the target chapter inside the reader", st["h1"] == "Briefing" and st["url"] in ("about:srcdoc", "") and await LP.evaluate(DEEP), str(st))
+        check("v8.6.2: the back chip offers the way back after a link", await LP.is_visible("#backChip"))
+        await LP.click("#backChip"); await LP.wait_for_timeout(1500)
+        check("v8.6.2: back chip returns to the chapter with the link", (await LP.evaluate(FR))["h1"] == "Leaders")
+        await LP.frame_locator("#viewer iframe").locator("#broken").click(); await LP.wait_for_timeout(1200)
+        st = await LP.evaluate(FR)
+        check("v8.6.2: a broken internal link never navigates the reader away", st["h1"] == "Leaders" and st["url"] in ("about:srcdoc", "") and LP.url.startswith(url), str(st))
+        await LP.frame_locator("#viewer iframe").locator("#ext").click(); await LP.wait_for_timeout(1500)
+        st = await LP.evaluate(FR)
+        check("v8.6.2: an external link opens a new tab and leaves the reader in place", len(popups) >= 1 and st["h1"] == "Leaders" and LP.url.startswith(url), f"popups={len(popups)} {st}")
+        for p_ in popups:
+            try: await p_.close()
+            except Exception: pass
+        check("v8.6.2 links: no JS errors", not [e for e in errsL if "example.com" not in e], str(errsL[:3]))
+        await ctxL.close(); shutil.rmtree(tmpl, ignore_errors=True)
         await b.close()
 
 def main():

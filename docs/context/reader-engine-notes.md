@@ -54,6 +54,12 @@ Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/ap
 - Hooks: `rendition.hooks.content` runs per loaded chapter (fonts, half-space fix, digits, footnote/image
   handlers). `openToken` guards every async step against a reader that was closed or replaced.
 
+- **In-book links**: epub.js follows links with an `onclick` it sets itself; if that ever misses, the browser navigates
+  the iframe to the link resolved against the app URL (e.g. https://parsun.com/feed_4/…), i.e. out of the book. Since
+  8.6.2 the capture-phase click handler in `onBookContent` handles every `<a href>`: footnotes → popup, internal →
+  `resolveBookLink()` (relative to the chapter's own spine href) + `jumpTo()`, external → `window.open` in a new tab,
+  unresolvable → toast. → e2e section 23.
+
 ## Persian EPUB content
 - **Half-spaces shown as joined words** → some books use U+200F (RLM) where ZWNJ (U+200C) belongs. → `fixHalfSpaces`
   replaces RLM-between-letters with ZWNJ at display time; `normalizeForSearch` also unifies ی/ي/ى and ک/ك.

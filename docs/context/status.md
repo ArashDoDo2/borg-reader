@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-19, version **8.6.1** (live at https://parsun.com/borg/).
+Last updated: 2026-10-19, version **8.6.2** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -44,6 +44,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.5.1 | Safari: veil no longer waits for the <link> load event that WebKit never fires (polls `link.sheet`, ≤600 ms); WebKit tap checks report without gating (synthetic touches never reached the iframe in Playwright WebKit; real-device check pending) |
 | 8.6.0 | Mobile polish. Library: hero only when the library is empty, compact toolbar, one-row scrolling chips, stats card below the grid on phones, cleaner cards, SVG theme icon, offline-only connectivity pill, bottom-sheet dialogs. Reader: icon back button, title + chapter line in the toolbar, page-nav row hidden on phones, compact bottom bar with icon bookmark, centred block images, settings/search sheets with title/close/green focus, safe areas, reader themes colour the chrome | — not deployed (WebKit test read the hidden chapter label)
 | 8.6.1 | **iPhone/iPad taps fixed at the root:** the book iframe was sandboxed without allow-scripts and WebKit runs no event listeners there (taps, footnote/image clicks, keys in the book). `allowScriptedContent: true`; book scripts still cannot run (inherited CSP script-src 'self' + `stripBookScripts()` removes scripts, on* handlers, javascript: URLs, iframes/objects). WebKit tap checks gate again |
+| 8.6.2 | Every link inside a chapter is handled by the app (`followBookLink`): internal → resolved against the chapter path and opened via `jumpTo()` (back chip), external → new tab, unknown → toast; the iframe never navigates (owner saw a link go to parsun.com/feed_4/… outside the reader; not reproducible with the August issue, fixed at the handler level) |
 
 ## Open items (not started unless the owner says so)
 0. Text cleanup shipped in 8.3.0. Limits: a phrase split across formatting tags is not matched; the

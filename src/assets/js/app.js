@@ -1543,6 +1543,32 @@
       img.classList.add("borg-blockimg");
     });
   }
+  // Resolve a link inside a chapter against that chapter's own path to a spine item; null when not in the book.
+  function resolveBookLink(contents, href) {
+    const raw = String(href || "").trim(), hash = raw.indexOf("#");
+    const file = hash >= 0 ? raw.slice(0, hash) : raw, frag = hash >= 0 ? raw.slice(hash) : "";
+    const items = (bookInstance && bookInstance.spine && bookInstance.spine.spineItems) || [];
+    let here = null;
+    try { here = bookInstance.spine.get(contents.sectionIndex); } catch (_) {}
+    if (!file) return here ? here.href + frag : null;
+    const base = here ? String(here.href) : "";
+    const want = normHref(base.slice(0, base.lastIndexOf("/") + 1) + file);
+    let item = items.find(it => normHref(it.href) === want) || items.find(it => sameFile(normHref(it.href), want));
+    if (!item) { try { item = bookInstance.spine.get(file); } catch (_) {} }
+    return item ? item.href + frag : null;
+  }
+  function followBookLink(contents, href) {
+    const raw = String(href || "").trim();
+    if (!raw || /^javascript:/i.test(raw)) return;
+    if (/^(https?:|mailto:|tel:)/i.test(raw) || /^\/\//.test(raw)) {
+      try { window.open(raw, "_blank", "noopener,noreferrer"); } catch (_) {}
+      return;
+    }
+    if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return; // other schemes: ignore
+    const target = resolveBookLink(contents, raw);
+    if (target) jumpTo(target);
+    else showToast("این پیوند به بخشی اشاره می‌کند که در این کتاب پیدا نشد.");
+  }
   function onBookContent(contents) {
     const doc = contents.document;
     if (!doc || !doc.body) return;
@@ -1557,10 +1583,12 @@
         showFootnote(contents, a).then(ok => { if (!ok && rendition) jumpTo(a.getAttribute("href")); }).catch(() => {});
         return;
       }
-      // Other internal links are followed by epub.js itself (same rules as its replaceLinks): remember the page first.
+      // Every other link is handled here, never by the browser: a missed epub.js handler used to let the iframe
+      // navigate to e.g. https://parsun.com/feed_4/… (outside the reader). Internal → chapter, external → new tab.
       if (a) {
-        const href = a.getAttribute("href") || "";
-        if (href.indexOf("mailto:") !== 0 && href.indexOf("://") < 0) noteJumpOrigin("jump");
+        e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+        followBookLink(contents, a.getAttribute("href") || "");
+        return;
       }
       const img = !a && e.target.closest && e.target.closest("img, image");
       if (img) {
