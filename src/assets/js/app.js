@@ -637,13 +637,30 @@
     rendition = bookInstance.renderTo("viewer", {
       width: "100%", height: "100%", flow: readerPrefs.flow === "scrolled" ? "scrolled-doc" : "paginated",
       spread: readerPrefs.spread === "none" ? "none" : "auto", manager: "default",
-      ...(DEBUG.method ? { method: DEBUG.method } : {}), // Many Persian EPUBs omit page-progression-direction (some even claim lang="en"); without RTL here the
+      ...(DEBUG.method ? { method: DEBUG.method } : {}),
+      // Many Persian EPUBs omit page-progression-direction (some even claim lang="en"); without RTL here the
       // chapter start sits off-screen and TOC jumps land on the chapter's last page. A book's own direction still wins.
       defaultDirection: DEBUG.direction || "rtl",
     });
+    // Keep each newly loaded chapter invisible until the reader font and theme are applied, so the text
+    // doesn't first paint in the fallback font and then visibly re-flow.
+    // Registered after "opened" so it runs after epub.js's own resource-substitution hook (both rewrite section.output).
+    const veilBook = bookInstance;
+    veilBook.opened.then(() => veilBook.spine.hooks.serialize.register((output, section) => {
+      const html = typeof section.output === "string" ? section.output : output;
+      if (typeof html === "string") section.output = html.replace(/<head(\s[^>]*)?>/i, m => `${m}<style id="borg-veil">html{visibility:hidden}</style>`);
+    })).catch(() => {});
     rendition.hooks.content.register(onBookContent);
-    // The book is rendered in an iframe; load the bundled font there too.
-    rendition.hooks.content.register(contents => contents.addStylesheet(READER_FONTS_URL));
+    // The book is rendered in an iframe; load the bundled font there too, then lift the veil.
+    rendition.hooks.content.register(contents => {
+      const doc = contents.document, reveal = () => { const v = doc && doc.getElementById("borg-veil"); if (v) v.remove(); };
+      const safety = setTimeout(reveal, 1500); // never leave a page hidden
+      return contents.addStylesheet(READER_FONTS_URL)
+        .then(() => new Promise(r => { void doc.body.offsetHeight; (contents.window.requestAnimationFrame || setTimeout)(r); }))
+        .then(() => Promise.race([doc.fonts ? doc.fonts.ready : null, new Promise(r => setTimeout(r, 700))]))
+        .catch(() => {})
+        .then(() => { clearTimeout(safety); reveal(); });
+    });
     applyReaderStyles();
     // Input inside the book iframe does not reach the main document; epub.js re-emits it on the rendition.
     rendition.on("keydown", handleReaderKey);

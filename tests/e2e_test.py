@@ -938,6 +938,9 @@ async def run(url):
         await D_.click("#nextPage"); await D_.wait_for_timeout(1200); t1 = await visible_text(D_)
         await D_.click("#prevPage"); await D_.wait_for_timeout(1200)
         check("no-direction book: next moves forward and prev comes back", t1 and t1 != t0 and await D_.evaluate(H1_VISIBLE, "فصل دوم"), f"{t0!r} → {t1!r}")
+        veil = await D_.evaluate("""()=>{const d=document.querySelector('#viewer iframe').contentDocument;
+          return {veil: !!d.getElementById('borg-veil'), vis: d.defaultView.getComputedStyle(d.documentElement).visibility}}""")
+        check("v8.1.2: chapter veil is lifted once styles load", not veil["veil"] and veil["vis"] == "visible", str(veil))
         check("v8.1.1 direction: no JS errors", len(errsD) == 0, str(errsD[:3]))
         await ctxD.close(); shutil.rmtree(tmpd, ignore_errors=True)
         await b.close()
