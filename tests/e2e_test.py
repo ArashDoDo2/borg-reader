@@ -19,6 +19,9 @@ results = []
 def check(name, ok, info=""):
     results.append((name, bool(ok)))
     print(("PASS " if ok else "FAIL ") + name + (f"  [{info}]" if info else ""), flush=True)
+    if not ok and os.environ.get("GITHUB_ACTIONS"):
+        # Surfaces as an annotation on the run, readable without downloading logs.
+        print(f"::error title=e2e failed::{name} [{str(info)[:300]}]", flush=True)
 
 class SubPathHandler(http.server.SimpleHTTPRequestHandler):
     base = "/borg/"
