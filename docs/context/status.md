@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-19, version **8.7.0** (live at https://parsun.com/borg/).
+Last updated: 2026-10-19, version **8.8.0** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -11,7 +11,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 - Server: shared cPanel host `parsun.com`, user `parsunco`, PHP 8.4, MySQL. Config in
   `/home/parsunco/borg-config/config.php`; book files in `~/borg-storage`; repo clone in
   `/home/parsunco/repositories/borg-reader`.
-- Tests: API 207 checks, e2e ~215 checks (Chromium), WebKit probe (Safari engine, informational) — all green.
+- Tests: API 236 checks, e2e ~215 checks (Chromium), WebKit probe (Safari engine, informational) — all green.
 
 ## Version history (what each release added)
 | Version | Highlights |
@@ -51,6 +51,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.6.6 | Phone toolbar icons 21 → 26 px (owner: too small on iPhone), «Aa» 19 px, bookmark 26 px |
 | 8.6.7 | Every navigation (jumpTo, back chip, TTS) goes through `safeDisplay()`: a target epub.js cannot resolve shows a toast and is reported as kind `nav` with its origin and target (admin error reports showed unhandled "No Section Found" up to 8.6.3; WebKit NotFoundError in 8.6.5 still under investigation) |
 | 8.7.0 | API upload for the owner's own program: admin API keys («کلیدهای API», migration 6 `api_tokens`), `POST api-book` (Bearer key, multipart, public catalog only, approved unless the key requires review), server-side text cleanup (`lib/clean.php`, byte-identical to the browser on the test corpus) with the admin's rules synced to the server (`clean-rules`, `settings_text`); guide in docs/api-books.md |
+| 8.8.0 | Text-based PDF magazines open directly in their original layout (pdf.js 4.10.38 legacy, vendored, lazy-loaded): import/sync/catalog/API accept PDFs (migration 7 `books.format`), page view with text layer, zoom/pinch, outline TOC, search, page progress `pdf:N`, taps/swipes/wheel/keys/seek; highlights/notes/TTS/cleanup not for PDFs yet (ADR 0009) |
 
 ## Open items (not started unless the owner says so)
 0. Text cleanup shipped in 8.3.0. Limits: a phrase split across formatting tags is not matched; the
