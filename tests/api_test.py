@@ -828,12 +828,25 @@ def run(base, tmp):
     check("wrong method 405", st == 405)
 
 def main():
+    gh = os.environ.get("GITHUB_ACTIONS")
     if not shutil.which("php"):
-        print("php not found"); sys.exit(1)
+        print("::error title=api test::php not found" if gh else "php not found"); sys.exit(1)
+    if gh:  # what the runner's PHP offers (zip/dom/sqlite are needed)
+        import subprocess as _sp
+        ver = _sp.run(["php", "-r", "echo PHP_VERSION;"], capture_output=True, text=True).stdout
+        mods = _sp.run(["php", "-m"], capture_output=True, text=True).stdout.split()
+        print(f"::notice title=php::{ver} zip={'zip' in mods} dom={'dom' in mods} pdo_sqlite={'pdo_sqlite' in mods} mbstring={'mbstring' in mods}", flush=True)
     tmp = Path(tempfile.mkdtemp(prefix="borg-api-"))
     proc, base = start_php(tmp)
     try:
         run(base, tmp)
+    except Exception as e:  # a crash before/between checks must still be visible in CI annotations
+        import traceback
+        tb = traceback.format_exc()
+        print(tb, flush=True)
+        if gh:
+            print(f"::error title=api test crashed::{type(e).__name__}: {str(e)[:300]} | {tb.strip().splitlines()[-3][:300] if len(tb.strip().splitlines()) >= 3 else ''}", flush=True)
+        results.append(("api test run completed without a crash", False))
     finally:
         proc.terminate(); proc.wait(5); shutil.rmtree(tmp, ignore_errors=True)
     failed = [n for n, ok in results if not ok]
