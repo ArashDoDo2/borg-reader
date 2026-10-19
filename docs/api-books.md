@@ -43,8 +43,23 @@ If the host strips the `Authorization` header, send `-H "X-Borg-Token: borg_…"
 | `title` | ≤ 500 | اگر نباشد از OPF (PDF: `Title` در Info)، بعد از نام فایل / from the OPF (PDF: Info `Title`), else the file name |
 | `author` | ≤ 300 | اگر نباشد از OPF (PDF: `Author` در Info) / from the OPF (PDF: Info `Author`) |
 | `language`, `publisher`, `published` | ≤ 20 / 300 / 40 | اگر نباشد از OPF (`dc:date` → `YYYY-MM-DD`)؛ برای PDF فقط از درخواست / PDF: request only |
-| `category` | ≤ 80 | دستهٔ کاتالوگ / catalog category |
+| `category` | ≤ 2000 | دسته‌های کاتالوگ (پایین را ببینید) / catalog categories (see below) |
 | `description` | ≤ 2000 | توضیح در کاتالوگ / catalog description |
+
+**دسته‌ها / Categories.** دسته‌ها دو سطح دارند (دسته ← زیردسته) و هر کتاب می‌تواند چند دسته (حداکثر ۱۰) داشته باشد.
+در `category` چند مسیر را با `;` یا خط تازه جدا کنید؛ هر مسیر `دسته/زیردسته` یا فقط `دسته` است (`›` و `>` هم جداکننده‌اند،
+فاصله‌های اطراف حذف می‌شود). دسته‌ای که هنوز نیست ساخته می‌شود (اول دستهٔ بالا). بیش از دو سطح → ۴۰۰ `too_deep`، بیش از
+۱۰ دسته → ۴۰۰ `too_many_categories`، نام بیش از ۸۰ نویسه → ۴۰۰ `too_long_category`.
+Categories have two levels (category → subcategory); a book may have several (at most 10). Put one or more paths in
+`category`, separated by `;` or newlines, each `Parent/Child` or just `Parent` (`›` and `>` also separate levels; spaces
+around names are trimmed). Missing categories are created (parent first). More than two levels → 400 `too_deep`, more
+than 10 → 400 `too_many_categories`, a name over 80 characters → 400 `too_long_category`. For a book already in the
+catalog, a non-empty `category` replaces its categories.
+```sh
+curl -H "Authorization: Bearer borg_…" -F file=@book.epub \
+     -F "category=ادبیات/رمان; تاریخ › ایران" \
+     "https://parsun.com/borg/api/index.php?r=api-book"
+```
 
 جلد از OPF برداشته می‌شود (EPUB 3 `cover-image` یا EPUB 2 `meta name="cover"`؛ PNG/JPEG/WebP/GIF تا ۱٫۵ مگابایت).
 The cover is taken from the OPF (EPUB 3 `cover-image` or EPUB 2 `meta name="cover"`; PNG/JPEG/WebP/GIF up to 1.5 MB).
@@ -61,8 +76,8 @@ compressed object streams or encrypted files, then the file name is the title). 
  "cleaned": 5, "cleanup": "applied", "skipped_rules": []}
 ```
 - `catalog_status`: `approved` (منتشر شد) یا `pending` (کلید با بازبینی). کتابی که قبلاً در کاتالوگ است وضعیتش را
-  نگه می‌دارد؛ فقط `category`/`description` (اگر فرستاده شوند) به‌روز می‌شود. کتاب ردشده دوباره ثبت می‌شود.
-  An entry already in the catalog keeps its status; `category`/`description` are updated when sent.
+  نگه می‌دارد؛ فقط `category` (جایگزین همهٔ دسته‌ها) و `description` (اگر فرستاده شوند) به‌روز می‌شود. کتاب ردشده دوباره ثبت می‌شود.
+  An entry already in the catalog keeps its status; `category` (replaces all its categories) and `description` are updated when sent.
 - `duplicate: true`: همین فایل (پس از پاک‌سازی) قبلاً ذخیره شده بود؛ نسخهٔ دومی ساخته نمی‌شود.
   The same (cleaned) file was already stored; no second copy is made.
 - `book.format`: `epub` یا `pdf` (از بایت‌های فایل تشخیص داده می‌شود). Detected from the file's bytes.
@@ -93,6 +108,7 @@ Changing the rules does not touch books already stored.
 | 400 | `not_epub` | فایل نه EPUB معتبر است نه PDF / neither a valid EPUB nor a PDF |
 | 400 | `not_pdf` | با `%PDF-` شروع می‌شود ولی ناقص است (`%%EOF` در انتها نیست) / starts like a PDF but is truncated |
 | 400 | `too_long_<field>`, `bad_<field>` | فیلدی بلندتر از حد یا نامعتبر |
+| 400 | `too_deep`, `too_many_categories` | دسته با بیش از دو سطح / بیش از ۱۰ دسته — more than two levels / more than 10 categories |
 | 413 | `too_large` | بزرگ‌تر از حد کتاب در تنظیمات سرور (`max_book_bytes`، پیش‌فرض ۱۰۰ مگابایت) |
 | 413 | `file_too_large_for_php`, `post_too_large` | بزرگ‌تر از `upload_max_filesize` / `post_max_size` در PHP میزبان (مقدار در پیام هست) |
 | 500 | `upload_failed`, `storage`, `server_error` | مشکل سرور؛ بعداً دوباره |

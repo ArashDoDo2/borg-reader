@@ -131,7 +131,9 @@ function handle_api_route(string $route): bool {
                 $v = opt_str_param($_POST, $k, $max);
                 if ($v !== null && $v !== '') $req[$k] = preg_replace('/\s+/u', ' ', $v) ?? $v;
             }
-            $category = opt_str_param($_POST, 'category', 80);
+            // category: one or more "Parent/Child" or "Parent" paths (";" or newline between them); missing ones are created.
+            $category = opt_str_param($_POST, 'category', 2000);
+            $paths = $category === null ? [] : parse_category_paths($category);
             $desc = opt_str_param($_POST, 'description', 2000);
             $work = upload_dir() . '/api-' . bin2hex(random_bytes(12)) . '.book';
             if (!move_uploaded_file($up['tmp'], $work)) fail(500, 'storage', 'Could not store the file.');
@@ -180,11 +182,12 @@ function handle_api_route(string $route): bool {
                     $auto = $status === 'approved';
                     q('DELETE FROM catalog WHERE book_id = ?', [$bookId]);
                     q('INSERT INTO catalog (book_id, status, description, category, submitted_by, submitted_at, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                      [$bookId, $status, (string)$desc, (string)$category, $owner, time(), $auto ? $owner : null, $auto ? time() : null]);
+                      [$bookId, $status, (string)$desc, '', $owner, time(), $auto ? $owner : null, $auto ? time() : null]);
+                    set_book_categories($bookId, category_ids_for_paths($paths));
                 } else {
                     $status = $cur['status'];
                     if ($desc !== null && $desc !== '') q('UPDATE catalog SET description = ? WHERE book_id = ?', [$desc, $bookId]);
-                    if ($category !== null && $category !== '') q('UPDATE catalog SET category = ? WHERE book_id = ?', [$category, $bookId]);
+                    if ($paths) set_book_categories($bookId, category_ids_for_paths($paths));
                 }
                 q('UPDATE api_tokens SET uses = uses + 1, last_used_at = ? WHERE id = ?', [time(), $tok['id']]);
                 $resp = [

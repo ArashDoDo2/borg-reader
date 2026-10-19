@@ -150,6 +150,27 @@ function migrations(): array {
             "CREATE INDEX catalog_category ON catalog (category)",
             "CREATE INDEX user_books_book ON user_books (book_id)",
         ],
+        9 => [
+            // Two-level catalog categories (parent_id 0 = top level), several per catalog book. catalog.category stays as
+            // a mirror: the top-level name of the book's first category ('' when none), for older clients.
+            "CREATE TABLE categories (id {AI}, parent_id INTEGER NOT NULL DEFAULT 0, name VARCHAR(80) NOT NULL,
+               sort INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL DEFAULT 0)",
+            "CREATE UNIQUE INDEX categories_parent_name ON categories (parent_id, name)",
+            "CREATE TABLE catalog_categories (catalog_id INTEGER NOT NULL, category_id INTEGER NOT NULL,
+               PRIMARY KEY (catalog_id, category_id),
+               FOREIGN KEY (catalog_id) REFERENCES catalog(book_id) ON DELETE CASCADE ON UPDATE CASCADE,
+               FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE)",
+            "CREATE INDEX catalog_categories_category ON catalog_categories (category_id)",
+            // Data: every distinct non-empty catalog.category becomes a top-level category and its books are linked to
+            // it. Guarded with NOT EXISTS, so running the statements again changes nothing.
+            "UPDATE catalog SET category = TRIM(category) WHERE LENGTH(category) <> LENGTH(TRIM(category))",
+            "INSERT INTO categories (parent_id, name, sort, created_at)
+               SELECT DISTINCT 0, TRIM(c.category), 0, 0 FROM catalog c
+               WHERE TRIM(c.category) <> '' AND NOT EXISTS (SELECT 1 FROM categories k WHERE k.parent_id = 0 AND k.name = TRIM(c.category))",
+            "INSERT INTO catalog_categories (catalog_id, category_id)
+               SELECT c.book_id, k.id FROM catalog c JOIN categories k ON k.parent_id = 0 AND k.name = TRIM(c.category)
+               WHERE TRIM(c.category) <> '' AND NOT EXISTS (SELECT 1 FROM catalog_categories x WHERE x.catalog_id = c.book_id AND x.category_id = k.id)",
+        ],
     ];
 }
 function schema_version(): int {

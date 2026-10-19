@@ -697,7 +697,7 @@ def run_migration7():
         st2, L = a.call("GET", "library")
         bk = next((x for x in L.get("books", []) if x["id"] == bid), {})
         st3, body, hd = raw_get(a, "book-file", f"&id={bid}")
-        check("migrations 7 and 8 applied on an existing database", "format" not in cols and "search_key" not in cols and h.get("schema_version") == 8, f"{cols} {h.get('schema_version')}")
+        check("migrations 7 and 8 applied on an existing database", "format" not in cols and "search_key" not in cols and h.get("schema_version") == 9, f"{cols} {h.get('schema_version')}")
         check("migration 7: existing book reads as format epub and its file is still served", bk.get("format") == "epub" and st3 == 200
               and body == epub and hd.get("Content-Type") == "application/epub+zip", f"{bk} {st3}")
         db = sqlite3.connect(tmp2 / "old.sqlite")
@@ -748,6 +748,7 @@ def run_large_catalog():
         st, r = user.call("POST", "register", {"invite": code, "email": "lu@x.io", "password": "password2", "name": "کاربر بزرگ"})
         U = r["user"]["id"]
         names = {A: "مدیر بزرگ", U: "کاربر بزرگ"}
+        admin.call("POST", "category-save", {"name": "رمان"})  # users' legacy names only match existing categories (migration 9)
 
         # ---- ~120 books through the normal upload flow; M = the expected state of every book ----
         M = {}
@@ -1035,12 +1036,12 @@ def run_large_catalog():
         st, r = user.call("GET", "catalog")
         check("catalog without page: unchanged full response", st == 200 and set(r) == {"books"} and sorted(b["id"] for b in r["books"]) == sorted(appr)
               and set(r["books"][0]) == {"id", "sha256", "size", "title", "author", "language", "publisher", "published", "has_cover", "format",
-                                         "description", "category", "submitter", "in_library"}, str(sorted(r.get("books", [{}])[0]))[:300])
+                                         "description", "category", "categories", "submitter", "in_library"}, str(sorted(r.get("books", [{}])[0]))[:300])
         full_new = [b["id"] for b in r["books"]]
         st, r = user.call("GET", "catalog", query="&page=1&per=5")
         check("catalog page: total, page, per, same book fields", st == 200 and r["total"] == len(appr) and r["page"] == 1 and r["per"] == 5
               and len(r["books"]) == 5 and set(r["books"][0]) == {"id", "sha256", "size", "title", "author", "language", "publisher", "published",
-              "has_cover", "format", "description", "category", "submitter", "in_library"}, str({k: r.get(k) for k in ("total", "page", "per")}))
+              "has_cover", "format", "description", "category", "categories", "submitter", "in_library"}, str({k: r.get(k) for k in ("total", "page", "per")}))
         st, r = user.call("GET", "catalog", query="&page=1")
         check("catalog page: per defaults to 24", r["per"] == 24 and len(r["books"]) == min(24, len(appr)))
         st, r = user.call("GET", "catalog", query="&page=1&per=1000")
@@ -1105,6 +1106,313 @@ def run_large_catalog():
         check("bulk filter delete of 600 rows (no files on disk)", r == {"affected": 600, "skipped": 0} and len(ids()) == len(M), str(r))
     finally:
         proc.terminate(); proc.wait(5); shutil.rmtree(tmp3, ignore_errors=True)
+
+def run_migration9():
+    """Migration 9 on an existing database: distinct non-empty catalog.category strings become top-level categories
+    (trimmed) and their books are linked; the data statements are idempotent."""
+    import sqlite3, re
+    tmp2 = Path(tempfile.mkdtemp(prefix="borg-m9-"))
+    dbfile = tmp2 / "m9.sqlite"
+    proc, base2 = start_php(tmp2, dsn=f"sqlite:{dbfile}")
+    try:
+        a = Client(base2)
+        a.call("POST", "setup", {"setup_key": SETUP_KEY, "email": "m9@x.io", "password": "password1", "name": "M9"})
+        ids = []
+        for i in range(5):
+            st, r = upload(a, tiny_epub(tmp2 / f"m9-{i}.epub", 300 + i), f"کتاب م{i}")
+            ids.append(r["book"]["id"])
+            a.call("POST", "catalog-submit", {"book_id": ids[-1]})
+        proc.terminate(); proc.wait(5)
+        # Back to a schema-8 database whose catalog rows carry free-text categories.
+        db = sqlite3.connect(dbfile)
+        db.execute("DROP TABLE catalog_categories"); db.execute("DROP TABLE categories")
+        db.execute("DELETE FROM schema_migrations WHERE version = 9")
+        for bid, cat in zip(ids, [" رمان ", "رمان", "شعر", "", "  "]):
+            db.execute("UPDATE catalog SET category = ? WHERE book_id = ?", (cat, bid))
+        db.commit(); db.close()
+        proc, base2 = spawn_php(tmp2)
+        a.base = base2
+        st, h = a.call("GET", "health")
+        st2, r = a.call("GET", "categories")
+        C = r.get("categories", [])
+        check("migration 9 applied on an existing database", h.get("schema_version") == 9, str(h.get("schema_version")))
+        check("migration 9: distinct non-empty strings become top-level categories (trimmed) with counts",
+              sorted((c["name"], c["parent_id"], c["count"]) for c in C) == [("رمان", 0, 2), ("شعر", 0, 1)], str(C))
+        byname = {c["name"]: c["id"] for c in C}
+        st, r = a.call("GET", "catalog")
+        B = {b["id"]: b for b in r.get("books", [])}
+        check("migration 9: books linked; legacy column trimmed; empty ones unlinked",
+              [[c["id"] for c in B[i]["categories"]] for i in ids] == [[byname.get("رمان")], [byname.get("رمان")], [byname.get("شعر")], [], []]
+              and [B[i]["category"] for i in ids] == ["رمان", "رمان", "شعر", "", ""]
+              and B[ids[0]]["categories"][0] == {"id": byname.get("رمان"), "name": "رمان", "parent_id": 0, "parent_name": ""}, str([B[i] for i in ids])[:400])
+        # Run the migration's data statements again: nothing changes.
+        src = (ROOT / "src" / "api" / "lib" / "core.php").read_text(encoding="utf-8")
+        block = re.search(r"\n        9 => \[(.*?)\n        \],", src, re.S).group(1)
+        stmts = [x for x in re.findall(r'"((?:INSERT|UPDATE)[^"]*)"', block)]
+        db = sqlite3.connect(dbfile)
+        before = (db.execute("SELECT * FROM categories ORDER BY id").fetchall(), db.execute("SELECT * FROM catalog_categories ORDER BY 1, 2").fetchall())
+        for x in stmts: db.execute(x)
+        db.commit()
+        after = (db.execute("SELECT * FROM categories ORDER BY id").fetchall(), db.execute("SELECT * FROM catalog_categories ORDER BY 1, 2").fetchall())
+        db.close()
+        check("migration 9: data statements are idempotent", len(stmts) == 3 and before == after and len(before[1]) == 3, f"{len(stmts)} {before} {after}")
+    finally:
+        proc.terminate(); proc.wait(5); shutil.rmtree(tmp2, ignore_errors=True)
+
+def run_categories():
+    """Migration 9: two-level categories, several per book — routes, counts, filters, book fields, bulk, api-book."""
+    tmp4 = Path(tempfile.mkdtemp(prefix="borg-cat-"))
+    proc, base = start_php(tmp4, dsn=f"sqlite:{tmp4 / 'cat.sqlite'}")
+    Q = urllib.parse.quote
+    try:
+        admin, user, anon = Client(base), Client(base), Client(base)
+        admin.call("POST", "setup", {"setup_key": SETUP_KEY, "email": "ca@x.io", "password": "password1", "name": "مدیر"})
+        code = admin.call("POST", "invites", {"note": "cat"})[1]["code"]
+        user.call("POST", "register", {"invite": code, "email": "cu@x.io", "password": "password2", "name": "کاربر"})
+        n = [0]
+        def book(c, title):
+            n[0] += 1
+            st, r = upload(c, tiny_epub(tmp4 / f"c{n[0]}.epub", 2000 + n[0]), title)
+            return r["book"]["id"]
+        def save(body, c=None): return (c or admin).call("POST", "category-save", body)
+        def cats(c=None): return {x["id"]: x for x in (c or admin).call("GET", "categories")[1]["categories"]}
+        def order(c=None): return [x["id"] for x in (c or admin).call("GET", "categories")[1]["categories"]]
+        def cat_ids(b): return [x["id"] for x in b["categories"]]
+        def catalog_book(bid):
+            st, r = admin.call("GET", "catalog-all")
+            return next((b for b in r["books"] if b["id"] == bid), None)
+        def ccat(bid): return cat_ids(catalog_book(bid))
+        def legacy(bid): return catalog_book(bid)["category"]
+
+        # ---- permissions ----
+        codes = [user.call("POST", "category-save", {"name": "x"})[0], user.call("POST", "category-delete", {"id": 1})[0],
+                 user.call("POST", "category-order", {"parent_id": 0, "ids": [1]})[0],
+                 anon.call("POST", "category-save", {"name": "x"})[0], anon.call("GET", "categories")[0],
+                 admin.call("POST", "category-save", {"name": "x"}, csrf=False)[0], admin.call("POST", "category-delete", {"id": 1}, csrf=False)[0],
+                 admin.call("POST", "category-order", {"parent_id": 0, "ids": [1]}, csrf=False)[0],
+                 admin.call("GET", "category-save")[0], admin.call("POST", "categories", {})[0]]
+        check("categories: non-admin 403, anonymous 401, missing CSRF 403, wrong method 405", codes == [403, 403, 403, 401, 401, 403, 403, 403, 405, 405], str(codes))
+        st, r = user.call("GET", "categories")
+        check("GET categories works for a user (empty list)", st == 200 and r == {"categories": []}, str(r))
+
+        # ---- create, validate ----
+        st, r = save({"name": "  ادبیات  ", "parent_id": 0})
+        L = r.get("category", {}).get("id")
+        check("category-save creates a top-level category (trimmed)", st == 200 and r["category"] == {"id": L, "name": "ادبیات", "parent_id": 0, "sort": 0, "parent_name": ""}, str(r))
+        H = save({"name": "تاریخ"})[1]["category"]["id"]
+        st, r = save({"name": "رمان", "parent_id": L})
+        R = r["category"]["id"]
+        check("category-save creates a subcategory", st == 200 and r["category"]["parent_id"] == L and r["category"]["parent_name"] == "ادبیات", str(r))
+        P = save({"name": "شعر", "parent_id": str(L)})[1]["category"]["id"]
+        I = save({"name": "ایران", "parent_id": H})[1]["category"]["id"]
+        st, r = save({"name": "رمان", "parent_id": H})
+        same_name = r.get("category", {}).get("id")
+        check("same name under another parent is allowed", st == 200 and same_name not in (None, R))
+        admin.call("POST", "category-delete", {"id": same_name})
+        bad = [save({"name": ""}), save({"name": "x" * 81}), save({"name": "ادبیات"}), save({"name": "شعر", "parent_id": L}),
+               save({"name": "عمیق", "parent_id": R}), save({"name": "یتیم", "parent_id": 999999}), save({"name": "ادبیات", "id": L, "parent_id": H}),
+               save({"name": "خود", "id": H, "parent_id": H}), save({"name": "x", "id": 999999}), save({"name": "x", "parent_id": "abc"})]
+        check("category-save errors: missing/too long name 400, duplicate 409, too_deep 400, bad parent 400, has_children 409, unknown id 404",
+              [(s_, r_.get("error")) for s_, r_ in bad] == [(400, "missing_name"), (400, "too_long_name"), (409, "duplicate"), (409, "duplicate"),
+              (400, "too_deep"), (400, "bad_parent"), (409, "has_children"), (400, "bad_parent"), (404, "not_found"), (400, "bad_parent_id")],
+              str([(s_, r_.get("error")) for s_, r_ in bad]))
+        check("categories in display order (top level by sort, children after their parent)", order() == [L, R, P, H, I], str(order()))
+        st, r = user.call("GET", "categories")
+        c0 = r["categories"][0]
+        check("GET categories item fields (user: no count_all)", set(c0) == {"id", "name", "parent_id", "sort", "count"}, str(c0))
+
+        # ---- books with several categories ----
+        b1, b2, b3, b5 = book(admin, "کتاب یک"), book(admin, "کتاب دو"), book(admin, "کتاب سه"), book(admin, "کتاب پنج")
+        nb = book(admin, "خارج از کاتالوگ")
+        u1, u2, u3 = book(user, "کتاب کاربر"), book(user, "کتاب کاربر دو"), book(user, "کتاب کاربر سه")
+        st, r = admin.call("POST", "catalog-submit", {"book_id": b1, "categories": [P, R]})
+        check("admin catalog-submit with categories", st == 201 and r["status"] == "approved", str(r))
+        admin.call("POST", "catalog-submit", {"book_id": b2, "categories": [I, R, L, str(R)]})
+        admin.call("POST", "catalog-submit", {"book_id": b3, "categories": [I]})
+        admin.call("POST", "catalog-submit", {"book_id": b5})
+        st, r = user.call("POST", "catalog-submit", {"book_id": u1, "categories": [P]})
+        check("user catalog-submit with category ids -> pending", st == 201 and r["status"] == "pending")
+        st, r = user.call("POST", "catalog-submit", {"book_id": u2, "categories": [999999]})
+        check("user catalog-submit with an unknown category id -> 400", st == 400 and r.get("error") == "unknown_category", str(r))
+        st, r = user.call("POST", "catalog-submit", {"book_id": u2, "category": "ناموجود"})
+        check("user legacy category that does not exist: ignored, not created", st == 201 and ccat(u2) == [] and legacy(u2) == ""
+              and "ناموجود" not in [c["name"] for c in cats().values()])
+        st, r = user.call("POST", "catalog-submit", {"book_id": u3, "category": " تاریخ "})
+        check("user legacy category matching an existing top-level name links it", st == 201 and ccat(u3) == [H] and legacy(u3) == "تاریخ")
+        ref = {L: ("ادبیات", 0, ""), R: ("رمان", L, "ادبیات"), P: ("شعر", L, "ادبیات"), H: ("تاریخ", 0, ""), I: ("ایران", H, "تاریخ")}
+        want = lambda ids: [{"id": i, "name": ref[i][0], "parent_id": ref[i][1], "parent_name": ref[i][2]} for i in ids]
+        st, r = user.call("GET", "catalog")
+        B = {b["id"]: b for b in r["books"]}
+        check("catalog (full list): categories in display order with parent names; legacy category = first one's top-level name",
+              B[b1]["categories"] == want([R, P]) and B[b2]["categories"] == want([L, R, I]) and B[b3]["categories"] == want([I]) and B[b5]["categories"] == []
+              and [B[b]["category"] for b in (b1, b2, b3, b5)] == ["ادبیات", "ادبیات", "تاریخ", ""], json.dumps([B[b] for b in (b1, b2)], ensure_ascii=False)[:500])
+        st, r = user.call("GET", "catalog", query=f"&page=1&id={b2}")
+        check("catalog deep link (page, id) includes categories", st == 200 and [b["categories"] for b in r["books"]] == [want([L, R, I])], str(r)[:300])
+        st, r = admin.call("GET", "catalog-pending")
+        check("catalog-pending includes categories", {b["id"]: b["categories"] for b in r["books"]}.get(u1) == want([P]), str(r)[:300])
+        st, r = admin.call("GET", "catalog-all")
+        check("catalog-all includes categories", all("categories" in b for b in r["books"]) and {b["id"]: cat_ids(b) for b in r["books"]}[b2] == [L, R, I])
+        st, r = admin.call("GET", "admin-books", query="&per=100")
+        AB = {b["id"]: b for b in r["books"]}
+        check("admin-books includes categories (also [] for a book outside the catalog)", AB[b1]["categories"] == want([R, P]) and AB[nb]["categories"] == [] and AB[nb]["category"] == "")
+
+        # ---- counts: approved, distinct, a top level includes its children ----
+        C = cats()
+        got = {i: (C[i]["count"], C[i]["count_all"]) for i in (L, R, P, H, I)}
+        check("GET categories counts (distinct; top level includes children; count_all for admins incl. pending)",
+              got == {L: (2, 3), R: (2, 2), P: (1, 2), H: (2, 3), I: (2, 2)}, str(got))
+        UC = cats(user)
+        check("user counts equal the admin's count, no count_all", {i: UC[i]["count"] for i in UC} == {i: C[i]["count"] for i in C} and "count_all" not in UC[L])
+
+        # ---- filters ----
+        def cat_ids_q(query, c=None):
+            st, r = (c or user).call("GET", "catalog", query="&page=1&per=60" + query)
+            return sorted(b["id"] for b in r["books"]) if st == 200 else (st, r.get("error"))
+        def adm_q(query):
+            st, r = admin.call("GET", "admin-books", query="&per=100" + query)
+            return sorted(b["id"] for b in r["books"]) if st == 200 else (st, r.get("error"))
+        got = [cat_ids_q(f"&cat={L}"), cat_ids_q(f"&cat={R}"), cat_ids_q(f"&cat={H}"), cat_ids_q("&cat=none"), cat_ids_q("&cat=999999"), cat_ids_q("&cat=x"),
+               cat_ids_q("&category=" + Q("ادبیات")), cat_ids_q("&category=" + Q("شعر")), cat_ids_q(f"&cat={H}&category=" + Q("رمان")), cat_ids_q(f"&cat={L}&q=" + Q("دو"))]
+        check("catalog cat=<top id> includes children; cat=<child>; cat=none; unknown id empty; bad cat 400; legacy category= name (column or any linked name)",
+              got == [sorted([b1, b2]), sorted([b1, b2]), sorted([b2, b3]), [b5], [], (400, "bad_cat"), sorted([b1, b2]), [b1], [b2], [b2]], str(got))
+        st, r = user.call("GET", "catalog", query=f"&page=1&cat={L}")
+        check("catalog page with cat keeps its legacy facets", st == 200 and r["total"] == 2 and {c["name"]: c["count"] for c in r["categories"]} == {"ادبیات": 2, "تاریخ": 1}, str(r.get("categories")))
+        got = [adm_q(f"&cat={P}"), adm_q(f"&cat={L}&status=pending"), adm_q("&cat=none"), adm_q("&cat=-1"), adm_q("&category=" + Q("ایران"))]
+        check("admin-books cat=<id> (any status), cat=none (incl. books outside the catalog), bad cat 400, legacy name",
+              got == [sorted([b1, u1]), [u1], sorted([b5, nb, u2]), (400, "bad_cat"), sorted([b2, b3])], str(got))
+
+        # ---- order ----
+        st, r = admin.call("POST", "category-order", {"parent_id": 0, "ids": [H, L]})
+        check("category-order top level", st == 200 and order() == [H, I, L, R, P], str(order()))
+        check("order changes the books' category order and the legacy column", ccat(b2) == [I, L, R] and legacy(b2) == "تاریخ" and legacy(b1) == "ادبیات")
+        admin.call("POST", "category-order", {"parent_id": L, "ids": [P, R]})
+        check("category-order children", order() == [H, I, L, P, R] and ccat(b1) == [P, R] and cats()[P]["sort"] == 0 and cats()[R]["sort"] == 1)
+        bad = [admin.call("POST", "category-order", b) for b in ({"parent_id": 0, "ids": [H, R]}, {"parent_id": L, "ids": [P, P]},
+               {"parent_id": 0, "ids": "1,2"}, {"parent_id": 0, "ids": []}, {"parent_id": 0, "ids": [999999]})]
+        check("category-order validation -> 400 bad_ids", [(s_, r_.get("error")) for s_, r_ in bad] == [(400, "bad_ids")] * 5, str(bad))
+
+        # ---- rename / move keep the legacy column in sync ----
+        st, r = save({"id": L, "name": "ادبیات فارسی"})
+        check("rename a top-level category (parent kept when parent_id is absent)", st == 200 and r["category"]["parent_id"] == 0 and r["category"]["name"] == "ادبیات فارسی"
+              and legacy(b1) == "ادبیات فارسی", str(r))
+        st, r = save({"id": I, "name": "ایران", "parent_id": L})
+        check("move a subcategory to another parent: books' legacy column follows", st == 200 and r["category"]["parent_name"] == "ادبیات فارسی"
+              and r["category"]["sort"] == 2 and legacy(b3) == "ادبیات فارسی" and order() == [H, L, P, R, I], str(r))
+        st, r = save({"id": I, "name": "ایران", "parent_id": 0})
+        check("a subcategory can become top level", st == 200 and r["category"]["parent_id"] == 0 and legacy(b3) == "ایران")
+        save({"id": I, "name": "ایران", "parent_id": H})
+        check("and move back under a parent", cats()[I]["parent_id"] == H and legacy(b3) == "تاریخ")
+
+        # ---- catalog-update: categories replace the set; legacy category string ----
+        st, r = admin.call("POST", "catalog-update", {"book_id": b5, "categories": [R, I]})
+        check("catalog-update categories replaces the set (display order) and sets the legacy column", st == 200 and ccat(b5) == [I, R] and legacy(b5) == "تاریخ")
+        st, r = admin.call("POST", "catalog-update", {"book_id": b5, "description": "نه", "categories": [R, 999999]})
+        st2, r2 = admin.call("POST", "catalog-update", {"book_id": b5, "categories": list(range(1, 12))})
+        st3, r3 = admin.call("POST", "catalog-update", {"book_id": b5, "categories": ["x"]})
+        st4, r4 = admin.call("POST", "catalog-update", {"book_id": b5, "categories": R})
+        check("catalog-update categories errors: unknown 400 (nothing written), more than 10 -> 400, bad -> 400",
+              (st, r.get("error"), st2, r2.get("error"), st3, r3.get("error"), st4, r4.get("error")) == (400, "unknown_category", 400, "too_many_categories", 400, "bad_categories", 400, "bad_categories")
+              and ccat(b5) == [I, R] and catalog_book(b5)["description"] != "نه")
+        st, r = admin.call("POST", "catalog-update", {"book_id": b5, "category": " علمی "})
+        sci = next((c["id"] for c in cats().values() if c["name"] == "علمی"), None)
+        check("catalog-update legacy category: creates a top-level category and replaces the set", st == 200 and sci and ccat(b5) == [sci]
+              and legacy(b5) == "علمی" and cats()[sci]["parent_id"] == 0)
+        admin.call("POST", "catalog-update", {"book_id": b5, "category": "تاریخ"})
+        check("catalog-update legacy category: finds an existing top-level one", ccat(b5) == [H])
+        admin.call("POST", "catalog-update", {"book_id": b5, "category": ""})
+        check("catalog-update legacy category '' clears", ccat(b5) == [] and legacy(b5) == "")
+        admin.call("POST", "catalog-update", {"book_id": b5, "category": "x", "categories": [P]})
+        check("catalog-update: categories wins over category", ccat(b5) == [P])
+        admin.call("POST", "catalog-update", {"book_id": b5, "description": "فقط توضیح"})
+        check("catalog-update without category keys keeps the set", ccat(b5) == [P])
+        st, _ = user.call("POST", "catalog-update", {"book_id": b5, "categories": [H]})
+        check("catalog-update categories is admin-only", st == 403 and ccat(b5) == [P])
+
+        # ---- admin-bulk: add_category / remove_category / set_category / clear_category ----
+        def bulk(body): return admin.call("POST", "admin-bulk", body)
+        for b in (b1, b2, b3, b5): admin.call("POST", "catalog-update", {"book_id": b, "categories": []})
+        admin.call("POST", "catalog-update", {"book_id": b2, "categories": [I]})
+        st, r = bulk({"action": "add_category", "category_id": H, "ids": [b1, b2, b3, b5, nb]})
+        check("bulk add_category by ids (book outside the catalog skipped)", r == {"affected": 4, "skipped": 1} and ccat(b2) == [H, I]
+              and legacy(b1) == "تاریخ", str(r))
+        st, r = bulk({"action": "add_category", "category_id": str(H), "ids": [b1, b2]})
+        check("bulk add_category again: all skipped", r == {"affected": 0, "skipped": 2}, str(r))
+        st, r = bulk({"action": "remove_category", "category_id": H, "filter": {"cat": str(H), "status": "approved"}})
+        check("bulk remove_category by filter (cat + status)", r == {"affected": 4, "skipped": 0} and ccat(b1) == [] and legacy(b1) == ""
+              and ccat(b2) == [I] and legacy(b2) == "تاریخ" and ccat(u3) == [H], str(r))
+        n_none = len(adm_q("&cat=none&status=approved"))
+        st, r = bulk({"action": "add_category", "category_id": R, "filter": {"cat": "none", "status": "approved"}})
+        check("bulk add_category by filter cat=none", r == {"affected": n_none, "skipped": 0} and n_none == 3 and adm_q("&cat=none&status=approved") == [], str(r))
+        extra = [save({"name": f"دسته {k}"})[1]["category"]["id"] for k in range(10)]
+        for k in extra[:9]: bulk({"action": "add_category", "category_id": k, "ids": [b1]})
+        st, r = bulk({"action": "add_category", "category_id": extra[9], "ids": [b1]})
+        check("bulk add_category respects the 10-categories limit", r == {"affected": 0, "skipped": 1} and len(ccat(b1)) == 10, str(r))
+        bad = [bulk(b) for b in ({"action": "add_category", "ids": [b1]}, {"action": "remove_category", "category_id": 999999, "ids": [b1]},
+                                 {"action": "add_category", "category_id": "x", "ids": [b1]}, {"action": "add_category", "category_id": H, "filter": {"cat": "x"}})]
+        check("bulk category validation -> 400", [(s_, r_.get("error")) for s_, r_ in bad] == [(400, "missing_category_id"), (400, "unknown_category"),
+              (400, "bad_category_id"), (400, "bad_cat")], str([(s_, r_.get("error")) for s_, r_ in bad]))
+        st, r = admin.call("POST", "admin-bulk", {"action": "remove_category", "category_id": H, "ids": [b1]}, csrf=False)
+        st2, _ = user.call("POST", "admin-bulk", {"action": "add_category", "category_id": H, "ids": [u1]})
+        check("bulk category actions need admin + CSRF", st == 403 and st2 == 403)
+        st, r = bulk({"action": "set_category", "ids": [b1, b2, nb], "category": " تازه "})
+        new = next((c["id"] for c in cats().values() if c["name"] == "تازه"), None)
+        check("bulk set_category (legacy name): creates the top-level category and replaces the set", r == {"affected": 2, "skipped": 1} and new
+              and ccat(b1) == [new] and ccat(b2) == [new] and legacy(b1) == "تازه", str(r))
+        st, r = bulk({"action": "set_category", "ids": [b1, b2], "category": "تازه"})
+        check("bulk set_category again: skipped", r == {"affected": 0, "skipped": 2}, str(r))
+        st, r = bulk({"action": "clear_category", "ids": [b1, b2, b5]})
+        check("bulk clear_category unlinks everything", r == {"affected": 3, "skipped": 0} and ccat(b1) == [] and ccat(b5) == [] and legacy(b2) == "", str(r))
+
+        # ---- category-delete ----
+        for b, ids in ((b1, [P, R]), (b2, [L, P]), (b3, [I])): admin.call("POST", "catalog-update", {"book_id": b, "categories": ids})
+        bad = [admin.call("POST", "category-delete", b) for b in ({"id": L}, {"id": 999999}, {"id": P, "move_to": 999999}, {"id": P, "move_to": P})]
+        check("category-delete errors: has_children 409, unknown 404, bad move_to 400",
+              [(s_, r_.get("error")) for s_, r_ in bad] == [(409, "has_children"), (404, "not_found"), (400, "unknown_category"), (400, "unknown_category")], str(bad))
+        st, r = admin.call("POST", "category-delete", {"id": P, "move_to": R})
+        check("category-delete with move_to relinks its books (no duplicates)", st == 200 and r == {"moved": 3, "unlinked": 0}
+              and ccat(b1) == [R] and ccat(b2) == [L, R] and ccat(u1) == [R] and P not in cats(), str(r))
+        st, r = admin.call("POST", "category-delete", {"id": I})
+        check("category-delete without move_to unlinks", st == 200 and r == {"moved": 0, "unlinked": 1} and ccat(b3) == [] and legacy(b3) == "", str(r))
+        st, r = admin.call("POST", "category-delete", {"id": R})
+        st2, r2 = admin.call("POST", "category-delete", {"id": L})
+        check("deleting the last child, then its parent", st == 200 and r["unlinked"] == 3 and st2 == 200 and r2["unlinked"] == 1 and ccat(b2) == [] and legacy(b2) == "", f"{r} {r2}")
+
+        # ---- links follow the catalog row: book-replace moves them, catalog-remove drops them ----
+        admin.call("POST", "catalog-update", {"book_id": b2, "categories": [H, new]})
+        st, r = upload(admin, make_variant(tmp4, "cat-replace"), "کتاب دو")
+        b2n = r["book"]["id"]
+        st, r = admin.call("POST", "book-replace", {"old_book_id": b2, "new_book_id": b2n})
+        check("book-replace moves the catalog entry's categories", st == 200 and r["catalog_moved"] and ccat(b2n) == [H, new] and legacy(b2n) == "تاریخ", str(r)[:200])
+        before = cats()[H]["count"]
+        admin.call("POST", "catalog-remove", {"book_id": b2n})
+        check("catalog-remove drops the book's links (counts follow)", cats()[H]["count"] == before - 1, f"{before} {cats()[H]['count']}")
+
+        # ---- api-book: paths, auto-create, limits ----
+        tok = admin.call("POST", "api-token-create", {"name": "cat"})[1]["token"]
+        def api(cat, k):
+            return api_book(base, tok, fields={"category": cat} if cat is not None else {}, file=(f"a{k}.epub", tiny_epub(tmp4 / f"a{k}.epub", 7000 + k).read_bytes()))
+        snapshot = sorted((c["name"], c["parent_id"]) for c in cats().values())
+        st, r = api("علوم/فیزیک; علوم › شیمی\nتاریخ > معاصر ; علوم ;;", 1)
+        a1 = (r.get("book") or {}).get("id")
+        C = cats(); byname = {(c["name"], c["parent_id"]): c["id"] for c in C.values()}
+        sci2 = byname.get(("علوم", 0)); phy = byname.get(("فیزیک", sci2)); chem = byname.get(("شیمی", sci2)); mod = byname.get(("معاصر", H))
+        check("api-book: several paths (/ › > separators, ; and newline) create missing categories, parent first",
+              st == 201 and sci2 and phy and chem and mod and sorted(ccat(a1)) == sorted([sci2, phy, chem, mod]), f"{st} {str(r)[:200]} {ccat(a1) if a1 else None}")
+        check("api-book: existing top-level category reused, legacy column = first category's top-level name",
+              list(byname).count(("تاریخ", 0)) == 1 and legacy(a1) == ("تاریخ" if C[H]["sort"] < C[sci2]["sort"] else "علوم") and ccat(a1)[0] in (mod, sci2), str(ccat(a1)))
+        snapshot = sorted((c["name"], c["parent_id"]) for c in cats().values())
+        bad = [api("الف/ب/ج", 2), api(";".join(f"د{k}" for k in range(11)), 3), api("الف/" + "x" * 81, 4)]
+        check("api-book category errors: more than 2 levels 400 too_deep, more than 10 400, segment > 80 400; nothing created",
+              [(s_, r_.get("error")) for s_, r_ in bad] == [(400, "too_deep"), (400, "too_many_categories"), (400, "too_long_category")]
+              and sorted((c["name"], c["parent_id"]) for c in cats().values()) == snapshot, str(bad))
+        st, r = api_book(base, tok, fields={"category": "علوم"}, file=("a1.epub", tiny_epub(tmp4 / "a1.epub", 7001).read_bytes()))
+        check("api-book duplicate with category replaces the set", st == 201 and r.get("duplicate") is True and ccat(a1) == [sci2] and legacy(a1) == "علوم", str(r)[:200])
+        st, r = api_book(base, tok, fields={"description": "x"}, file=("a1.epub", tiny_epub(tmp4 / "a1.epub", 7001).read_bytes()))
+        check("api-book duplicate without category keeps the set", st == 201 and ccat(a1) == [sci2])
+        st, r = api("", 5)
+        check("api-book without category: no categories", st == 201 and ccat(r["book"]["id"]) == [] and legacy(r["book"]["id"]) == "")
+    finally:
+        proc.terminate(); proc.wait(5); shutil.rmtree(tmp4, ignore_errors=True)
 
 def _texts(node):
     out = []
@@ -1240,6 +1548,8 @@ def run(base, tmp):
     # Catalog with moderation
     st, r = user.call("POST", "catalog-submit", {"book_id": book2, "description": "یک کتاب خوب", "category": "x" * 81})
     check("catalog-submit category too long -> 400", st == 400 and r.get("error") == "too_long_category", str(r))
+    # Since migration 9 a user's legacy category name only matches an existing top-level category (admins create them).
+    admin.call("POST", "category-save", {"name": "رمان", "parent_id": 0})
     st, r = user.call("POST", "catalog-submit", {"book_id": book2, "description": "یک کتاب خوب", "category": "  رمان  "})
     check("user submission goes to pending", st == 201 and r["status"] == "pending")
     st, r = other.call("GET", "catalog")
@@ -1416,7 +1726,9 @@ def run(base, tmp):
     run_api_books(base, tmp, admin, user)
     run_pdfs(base, tmp, admin, user)
     run_migration7()
+    run_migration9()
     run_large_catalog()
+    run_categories()
 
     st, r = anon.call("GET", "nope")
     check("unknown route 404", st == 404)
