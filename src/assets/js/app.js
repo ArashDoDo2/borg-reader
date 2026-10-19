@@ -1344,7 +1344,19 @@
   function jumpTo(target) {
     if (!rendition) return Promise.resolve();
     noteJumpOrigin("jump");
-    return rendition.display(target);
+    return safeDisplay(target, "jumpTo");
+  }
+  // rendition.display() rejects ("No Section Found") for targets epub.js cannot resolve; never leave that unhandled.
+  // The report carries where it came from and the (trimmed) target so the cause can be found.
+  function safeDisplay(target, from) {
+    if (!rendition) return Promise.resolve();
+    let p;
+    try { p = Promise.resolve(rendition.display(target)); } catch (err) { p = Promise.reject(err); }
+    return p.catch(err => {
+      const t = String(target == null ? "" : target).slice(0, 160);
+      reportError("nav", err, `${from}: ${t} (spine ${bookInstance && bookInstance.spine ? bookInstance.spine.spineItems.length : "?"})`);
+      showToast("این بخش در کتاب پیدا نشد.");
+    });
   }
   function settleJump() {
     clearTimeout(jumps.timer);
@@ -1391,7 +1403,7 @@
     updateBackChip();
     if (!cfi || !rendition) return;
     noteJumpOrigin("back");
-    rendition.display(cfi);
+    safeDisplay(cfi, "backChip");
   });
 
   // ---- First-run gesture guide (v8.2): shown once per device, can be reopened from the settings panel ----
@@ -1749,7 +1761,7 @@
       const next = cur != null ? bookInstance.spine.get(cur + 1) : null;
       if (!next) { ttsStop(); showToast("خواندن کتاب تمام شد."); return; }
       tts.awaitIndex = next.index; tts.selfNav = true;
-      rendition.display(next.href);
+      safeDisplay(next.href, "tts-next");
       return;
     }
     const item = tts.queue[tts.idx];
@@ -1760,7 +1772,7 @@
       ttsClearHighlight();
       rendition.annotations.highlight(cfi, {}, null, "tts-hl", { fill: "#7fc8a9", "fill-opacity": "0.35", "mix-blend-mode": "multiply" });
       tts.hlCfi = cfi;
-      if (!blockVisible(item.el, tts.contents)) { tts.selfNav = true; rendition.display(cfi); }
+      if (!blockVisible(item.el, tts.contents)) { tts.selfNav = true; safeDisplay(cfi, "tts-follow"); }
     } catch (_) {}
     const u = new window.SpeechSynthesisUtterance(item.text);
     const v = ttsVoice();
