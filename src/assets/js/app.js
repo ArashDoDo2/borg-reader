@@ -157,6 +157,7 @@
     pressed("[data-para]", "para", readerPrefs.para || "m");
     pressed("[data-flow]", "flow", readerPrefs.flow || "paginated");
     pressed("[data-spread]", "spread", readerPrefs.spread || "auto");
+    syncBookDirUI();
     const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
     chk("prefDigits", readerPrefs.digits); chk("prefTaps", readerPrefs.taps !== false); chk("prefWheel", readerPrefs.wheel !== false); chk("prefWake", readerPrefs.wake !== false);
     const viewer = document.getElementById("viewer");
@@ -242,15 +243,18 @@
   // v8.5: caches derived from the book file (epub.js locations, detected direction). A write from an older copy of
   // the record (e.g. read by sync before the book was opened) must not drop them while the file is the same.
   const FILE_CACHES = ["locations", "dirCache"];
+  // User choices stored on the record that no stale copy may drop, even when the file changed (8.6.5).
+  const STICKY_FIELDS = ["dirOverride"];
   function putRaw(store, value) {
     return new Promise((resolve, reject) => {
       const tx = db.transaction(store, "readwrite");
-      if (store === "books" && value && value.id && FILE_CACHES.some(k => value[k] === undefined)) {
+      if (store === "books" && value && value.id && [...FILE_CACHES, ...STICKY_FIELDS].some(k => value[k] === undefined)) {
         const os = tx.objectStore(store), g = os.get(value.id);
         g.onsuccess = () => {
           const old = g.result;
           const same = old && old.size === value.size && (!old.contentHash || !value.contentHash || old.contentHash === value.contentHash);
           const keep = same ? Object.fromEntries(FILE_CACHES.filter(k => value[k] === undefined && old[k] !== undefined).map(k => [k, old[k]])) : {};
+          if (old) STICKY_FIELDS.forEach(k => { if (value[k] === undefined && old[k] !== undefined) keep[k] = old[k]; });
           os.put(Object.keys(keep).length ? { ...value, ...keep } : value);
         };
       } else tx.objectStore(store).put(value);
@@ -965,7 +969,9 @@
     });
     // v8.5: the detected direction is cached on the book record (per file and detector version).
     const dc = record.dirCache, dirKey = record.contentHash || `size:${record.size || 0}`;
-    if (dc && dc.v === DIR_DETECT_V && dc.key === dirKey && (dc.dir === "rtl" || dc.dir === "ltr")) {
+    if (record.dirOverride === "rtl" || record.dirOverride === "ltr") {
+      bookDir = record.dirOverride; // chosen by hand in «جهت این کتاب» (8.6.5)
+    } else if (dc && dc.v === DIR_DETECT_V && dc.key === dirKey && (dc.dir === "rtl" || dc.dir === "ltr")) {
       bookDir = dc.dir;
     } else {
       countOpenStat("detect");
@@ -1450,6 +1456,26 @@
     const done = loc?.start?.cfi ? saveProgress(id, loc.start.cfi, percentFor(loc.start.cfi, loc.start.percentage)) : Promise.resolve();
     done.then(() => openReader(id)).catch(err => console.warn("Reopen failed:", err));
   }
+  // «جهت این کتاب»: per-book override of the detected reading direction ("auto" | "rtl" | "ltr"), then reopen.
+  function syncBookDirUI() {
+    const v = (currentBook && currentBook.dirOverride) || "auto";
+    document.querySelectorAll("[data-bookdir]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.bookdir === v)));
+  }
+  function setBookDir(value) {
+    if (!currentBook || !rendition) return;
+    const v = value === "rtl" || value === "ltr" ? value : "auto";
+    if ((currentBook.dirOverride || "auto") === v) return;
+    currentBook.dirOverride = v; syncBookDirUI();
+    if (currentBook.preview) { reopenCurrentBook(); return; }
+    const id = currentBook.id;
+    try {
+      const tx = db.transaction("books", "readwrite"), os = tx.objectStore("books"), g = os.get(id);
+      g.onsuccess = () => { if (g.result) os.put({ ...g.result, dirOverride: v }); };
+      tx.oncomplete = () => reopenCurrentBook();
+      tx.onerror = () => showToast("ذخیرهٔ جهت کتاب انجام نشد.");
+    } catch (err) { console.warn("Saving the book direction failed:", err); }
+  }
+  document.querySelectorAll("[data-bookdir]").forEach(b => b.addEventListener("click", () => setBookDir(b.dataset.bookdir)));
   function setPref(key, value, how) {
     readerPrefs[key] = value; saveReaderPrefs(); syncSettingsUI();
     if (how === "styles") applyReaderStyles();

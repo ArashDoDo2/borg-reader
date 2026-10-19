@@ -1763,6 +1763,35 @@ async def run(url):
               not a1["dl"] and not a2["dl"] and a1["keep"] and a2["keep"] and a1["long"] and not a2["txt"], f"{a1} {a2}")
         check("v8.6.4 line rule: no JS errors", len(errsC) == 0, str(errsC[:3]))
         await ctxC.close(); shutil.rmtree(tmpc, ignore_errors=True)
+        # 26. v8.6.5: «جهت این کتاب» overrides the detected direction per book, survives reload, «خودکار» restores it
+        errsDir, extDir = [], []
+        ctxDir, DR = await new_ctx(b, url, extDir, errsDir)
+        await DR.set_viewport_size({"width": 1280, "height": 800})
+        await DR.goto(url); await DR.wait_for_timeout(1000)
+        await DR.set_input_files("#epubInput", sample); await DR.wait_for_timeout(2500)
+        await DR.click("#bookGrid .book-card"); await DR.wait_for_timeout(3000)
+        BDIR = "()=>{const f=document.querySelector('#viewer iframe');const d=f&&f.contentDocument;return d?d.defaultView.getComputedStyle(d.body).direction:null}"
+        PRESSED = "()=>[...document.querySelectorAll('[data-bookdir]')].filter(b=>b.getAttribute('aria-pressed')==='true').map(b=>b.dataset.bookdir)"
+        check("v8.6.5: a Persian book starts RTL with «خودکار» selected", await DR.evaluate(BDIR) == "rtl" and await DR.evaluate(PRESSED) == ["auto"], str(await DR.evaluate(PRESSED)))
+        await open_settings(DR)
+        await DR.click('[data-bookdir="ltr"]')
+        try:
+            await poll(lambda: DR.evaluate("()=>{const f=document.querySelector('#viewer iframe');const d=f&&f.contentDocument;return !!d&&d.defaultView.getComputedStyle(d.body).direction==='ltr'}"), 10000)
+        except TimeoutError:
+            pass
+        check("v8.6.5: choosing «چپ‌به‌راست» reopens the book left-to-right", await DR.evaluate(BDIR) == "ltr" and await DR.evaluate(PRESSED) == ["ltr"], f"{await DR.evaluate(BDIR)} {await DR.evaluate(PRESSED)}")
+        await DR.reload(); await DR.wait_for_timeout(1500)
+        await DR.click("#bookGrid .book-card"); await DR.wait_for_timeout(3000)
+        check("v8.6.5: the choice is kept for this book after a reload", await DR.evaluate(BDIR) == "ltr" and await DR.evaluate(PRESSED) == ["ltr"])
+        await open_settings(DR)
+        await DR.click('[data-bookdir="auto"]')
+        try:
+            await poll(lambda: DR.evaluate("()=>{const f=document.querySelector('#viewer iframe');const d=f&&f.contentDocument;return !!d&&d.defaultView.getComputedStyle(d.body).direction==='rtl'}"), 10000)
+        except TimeoutError:
+            pass
+        check("v8.6.5: «خودکار» goes back to the detected direction", await DR.evaluate(BDIR) == "rtl" and await DR.evaluate(PRESSED) == ["auto"])
+        check("v8.6.5 book direction: no JS errors", len(errsDir) == 0, str(errsDir[:3]))
+        await ctxDir.close()
         await b.close()
 
 def main():

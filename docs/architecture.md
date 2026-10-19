@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.6.4 (2026-10-19). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.6.5 (2026-10-19). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -202,7 +202,7 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
 
 ## 8. Known gaps
 - No WebKit/Safari gate in CI yet; iOS behaviour is verified by the owner on devices after release.
-- Direction detection follows the majority script; no manual per-book override.
+- Direction detection follows the majority script; a per-book override exists since 8.6.5 (not synced).
 - Very large books: locations generation and direction detection run on open; not profiled on 50 MB+ files.
 
 ## 9. Backend (v7)

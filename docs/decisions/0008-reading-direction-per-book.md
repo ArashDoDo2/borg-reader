@@ -16,4 +16,4 @@ text, use the language tag; otherwise RTL (Persian-first product). The result (`
 
 ## Consequences
 Opening a book loads up to 8 chapters once more (small delay on large books). Mixed-script books follow the
-majority script. A per-book manual override could be added later if a misdetection shows up.
+majority script. Since 8.6.5 the reader can override it per book («جهت این کتاب»: auto / RTL / LTR, stored as `dirOverride` on the local book record; not synced between devices).
