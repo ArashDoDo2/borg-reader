@@ -127,6 +127,14 @@ function migrations(): array {
             "CREATE INDEX client_errors_fp ON client_errors (fingerprint, created_at)",
             "CREATE INDEX client_errors_seen ON client_errors (last_seen)",
         ],
+        6 => [
+            // v8.7 API keys for the owner's upload program (api-book). Only the SHA-256 of a key is stored.
+            "CREATE TABLE api_tokens (id {AI}, name VARCHAR(80) NOT NULL, token_hash CHAR(64) NOT NULL UNIQUE,
+               created_by INTEGER NOT NULL, created_at BIGINT NOT NULL, last_used_at BIGINT NOT NULL DEFAULT 0,
+               uses INTEGER NOT NULL DEFAULT 0, revoked INTEGER NOT NULL DEFAULT 0, require_review INTEGER NOT NULL DEFAULT 0)",
+            // Settings whose JSON value does not fit settings.value (VARCHAR(500)), e.g. clean_rules (up to 50 rules).
+            "CREATE TABLE settings_text (name VARCHAR(64) PRIMARY KEY, value TEXT NOT NULL)",
+        ],
     ];
 }
 function schema_version(): int {
@@ -264,6 +272,15 @@ function setting(string $name, $default) {
 function set_setting(string $name, $value): void {
     q('DELETE FROM settings WHERE name = ?', [$name]);
     q('INSERT INTO settings (name, value) VALUES (?, ?)', [$name, json_encode($value)]);
+}
+/** Long settings (JSON in settings_text). */
+function text_setting(string $name, $default) {
+    $r = one('SELECT value FROM settings_text WHERE name = ?', [$name]);
+    return $r === null ? $default : json_decode($r['value'], true);
+}
+function set_text_setting(string $name, $value): void {
+    q('DELETE FROM settings_text WHERE name = ?', [$name]);
+    q('INSERT INTO settings_text (name, value) VALUES (?, ?)', [$name, json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]);
 }
 function catalog_requires_approval(): bool { return (bool)setting('catalog_requires_approval', (bool)config()['catalog_requires_approval']); }
 

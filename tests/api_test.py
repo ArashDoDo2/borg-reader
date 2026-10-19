@@ -33,7 +33,7 @@ def start_php(tmp):
     }).replace("{", "[").replace("}", "]").replace('":', '" =>') + ";\n")
     port = free_port()
     env = dict(os.environ, BORG_CONFIG=str(cfg))
-    proc = subprocess.Popen(["php", "-d", "upload_max_filesize=2M", "-d", "post_max_size=8M", "-S", f"127.0.0.1:{port}", "-t", str(docroot)],
+    proc = subprocess.Popen(["php", "-d", "display_errors=0", "-d", "upload_max_filesize=2M", "-d", "post_max_size=8M", "-S", f"127.0.0.1:{port}", "-t", str(docroot)],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     for _ in range(50):
         try: socket.create_connection(("127.0.0.1", port), 0.2).close(); break
@@ -278,6 +278,247 @@ def run_errors(base, admin, user):
     check("anonymous reports rate limited per IP (30/hour)", codes[:24] == [200] * 24 and codes[24] == 429, str(codes))
     st, _ = user.call("POST", "client-error", {"items": [item("still ok")]})
     check("logged-in user has a separate (per-user) limit", st == 200)
+
+# ---------- v8.7 api-book: API keys, machine upload into the public catalog, server-side cleanup ----------
+TOKEN_RE = r"^borg_[A-Za-z0-9_-]{40}$"
+PNG_BYTES = __import__("base64").b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+def api_book(base, token=None, fields=None, file=None, header="bearer", raw=None, ctype=None, method="POST"):
+    """POST api-book like the owner's program: multipart/form-data, no cookies, key in a header."""
+    import uuid
+    headers = {}
+    if token is not None:
+        if header == "bearer": headers["Authorization"] = f"Bearer {token}"
+        else: headers["X-Borg-Token"] = token
+    if raw is not None:
+        data = raw; headers["Content-Type"] = ctype or "application/json"
+    else:
+        b = "----borg" + uuid.uuid4().hex; parts = []
+        for k, v in (fields or {}).items():
+            parts += [f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n'.encode(), str(v).encode(), b"\r\n"]
+        if file is not None:
+            name, content = file
+            parts += [f'--{b}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\nContent-Type: application/epub+zip\r\n\r\n'.encode(), content, b"\r\n"]
+        parts.append(f"--{b}--\r\n".encode())
+        data = b"".join(parts); headers["Content-Type"] = f"multipart/form-data; boundary={b}"
+    req = urllib.request.Request(f"{base}?r=api-book", data=data if method == "POST" else None, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req) as r: status, payload = r.status, r.read()
+    except urllib.error.HTTPError as e: status, payload = e.code, e.read()
+    try: return status, json.loads(payload or b"{}")
+    except ValueError: return status, {"raw": payload[:300]}
+
+def make_clean_epub(tmp, name="api-clean"):
+    """The text of tests/e2e_test.py sections 17 (Telegram) and 25 (whole line) in one book, plus a phrase and a cover."""
+    import zipfile
+    p = tmp / f"{name}.epub"
+    special = ('<p id="p1">کانال ما: https://t.me/testchannel متن عادی بعد از لینک برای هایلایت است.</p>'
+               '<p>برای پرسش‌ها @test_channel را دنبال کنید یا به info@example.com بنویسید.</p>'
+               '<p>لینک: <a href="https://t.me/x">https://t.me/x</a> پایان پاراگراف.</p>'
+               '<p id="ad">پیش از آگهی. این متن تبلیغاتی است پس از آگهی.</p>')
+    normal = "".join(f"<p>این پاراگراف شماره {k} از فصل اول در کتاب {name} است.</p>" for k in range(120))
+    long = ("<p id='long'>A very long paragraph that quotes This article was downloaded by zlibrary from somewhere in the middle of real text. "
+            + "Real content continues here. " * 30 + "</p>")
+    dl = ('<p id="dl" class="x">This article was downloaded by <a href="https://z-lib.example/">zlibrary</a> from '
+          '<a href="https://www.economist.com/leaders/2026/10/15/what-if">https://www.economist.com/leaders/2026/10/15/what-if</a></p>')
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        D = zipfile.ZIP_DEFLATED
+        z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>', D)
+        z.writestr("OEBPS/content.opf", f'<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">{name}</dc:identifier><dc:title>کتاب   برنامهٔ مالک</dc:title><dc:creator>نویسندهٔ OPF</dc:creator><dc:language>fa</dc:language><dc:publisher>نشر OPF</dc:publisher><dc:date>2020-03-04T00:00:00Z</dc:date><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="text/c1.xhtml" media-type="application/xhtml+xml"/><item id="cov" href="images/cover.png" media-type="image/png" properties="cover-image"/></manifest><spine page-progression-direction="rtl"><itemref idref="c1"/></spine></package>', D)
+        z.writestr("OEBPS/nav.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>فهرست</title></head><body><nav epub:type="toc"><ol><li><a href="text/c1.xhtml">فصل اول</a></li></ol></nav></body></html>', D)
+        z.writestr("OEBPS/text/c1.xhtml", f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="fa" dir="rtl"><head><title>فصل اول</title></head><body><h1>فصل اول</h1><p id="keep">Normal text stays.</p>{special}{normal}{long}{dl}</body></html>', D)
+        z.writestr("OEBPS/images/cover.png", PNG_BYTES, D)
+    return p
+
+def run_api_books(base, tmp, admin, user):
+    import re, zipfile, io
+    import xml.dom.minidom as minidom
+    anon = Client(base)
+    st, r = admin.call("POST", "invites", {"note": "api reader"})
+    reader = Client(base)
+    reader.call("POST", "register", {"invite": r["code"], "email": "reader@x.io", "password": "password6", "name": "خواننده"})
+    st, h = anon.call("GET", "health")
+    check("api: health reports zip and migration 6", st == 200 and h.get("zip") is True and h.get("schema_version", 0) >= 6, str({k: h.get(k) for k in ("zip", "dom", "schema_version")}))
+
+    # Admin-only routes
+    codes = [user.call("GET", "api-tokens")[0], user.call("POST", "api-token-create", {"name": "x"})[0], user.call("POST", "api-token-revoke", {"id": 1})[0],
+             user.call("GET", "clean-rules")[0], user.call("POST", "clean-rules", {"rules": []})[0]]
+    check("api: non-admin cannot use the key / cleanup-rule routes (403)", codes == [403] * 5, str(codes))
+    codes = [anon.call("GET", "api-tokens")[0], anon.call("POST", "api-token-create", {"name": "x"})[0], anon.call("GET", "clean-rules")[0]]
+    check("api: anonymous -> 401", codes == [401] * 3, str(codes))
+    st, _ = admin.call("POST", "api-token-create", {"name": "no csrf"}, csrf=False)
+    check("api-token-create needs CSRF", st == 403)
+    st1, _ = admin.call("POST", "api-token-create", {"name": ""})
+    st2, _ = admin.call("POST", "api-token-create", {"name": "x" * 81})
+    check("api-token-create name must be 1–80 characters", st1 == 400 and st2 == 400)
+
+    # Create / list / revoke
+    st, r = admin.call("POST", "api-token-create", {"name": "برنامهٔ آپلود"})
+    tok, tok_id = r.get("token", ""), r.get("id")
+    check("api-token-create returns the key once (borg_ + 40 url-safe chars)", st == 201 and re.match(TOKEN_RE, tok) and isinstance(tok_id, int) and r.get("require_review") is False, str(r))
+    st, r = admin.call("POST", "api-token-create", {"name": "با بازبینی", "require_review": True})
+    tok_rev = r.get("token", "")
+    st, r = admin.call("POST", "api-token-create", {"name": "باطل‌شدنی"})
+    tok_bad, bad_id = r.get("token", ""), r.get("id")
+    st, r = admin.call("POST", "api-token-create", {"name": "rate"})
+    tok_rl = r.get("token", "")
+    st, L = admin.call("GET", "api-tokens")
+    T = {t["id"]: t for t in L.get("tokens", [])}
+    dump = json.dumps(L)
+    check("api-tokens lists keys without the key or its hash", st == 200 and len(T) == 4 and T[tok_id]["name"] == "برنامهٔ آپلود"
+          and set(T[tok_id]) == {"id", "name", "created_at", "last_used_at", "uses", "revoked", "require_review"}
+          and tok not in dump and hashlib.sha256(tok.encode()).hexdigest() not in dump and "borg_" not in dump, dump[:300])
+    check("api-tokens: require_review flag and fresh counters", any(t["require_review"] for t in T.values()) and T[tok_id]["uses"] == 0 and T[tok_id]["last_used_at"] == 0 and T[tok_id]["revoked"] is False)
+    st, _ = admin.call("POST", "api-token-revoke", {"id": bad_id})
+    st2, L = admin.call("GET", "api-tokens")
+    check("api-token-revoke marks the key revoked", st == 200 and {t["id"]: t for t in L["tokens"]}[bad_id]["revoked"] is True)
+    st, _ = admin.call("POST", "api-token-revoke", {"id": 999999})
+    check("api-token-revoke unknown id -> 404", st == 404)
+
+    # Authentication of api-book
+    book = make_clean_epub(tmp)
+    orig = book.read_bytes()
+    results401 = [api_book(base, None, file=("b.epub", orig)), api_book(base, "borg_" + "x" * 40, file=("b.epub", orig)),
+                  api_book(base, "not-a-key", file=("b.epub", orig)), api_book(base, tok_bad, file=("b.epub", orig)),
+                  api_book(base, tok_bad, file=("b.epub", orig), header="x-borg-token")]
+    check("api-book: missing / wrong / malformed / revoked key -> 401", [s for s, _ in results401] == [401] * 5
+          and results401[0][1].get("error") == "missing_token" and results401[3][1].get("error") == "bad_token", str(results401))
+    st, r = api_book(base, tok, method="GET")
+    check("api-book is POST only", st == 405)
+    st, r = api_book(base, tok, raw=b'{"x":1}', ctype="application/json")
+    check("api-book needs multipart/form-data -> 415", st == 415, str(r))
+    st, r = api_book(base, tok, fields={"category": "رمان"})
+    check("api-book without a file -> 400 missing_file", st == 400 and r.get("error") == "missing_file", str(r))
+    st, r = api_book(base, tok, file=("bad.epub", (FIX / "corrupt.epub").read_bytes()))
+    check("api-book invalid EPUB -> 400 not_epub", st == 400 and r.get("error") == "not_epub", str(r))
+    st, r = api_book(base, tok, file=("big.epub", make_big_epub(tmp).read_bytes()))
+    check("api-book file over PHP upload_max_filesize -> 413 with a clear error", st == 413 and r.get("error") == "file_too_large_for_php" and "upload_max_filesize" in r.get("message", ""), str(r))
+    st, r = api_book(base, tok, raw=b"x" * (9 * 1024 * 1024), ctype="multipart/form-data; boundary=zzz")
+    check("api-book request over PHP post_max_size -> 413 post_too_large", st == 413 and r.get("error") == "post_too_large", str(r))
+    st, r = api_book(base, tok, fields={"category": "x" * 81}, file=("b.epub", orig))
+    check("api-book category too long -> 400", st == 400 and r.get("error") == "too_long_category", str(r))
+
+    # Cleanup rules (admin «پاک‌سازی متن»)
+    st, r = admin.call("GET", "clean-rules")
+    check("clean-rules empty by default", st == 200 and r.get("rules") == [], str(r))
+    bad_sets = [{"rules": "x"}, {"rules": [{"id": f"r{i}", "type": "telegram"} for i in range(51)]},
+                {"rules": [{"id": "a1", "type": "phrase", "text": "abc"}]}, {"rules": [{"id": "a1", "type": "line", "text": "x" * 201}]},
+                {"rules": [{"id": "a1", "type": "telegram", "text": "t.me"}]}, {"rules": [{"id": "a1", "type": "regex", "text": "abcd"}]},
+                {"rules": [{"id": "a1", "type": "phrase", "text": "abcd"}, {"id": "a1", "type": "phrase", "text": "efgh"}]},
+                {"rules": [{"type": "phrase", "text": "abcd"}]}, {"rules": [{"id": "a1", "type": "phrase", "text": "abcd"}, {"id": "a2", "type": "phrase", "text": "abcd"}]},
+                {"rules": [{"id": "a1", "type": "phrase"}]}, {"rules": ["x"]}]
+    codes = [admin.call("POST", "clean-rules", b)[0] for b in bad_sets]
+    check("clean-rules validation (list, ≤50, text 4–200, telegram without text, known type, unique ids/rules) -> 400", codes == [400] * len(bad_sets), str(codes))
+    st, _ = admin.call("POST", "clean-rules", {"rules": []}, csrf=False)
+    check("clean-rules POST needs CSRF", st == 403)
+    rules = [{"id": "rule-tg", "type": "telegram"}, {"id": "rule-ph", "type": "phrase", "text": "  این متن تبلیغاتی است  "},
+             {"id": "rule-ln", "type": "line", "text": "This article was downloaded by zlibrary from"},
+             {"id": "rule-broad", "type": "phrase", "text": "این پاراگراف شماره"}]
+    st, r = admin.call("POST", "clean-rules", {"rules": rules})
+    st2, r2 = admin.call("GET", "clean-rules")
+    check("clean-rules stored (text trimmed, telegram without text)", st == 200 and r2.get("rules") == [
+        {"id": "rule-tg", "type": "telegram"}, {"id": "rule-ph", "type": "phrase", "text": "این متن تبلیغاتی است"},
+        {"id": "rule-ln", "type": "line", "text": "This article was downloaded by zlibrary from"},
+        {"id": "rule-broad", "type": "phrase", "text": "این پاراگراف شماره"}], str(r2))
+    st, r = admin.call("POST", "clean-rules", {"rules": [{"id": f"r{i:02d}", "type": "line", "text": f"{i:02d}" + "ل" * 198} for i in range(50)]})
+    st2, r2 = admin.call("GET", "clean-rules")
+    check("clean-rules holds 50 rules of 200 characters", st == 200 and len(r2.get("rules", [])) == 50 and len(r2["rules"][49]["text"]) == 200)
+    admin.call("POST", "clean-rules", {"rules": rules})
+
+    # Happy path: approved catalog entry, metadata from the OPF, cover, cleaned file, nobody's library
+    files_before = len(list((tmp / "storage" / "books").rglob("*.epub")))
+    st, r = api_book(base, tok, fields={"category": "  رمان ", "description": "از برنامهٔ مالک"}, file=("owner-book.epub", orig))
+    b = r.get("book") or {}
+    check("api-book happy path -> 201 approved, cleaned", st == 201 and r.get("catalog_status") == "approved" and r.get("duplicate") is False
+          and r.get("cleanup") == "applied" and r.get("cleaned") == 5 and r.get("skipped_rules") == ["rule-broad"], str(r)[:400])
+    check("api-book metadata read from the OPF", b.get("title") == "کتاب برنامهٔ مالک" and b.get("author") == "نویسندهٔ OPF" and b.get("language") == "fa"
+          and b.get("publisher") == "نشر OPF" and b.get("published") == "2020-03-04" and b.get("has_cover") is True, str(b))
+    check("api-book stores the cleaned file (new hash)", b.get("sha256") and b["sha256"] != hashlib.sha256(orig).hexdigest())
+    bid = b.get("id")
+    st, C = reader.call("GET", "catalog")
+    cb = {x["id"]: x for x in C.get("books", [])}.get(bid, {})
+    check("api-book: visible in another user's catalog with category, description, submitter", cb.get("category") == "رمان" and cb.get("description") == "از برنامهٔ مالک"
+          and cb.get("submitter") == "مدیر" and cb.get("in_library") is False and cb.get("title") == "کتاب برنامهٔ مالک", str(cb)[:300])
+    libs = [bid in [x["id"] for x in c.call("GET", "library")[1]["books"]] for c in (admin, user, reader)]
+    st, BA = admin.call("GET", "books-all")
+    ba = {x["id"]: x for x in BA["books"]}.get(bid, {})
+    check("api-book: not added to anyone's library", libs == [False, False, False] and ba.get("readers") == 0 and ba.get("uploader") == "مدیر", f"{libs} {ba}")
+    st, cov = reader.call("GET", "book-cover", query=f"&id={bid}")
+    check("api-book: cover extracted from the OPF cover-image", st == 200 and cov == PNG_BYTES)
+    st, data = reader.call("GET", "book-file", query=f"&id={bid}")
+    check("api-book: stored file downloadable by another user, hash matches", st == 200 and hashlib.sha256(data).hexdigest() == b.get("sha256"))
+    z = zipfile.ZipFile(io.BytesIO(data))
+    infos = z.infolist()
+    check("cleaned EPUB: mimetype first and STORED, other entries deflated", infos[0].filename == "mimetype" and infos[0].compress_type == zipfile.ZIP_STORED
+          and z.read("mimetype") == b"application/epub+zip" and all(i.compress_type == zipfile.ZIP_DEFLATED for i in infos[1:])
+          and sorted(i.filename for i in infos) == sorted(zipfile.ZipFile(book).namelist()), str([(i.filename, i.compress_type) for i in infos]))
+    src = z.read("OEBPS/text/c1.xhtml").decode()
+    dom = minidom.parseString(src.encode())
+    txt = "".join(n.data for n in _texts(dom.getElementsByTagName("body")[0]))
+    ids = {e.getAttribute("id") for e in dom.getElementsByTagName("p")}
+    anchors = [a.getAttribute("href") for a in dom.getElementsByTagName("a")]
+    # Same expectations as tests/e2e_test.py section 17 (Telegram rule) ...
+    check("server cleanup: Telegram links and handles gone, link with empty text removed (e2e 17)",
+          "t.me" not in txt and "@test_channel" not in txt and not any("t.me" in h for h in anchors), txt[:200])
+    check("server cleanup: normal text intact (e2e 17)", "کانال ما:" in txt and "متن عادی بعد از لینک" in txt and "info@example.com" in txt
+          and "پایان پاراگراف." in txt and "این پاراگراف شماره 5 از فصل اول" in txt)
+    check("server cleanup: too-broad rule skipped, phrase removed exactly", "این متن تبلیغاتی است" not in txt and "پیش از آگهی.  پس از آگهی." in txt, txt[:400])
+    # ... and section 25 (whole-line rule).
+    check("server cleanup: download line removed, normal text and the long paragraph kept (e2e 25)",
+          "dl" not in ids and "keep" in ids and "long" in ids and "downloaded by zlibrary from https" not in txt and "economist.com" not in "".join(anchors), str(sorted(ids))[:200])
+    check("server cleanup: exact serialisation of the cleaned paragraphs (as the browser's XMLSerializer)",
+          '<p id="p1">کانال ما:  متن عادی بعد از لینک برای هایلایت است.</p><p>برای پرسش‌ها  را دنبال کنید یا به info@example.com بنویسید.</p><p>لینک:  پایان پاراگراف.</p>' in src
+          and src.startswith('<?xml version="1.0" encoding="utf-8"?>\n<html xmlns="http://www.w3.org/1999/xhtml" lang="fa" dir="rtl"><head><title>فصل اول</title></head>'), src[:300])
+    check("server cleanup: untouched entries byte-identical", z.read("OEBPS/content.opf") == zipfile.ZipFile(book).read("OEBPS/content.opf")
+          and z.read("OEBPS/images/cover.png") == PNG_BYTES)
+    st, L = admin.call("GET", "api-tokens")
+    t = {x["id"]: x for x in L["tokens"]}[tok_id]
+    check("api-tokens: uses and last_used_at updated", t["uses"] == 1 and t["last_used_at"] > 0, str(t))
+
+    # Duplicate: the same original again (also via X-Borg-Token) -> same cleaned bytes -> one book
+    st, r = api_book(base, tok, fields={"category": "داستان"}, file=("again.epub", orig), header="x-borg-token")
+    check("api-book duplicate -> 201 duplicate:true, same book", st == 201 and r.get("duplicate") is True and (r.get("book") or {}).get("id") == bid
+          and r.get("catalog_status") == "approved", str(r)[:300])
+    st, BA = admin.call("GET", "books-all")
+    st, CA = admin.call("GET", "catalog-all")
+    check("duplicate: one book, one catalog entry, one stored file", [x["sha256"] for x in BA["books"]].count(b.get("sha256")) == 1
+          and [x["id"] for x in CA["books"]].count(bid) == 1 and len(list((tmp / "storage" / "books").rglob("*.epub"))) == files_before + 1
+          and {x["id"]: x for x in CA["books"]}[bid]["category"] == "داستان")
+    check("duplicate: still in nobody's library", not any(bid in [x["id"] for x in c.call("GET", "library")[1]["books"]] for c in (admin, user, reader)))
+
+    # require_review -> pending; request fields override the OPF
+    var = make_variant(tmp, "api-review").read_bytes()
+    st, r = api_book(base, tok_rev, fields={"title": "عنوان   درخواست", "author": "نویسندهٔ درخواست", "published": "1401"}, file=("rev.epub", var))
+    rb = r.get("book") or {}
+    check("api-book with a require_review key -> pending", st == 201 and r.get("catalog_status") == "pending", str(r)[:300])
+    check("api-book request fields override the OPF metadata", rb.get("title") == "عنوان درخواست" and rb.get("author") == "نویسندهٔ درخواست" and rb.get("published") == "1401", str(rb))
+    st, C = reader.call("GET", "catalog")
+    st2, P = admin.call("GET", "catalog-pending")
+    check("pending api-book not in the public catalog, in the admin queue", rb.get("id") not in [x["id"] for x in C["books"]]
+          and [x["submitter"] for x in P["books"] if x["id"] == rb.get("id")] == ["مدیر"])
+    st, _ = reader.call("GET", "book-file", query=f"&id={rb.get('id')}")
+    check("pending api-book not readable by other users", st == 404)
+
+    # No rules -> stored unchanged
+    admin.call("POST", "clean-rules", {"rules": []})
+    var2 = make_clean_epub(tmp, "api-norules").read_bytes()
+    st, r = api_book(base, tok, file=("n.epub", var2))
+    check("api-book without rules: cleanup no-rules, file stored unchanged", st == 201 and r.get("cleanup") == "no-rules" and r.get("cleaned") == 0
+          and (r.get("book") or {}).get("sha256") == hashlib.sha256(var2).hexdigest(), str(r)[:300])
+
+    # Rate limit: 60 requests per key per hour (rejected ones count); other keys unaffected
+    codes = [api_book(base, tok_rl, fields={"x": "1"})[0] for _ in range(61)]
+    check("api-book rate limited per key (60/hour)", codes[:60] == [400] * 60 and codes[60] == 429, str(codes[-5:]))
+    st, r = api_book(base, tok, fields={"x": "1"})
+    check("rate limit is per key", st == 400 and r.get("error") == "missing_file")
+
+def _texts(node):
+    out = []
+    for c in node.childNodes:
+        if c.nodeType == c.TEXT_NODE: out.append(c)
+        elif c.nodeType == c.ELEMENT_NODE: out.extend(_texts(c))
+    return out
 
 def run(base, tmp):
     PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -579,6 +820,7 @@ def run(base, tmp):
 
     run_replace(base, tmp, admin, user)
     run_errors(base, admin, user)
+    run_api_books(base, tmp, admin, user)
 
     st, r = anon.call("GET", "nope")
     check("unknown route 404", st == 404)

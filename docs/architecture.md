@@ -212,7 +212,8 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   library-remove upload-init upload-chunk upload-complete book-file book-cover book-meta book-replace progress annotations
   shelves stats catalog catalog-submit catalog-pending catalog-review catalog-remove catalog-add` (books.php);
   `admin-stats users user-update user-reset-password user-delete invite-revoke catalog-all catalog-update
-  books-all book-delete settings client-error errors errors-clear` (admin.php).
+  books-all book-delete settings client-error errors errors-clear` (admin.php); `api-tokens api-token-create
+  api-token-revoke clean-rules api-book` (apibook.php, v8.7; cleanup engine in clean.php).
 - **Config:** `/home/<user>/borg-config/config.php` (outside the web root; `BORG_CONFIG` overrides in tests):
   `db_dsn`, `db_user`, `db_pass`, `setup_key`, optional `storage_dir` (default `~/borg-storage`), `max_book_bytes`,
   `catalog_requires_approval` (default true), `session_days`.
@@ -224,6 +225,10 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   Migration 5 (v8.4) adds `client_errors` (id, created_at, user_id `0` = anonymous, app_version ≤20, kind ≤20, message ≤500,
   source ≤300, stack ≤4000, url_path ≤300, user_agent ≤300, count, fingerprint = SHA-256 of kind+message+source+app_version,
   last_seen), indexed on (fingerprint, created_at) and last_seen.
+  Migration 6 (v8.7) adds `api_tokens` (id, name ≤80, token_hash = SHA-256 of the key (unique), created_by = admin id,
+  created_at, last_used_at, uses, revoked, require_review; counters/flags `NOT NULL DEFAULT 0`) and `settings_text`
+  (name, value TEXT) for settings too long for `settings.value` VARCHAR(500) — the cleanup rules live there as
+  `clean_rules`.
 - **Auth:** invite-only. First admin via `setup` (needs `setup_key`, only while no users exist). Session token in an
   HttpOnly/Secure/SameSite=Lax cookie scoped to the app path; DB stores only its SHA-256. Mutating routes need the
   per-session CSRF token in `X-CSRF-Token`; JSON routes reject non-JSON bodies. Login/register/setup are rate limited.
@@ -269,6 +274,47 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   url_path, user_agent, count (sum), first_seen, last_seen, users, anonymous}], total, page, per, versions, kinds}`;
   `POST errors-clear` with `{all: true}`, `{fingerprint}` or `{id}` → `{deleted}`. `admin-stats` has `client_errors`
   (number of groups).
+- **API keys and machine uploads (v8.7, guide: `docs/api-books.md`):** the owner's own program uploads EPUBs straight
+  into the **public catalog** (never into a library). Admin routes (session; POSTs need CSRF): `GET api-tokens` →
+  `{tokens: [{id, name, created_at, last_used_at, uses, revoked, require_review}]}` (never the key or its hash);
+  `POST api-token-create {name (1–80), require_review}` → 201 `{id, token, name, require_review, created_at}` — the key
+  (`borg_` + 40 base64url chars from `random_bytes(30)`) is shown only here, the DB keeps its SHA-256;
+  `POST api-token-revoke {id}` → `{ok}` (404 unknown). `GET clean-rules` → `{rules}`; `POST clean-rules {rules: [{id,
+  type: phrase|line|telegram, text?}]}` → `{rules}` stored normalised (≤50 rules, id `[A-Za-z0-9_-]{1,40}` unique,
+  phrase/line text trimmed 4–200 characters, telegram without text, no duplicate rule; else 400).
+  `POST api-book` (no session, no CSRF): key in `Authorization: Bearer <key>` or `X-Borg-Token`; missing/unknown/revoked
+  key, or a key whose creator is no longer an active admin → 401 (`missing_token`/`bad_token`; 30 failures per IP per
+  15 min → 429). 60 requests per key per hour (every request counts) → 429. `multipart/form-data`: `file` (required),
+  optional `title` ≤500, `author` ≤300, `language` ≤20, `publisher` ≤300, `published` ≤40, `category` ≤80,
+  `description` ≤2000. Errors: 415 not multipart; 413 `post_too_large` / `file_too_large_for_php` (PHP
+  `post_max_size` / `upload_max_filesize`, value named in the message) / `too_large` (`max_book_bytes`); 400
+  `missing_file`, `partial_upload`, `empty_file`, `not_epub` (same `validate_epub` as the upload flow), `too_long_*`.
+  Steps: validate → read OPF metadata (dc:title/creator/language/publisher/date, date `YYYY-MM-DDT…` cut to the date)
+  and the cover (EPUB 3 `properties~="cover-image"`, else EPUB 2 `<meta name="cover">`; png/jpeg/webp/gif ≤1.5 MB, else
+  skipped) → apply `clean_rules` → validate again → SHA-256 of the **cleaned** file → dedupe → store with
+  `uploaded_by` = key creator. Request fields win over the OPF; title falls back to the file name, then «بدون عنوان».
+  Catalog: a new (or previously `rejected`) entry is `approved` with `reviewed_by` = key creator, or `pending` when the
+  key has `require_review`; an existing approved/pending entry keeps its status and gets `category`/`description` when
+  sent. `last_used_at` is set on every authenticated request, `uses` counts accepted books. Response 201
+  `{book, catalog_status, duplicate, cleaned (matches removed), cleanup: applied|no-rules|unavailable, skipped_rules
+  (ids judged too broad for this book)}`. Without ZipArchive/DOM the book is stored unmodified (`unavailable`), metadata
+  then comes only from the request. `health` reports `zip` and `dom`. `.htaccess` copies the `Authorization` header to
+  `HTTP_AUTHORIZATION` for CGI/FastCGI.
+- **Server-side cleanup (`lib/clean.php`):** a port of the browser's `cleanEpub`/`cleanDocument`/`cleanLines`/
+  `epubContentFiles` (§4a) and must stay in step with it. Content documents come from the OPF manifest
+  (`application/xhtml+xml`, `text/html`; href URL-decoded and resolved; fallback every `*.x?html?` entry). XHTML is
+  parsed with libxml as XML (HTML named entities are turned into numeric ones when the DOCTYPE names an XHTML/MathML
+  public id, as browsers resolve them); any libxml error → HTML parsing, like the browser's parsererror fallback. Root =
+  `<body>` (XHTML namespace) or the document element. Line rules first (smallest `LINE_BLOCKS` element whose squashed
+  text contains the squashed rule text; blocks longer than text + 400 are kept), then phrase rules (literal) and the
+  Telegram rule (`TG_SOURCE`, same lookbehinds in PCRE) on text nodes outside script/style; a link left with only
+  whitespace and no img/svg/image/video/audio/object is removed. Lengths are UTF-16 code units like JS. Serialisation
+  mirrors XMLSerializer (original XML declaration kept, no newline between top-level nodes, `<p></p>`, `<br />`; a
+  non-UTF-8 encoding in the declaration becomes utf-8). Like auto-clean on import: a dry run first, rules with no match
+  or too broad for the book (> 300 matches, or > 2% of the text; line rules > 10%) are skipped, the rest applied. The
+  zip is rebuilt only when something changed: `mimetype` first and STORED, the rest DEFLATE, entry times kept
+  (deterministic → the same original gives the same SHA-256), unchanged entries streamed through temp files. Content
+  documents over 16 MB are left untouched. Checked byte-for-byte against the browser code in Chromium on test books.
 - **Validation:** optional string fields that are present but not a string/number → 400 `bad_<field>`; over the
   length limit → 400 `too_long_<field>`.
 

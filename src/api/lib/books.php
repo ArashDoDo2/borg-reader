@@ -128,9 +128,20 @@ function validate_epub(string $path): void {
 function store_cover(int $bookId, ?string $dataUrl): bool {
     if (!$dataUrl || !preg_match('#^data:image/(png|jpe?g|webp|gif);base64,#', $dataUrl)) return false;
     $bin = base64_decode(substr($dataUrl, strpos($dataUrl, ',') + 1), true);
-    if ($bin === false || strlen($bin) > 1500000 || @getimagesizefromstring($bin) === false) return false;
+    return $bin !== false && store_cover_bytes($bookId, $bin);
+}
+/** Stores raw image bytes (at most 1.5 MB, must be a readable image) as the book cover. */
+function store_cover_bytes(int $bookId, string $bin): bool {
+    if ($bin === '' || strlen($bin) > 1500000 || @getimagesizefromstring($bin) === false) return false;
     file_put_contents(cover_path($bookId), $bin);
     return true;
+}
+/** Insert a books row for a stored file and return it (shared by upload-complete and api-book). */
+function insert_book(string $sha, int $size, array $meta, int $uploadedBy): array {
+    q('INSERT INTO books (sha256, size, title, author, language, publisher, published, has_cover, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
+      [$sha, $size, $meta['title'] ?? 'بدون عنوان', $meta['author'] ?? '', $meta['language'] ?? '',
+       $meta['publisher'] ?? '', $meta['published'] ?? '', $uploadedBy, time()]);
+    return one('SELECT * FROM books WHERE sha256 = ?', [$sha]);
 }
 
 function upload_dir(): string { return storage('uploads'); }
@@ -290,10 +301,7 @@ function handle_books_route(string $route): bool {
             if (!$existing) {
                 $meta = array_merge(json_decode($u['meta'], true) ?: [], $late);
                 if (!rename($part, book_path($u['sha256']))) { $finish(); fail(500, 'storage', 'Could not store the file.'); }
-                q('INSERT INTO books (sha256, size, title, author, language, publisher, published, has_cover, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
-                  [$u['sha256'], $u['size'], $meta['title'] ?? 'بدون عنوان', $meta['author'] ?? '', $meta['language'] ?? '',
-                   $meta['publisher'] ?? '', $meta['published'] ?? '', $s['id'], time()]);
-                $existing = one('SELECT * FROM books WHERE sha256 = ?', [$u['sha256']]);
+                $existing = insert_book($u['sha256'], (int)$u['size'], $meta, (int)$s['id']);
                 $coverFile = upload_dir() . "/$id.cover";
                 if (is_file($coverFile) && store_cover((int)$existing['id'], (string)file_get_contents($coverFile))) {
                     q('UPDATE books SET has_cover = 1 WHERE id = ?', [$existing['id']]);

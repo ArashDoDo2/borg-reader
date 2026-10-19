@@ -4,3 +4,7 @@ Options -Indexes
   Header set X-Content-Type-Options "nosniff"
   Header set Referrer-Policy "same-origin"
 </IfModule>
+# api-book: pass "Authorization: Bearer …" to PHP on CGI/FastCGI hosts that drop it (X-Borg-Token works regardless).
+<IfModule mod_setenvif.c>
+  SetEnvIf Authorization "(.+)" HTTP_AUTHORIZATION=$1
+</IfModule>

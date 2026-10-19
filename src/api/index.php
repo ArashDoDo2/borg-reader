@@ -5,6 +5,8 @@ define('BORG_API', true);
 require __DIR__ . '/lib/core.php';
 require __DIR__ . '/lib/books.php';
 require __DIR__ . '/lib/admin.php';
+require __DIR__ . '/lib/clean.php';
+require __DIR__ . '/lib/apibook.php';
 
 $route = is_string($_GET['r'] ?? null) ? $_GET['r'] : '';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -20,7 +22,7 @@ try {
         case 'health':
             method('GET');
             $out = [
-                'ok' => true, 'php' => PHP_VERSION,
+                'ok' => true, 'php' => PHP_VERSION, 'zip' => class_exists('ZipArchive'), 'dom' => class_exists('DOMDocument'),
                 'extensions' => ['pdo_mysql' => extension_loaded('pdo_mysql'), 'zip' => class_exists('ZipArchive'), 'fileinfo' => extension_loaded('fileinfo')],
                 'limits' => ['upload_max_filesize' => ini_get('upload_max_filesize'), 'post_max_size' => ini_get('post_max_size'), 'chunk_bytes' => chunk_bytes()],
                 'configured' => false, 'database' => false, 'needs_setup' => false,
@@ -139,7 +141,7 @@ try {
 
         // ---------- Books, library, progress, catalog ----------
         default:
-            if (!handle_books_route($route) && !handle_admin_route($route)) fail(404, 'not_found', 'Unknown route.');
+            if (!handle_books_route($route) && !handle_admin_route($route) && !handle_api_route($route)) fail(404, 'not_found', 'Unknown route.');
     }
 } catch (ApiError $e) {
     json_out($e->status, ['error' => $e->codeName, 'message' => $e->getMessage()]);
