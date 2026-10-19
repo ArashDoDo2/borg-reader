@@ -111,7 +111,7 @@ Migration rules:
   then on. Closing the preview returns to the book page.
 - **Add from the catalog (v8.1):** the main button adds in one click; the ▾ menu lists existing shelves (and can create
   one) and puts the book on the checked shelves after `catalog-add` + download. `catalog-submit` asks for an optional
-  category; the admin catalog editor is a dialog (title, author, description, category, publisher, date, language).
+  category; admins edit catalog books in the book details panel of the admin «کتاب‌ها» tab (§4e).
 - **Race guard:** `openToken` invalidates async work when the reader is closed or another book opens.
 
 ## 4a. Text cleanup («پاک‌سازی متن», v8.3)
@@ -155,7 +155,7 @@ matched text is removed and no original is kept (owner's decisions, `docs/contex
   for `format: "pdf"`, `repairMetadata` skips them, so JSZip/epub.js never see a PDF.
 
 ## 4c. API keys (admin, v8.7, client side)
-Admin panel block «کلیدهای API» (`#apiBlock`, after «کاربران»). Keys let other programs send books straight to the
+Admin panel block «کلیدهای API» (`#apiBlock`, tab «کلیدهای API» since v8.9, §4e). Keys let other programs send books straight to the
 public catalog through the machine route `api-book` (Bearer token, multipart; documented in `docs/api-books.md`;
 the UI never calls it). `loadApiTokens()` (run by `loadAdmin`) GETs `api-tokens` and lists name, created date, last
 use (Persian date/time, «هرگز» when 0), use count, review flag («منتظر تأیید» / «انتشار مستقیم»), status; revoked
@@ -165,6 +165,56 @@ require_review}` (name required) and shows the returned plaintext `token` **once
 همین یک بار نمایش داده می‌شود»; the field is cleared when the admin view is opened again or the admin logs out.
 «لغو» asks for confirmation and POSTs `api-token-revoke {id}`. A 404 from `api-tokens` shows «این بخش هنوز روی سرور
 فعال نیست.». A curl example built from the site's API URL is shown under the list.
+
+## 4e. Admin panel (v8.9, client side)
+Built for thousands of server books (≈3,000/year). `#viewAdmin` has a sticky sub-navigation `#adminTabs`
+(`[data-admin-tab]` → `section[data-admin-panel]`, ids `admTab-<tab>` / `admPanel-<tab>`): «نمای کلی» `overview`,
+«صف تأیید» `queue` (badge `#admBadgeQueue` = pending), «کتاب‌ها» `books`, «کاربران» `users`, «دعوت‌ها» `invites`,
+«کلیدهای API» `api`, «خطاها» `errors` (badge `#admBadgeErrors` = error groups), «تنظیمات» `settings`. The older blocks
+moved into the tabs with their ids and behaviour (`#userList`, `#inviteNote`/`#createInvite`, `#apiBlock`,
+`#errorsBlock`, `#settingApproval`, `#pendingList`); the long unpaginated «کتابخانهٔ عمومی» / «همهٔ کتاب‌های روی سرور»
+lists and the `#catalogEditDialog` editor were removed (replaced by the books tab and its details panel).
+- **Routing:** deep link `#admin/<tab>`; the books tab adds its state as a query (`#admin/books?q=…&status=pending&page=2`,
+  only non-default values). `showView("admin")` → `openAdmin()` reads the hash (`admReadHash`), else keeps the last tab
+  and writes it with `replaceState`; a tab click pushes a history entry (back returns to the previous tab), filter and
+  page changes replace it. `routeFromHash()` opens `#admin…` for admins; logout clears it.
+- **Lazy loading:** `loadAdmin()` = `admin-stats` (overview cards + both badges) + the active tab's loader only
+  (`loadQueue`, `loadAdminBooks`, `loadUsers`, `loadInvites`, `loadApiTokens`, `loadErrors`, `loadSettings`). It is also the
+  refresh after every `adminAction`.
+- **Overview:** the 7 stat cards (`#adminStats .stat`) and shortcuts (`[data-adm-go]`, optional `data-adm-filter`):
+  queue, books without category (`category=__none__`), without cover, sent with an API key (`uploader=api`), rejected,
+  errors, invites.
+- **Books tab:** `GET admin-books` with `q, status (any|approved|pending|rejected|none), category (exact, __none__ = empty),
+  format, uploader (id or api), no_cover=1, sort (date|title|size|status), dir, page, per=50` → `{books, total, page, per,
+  facets}`. Search is debounced 300 ms; every filter/sort change goes back to page 1; a stale response is dropped
+  (`adm.seq`). Category and uploader selects and the category suggestions (`#admCatList`) come from `facets`. Desktop:
+  compact table `#admBooks` (checkbox, lazy 32×44 cover, title + author `dir=auto`, format chip, category, status chip,
+  uploader or «API» chip for `source: "api"`, Persian date, size, `in_libraries`), pager «قبلی/بعدی» and «صفحهٔ X از Y ·
+  N کتاب». ≤700 px: the same rows become grid list rows (checkbox · cover · title + one line of chips) and the filters
+  move into a bottom sheet (`#admFilters.open`, backdrop, Escape, «نمایش نتیجه‌ها») opened by «فیلترها» with the
+  active-filter count. Servers without `admin-books` (404) get the same result built in the browser from `books-all` +
+  `catalog-all` (`admLegacyBooks`; no `source`/uploader ids there).
+- **Selection and bulk actions:** row checkboxes (shift-click selects a range), «انتخاب همهٔ این صفحه» (`#admSelPage`),
+  then «انتخاب همهٔ N نتیجه» (`#admSelectAll`, `adm.all`). The fixed bar `#admBulkBar` shows the count and `POST
+  admin-bulk {action, ids}` — or `{action, filter: {q, status, category, format, uploader, no_cover}}` for all results —
+  with actions approve / reject / set_category (`#admCatDialog`, a small form with the category datalist) /
+  clear_category / add_catalog / remove_catalog / delete. Delete, remove, reject and clear-category (and any action on
+  all results) ask with the exact count. Afterwards: toast «انجام شد: N کتاب · M مورد نادیده گرفته شد» from
+  `{affected, skipped}`, selection cleared, stats and the page reloaded. Changing page/filters clears the selection.
+- **Details panel:** clicking a row (or Enter) opens `#admDetail`, a modal `<dialog>` docked to the left edge at full
+  height on desktop and a bottom sheet on phones: bigger cover, chips, uploader/submitter/date/size/libraries, status
+  actions (pending → `catalog-review`; remove → `catalog-remove`; add / approve a rejected book → `admin-bulk` with one
+  id), the edit form (title, author, category with datalist, description, publisher, published, language) saved through
+  `catalog-update` for catalog books or `book-meta` (no category/description) for books outside the catalog,
+  «مطالعهٔ آنلاین» (`adminPreview`: the same ephemeral `preview-<id>` reader as the catalog page), download, delete
+  (`book-delete`).
+- **Review queue:** `catalog-pending`; review mode shows one book (cover, metadata table, description, submitter, «کتاب
+  i از n») with تأیید / رد / تعیین دسته / قبلی / بعدی plus preview, details and download. Keys (only on this tab, not
+  while typing or with a dialog open): A approve, R reject (`catalog-review`), C category (`#admCatDialog` →
+  `catalog-update {book_id, category}`), J or ← next, K or → previous (← is "forward" in RTL, as in the reader). A
+  reviewed book leaves the local list and the next one is shown without a reload. «فهرست» switches to the compact
+  `#pendingList` (approve/reject/details per row).
+- **CSS:** one block `/* v8.9 admin */` at the end of `app.css` (palette variables, `body.dark` variants).
 
 ## 4b. Reader engine (v8)
 Details and history of each workaround: `docs/context/reader-engine-notes.md`.
@@ -282,6 +332,16 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
 - `tests/webkit_probe.py`: WebKit diagnostics per rendering variant (frame width, what is under the viewer); CI runs it
   only when `webkit_e2e.py` fails.
 - e2e section 18 (v8.4): TOC hrefs that go up a folder (`nav/nav.xhtml` → `../text/c1.xhtml`, NCX in `toc/`).
+- e2e section 30 (v8.9 admin): route mocks of `admin-books` (230 books with facets), `admin-bulk`, `catalog-pending`,
+  `catalog-review`, `catalog-update`, `book-meta` and the mocked covers (real admin login): 8 tabs + `#admin/overview`, only
+  the active tab loads, 50 rows / «صفحهٔ ۱ از ۵ · ۲۳۰ کتاب» / request params, next page, debounced search (one request),
+  every filter and sort in the request URL, refresh keeps tab + filters, reset, shift-click range, set_category dialog
+  (ids + category), select page → approve (50 ids), select all results → delete confirms with the exact count and sends
+  the filter, skipped count in the toast, details side panel saves via catalog-update / book-meta, review queue A/R/C/J/K/←/→,
+  list mode, back between tabs, `#admin/settings` deep link, sticky tabs; 390 px: list rows, filters sheet + active count,
+  bulk bar and details sheet fit, no horizontal scroll; no JS errors or external requests. Older admin checks (sections
+  10, 12, 15, 19, 27) click the matching sub-tab first; section 12/15 use the books tab (real `admin-books`, or the
+  `books-all` + `catalog-all` fallback on an older server).
 - e2e section 27 (v8.7): API keys and admin cleanup-rule sync with Playwright route mocks of `api-tokens`,
   `api-token-create`, `api-token-revoke` and `clean-rules` (real admin login): adopt server rules when local is empty,
   debounced POST of the full list on add/delete, key shown once + copy, list/revoked state, revoke call, 390 px fit,

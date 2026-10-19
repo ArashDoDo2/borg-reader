@@ -3091,6 +3091,7 @@
       showView("mine"); syncChip.at = 0; syncChip.failed = false; unpushedProgress.clear(); setSyncStatus("");
       catalogBooks = []; catalogLoaded = false; previewCache = null;
       if (location.hash.startsWith("#catalog")) setHash("", false);
+      if (location.hash.startsWith("#admin")) setHash("", false);
     }
     $("authForms").hidden = !!user;
     $("accountInfo").hidden = !user;
@@ -3112,7 +3113,7 @@
     closeAddMenu();
     if (view === "catalog") { renderCatalog(); loadCatalog(); }
     if (view === "book") { renderBookDetail(); if (!catalogLoaded) loadCatalog(); }
-    if (view === "admin") { hideNewApiToken(); loadAdmin(); }
+    if (view === "admin") openAdmin();
   }
   document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.addEventListener("click", () => {
     if (t.dataset.view === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; }
@@ -3514,6 +3515,8 @@
     const m = /^#catalog\/book\/(\d+)/.exec(location.hash);
     if (m) { detailId = Number(m[1]); showView("book"); }
     else if (location.hash.startsWith("#catalog")) showView("catalog");
+    else if (location.hash.startsWith("#admin")) { if (isAdmin()) showView("admin"); }
+    else if (!$("viewAdmin").hidden) showView("mine");
     else if (!$("viewBook").hidden || !$("viewCatalog").hidden) showView("mine");
   }
   window.addEventListener("popstate", routeFromHash);
@@ -3749,58 +3752,718 @@
     } catch (err) { showToast(apiMessage(err)); }
   }
 
-  // ---------- Admin ----------
+  // ---------- Admin (v8.9: sub-tabs, paged books table, bulk actions, review queue) ----------
+  // Tabs deep-link as #admin/<tab>; the books tab keeps its filters in the hash query (#admin/books?status=pending&page=2).
+  // Only the active tab's data is fetched; admin-stats (small) feeds the overview cards and the tab badges.
   const fmtDate = s => new Date(s * 1000).toLocaleDateString("fa-IR");
   const mb = n => (n / 1048576).toLocaleString("fa-IR", { maximumFractionDigits: 1 });
-  const STATUS_FA = { approved: "عمومی", pending: "در انتظار", rejected: "ردشده" };
-  async function loadAdmin() {
-    try {
-      const [pending, invites, users, stats, settings, catalogAll, booksAll] = await Promise.all([
-        api("catalog-pending"), api("invites"), api("users"), api("admin-stats"), api("settings"), api("catalog-all"), api("books-all")]);
-      const fa = n => Number(n).toLocaleString("fa-IR");
-      $("adminStats").innerHTML = [
-        [fa(stats.active_users) + " / " + fa(stats.users), "کاربر فعال"], [fa(stats.books), "کتاب روی سرور"], [mb(stats.storage_bytes) + " MB", "فضای کتاب‌ها"],
-        [fa(stats.catalog_approved), "در کتابخانهٔ عمومی"], [fa(stats.catalog_pending), "در انتظار تأیید"], [fa(stats.open_invites), "دعوت‌نامهٔ باز"],
-        [fa(stats.client_errors || 0), "خطای کاربران", stats.client_errors ? " stat-errors" : ""],
-      ].map(([v, l, c]) => `<div class="stat${c || ""}"><b>${v}</b><span>${l}</span></div>`).join("");
-      loadErrors(true);
-      loadApiTokens();
-      $("settingApproval").checked = !!settings.catalog_requires_approval;
-      $("catalogAdminList").innerHTML = catalogAll.books.filter(b => b.status !== "pending").map(b => `<div class="admin-item">
-          <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="status-chip ${b.status === "approved" ? "" : "off"}">${STATUS_FA[b.status] || b.status}</span>${catOf(b) ? ` <span class="status-chip cat-chip">${esc(catOf(b))}</span>` : ""}
-          ${b.description ? `<br><span class="muted">${esc(b.description)}</span>` : ""}</span>
-          <span class="admin-row"><button class="secondary-button" type="button" data-cat-edit="${b.id}">ویرایش</button>
-          <button class="secondary-button" type="button" data-cat-remove="${b.id}">برداشتن از کتابخانهٔ عمومی</button></span></div>`).join("")
-        || '<p class="muted">کتابخانهٔ عمومی خالی است.</p>';
-      $("booksAdminList").innerHTML = booksAll.books.map(b => `<div class="admin-item">
-          <span><strong>${esc(b.title)}</strong> <span class="muted">· ${mb(b.size)} MB · ${esc(b.uploader || "؟")} · ${fa(b.readers)} خواننده</span>
-          ${b.catalog_status ? `<span class="status-chip">${STATUS_FA[b.catalog_status] || b.catalog_status}</span>` : ""}</span>
-          <span class="admin-row"><a class="secondary-button" href="${API}?r=book-file&id=${b.id}">دانلود</a>
-          <button class="secondary-button" type="button" data-book-delete="${b.id}" data-title="${esc(b.title)}">حذف کامل</button></span></div>`).join("")
-        || '<p class="muted">کتابی روی سرور نیست.</p>';
-      $("pendingList").innerHTML = pending.books.length ? pending.books.map(b => `<div class="admin-item">
-          <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="muted">· ${esc(b.submitter || "")} · ${fmtDate(b.submitted_at)}</span>${catOf(b) ? ` <span class="status-chip cat-chip">${esc(catOf(b))}</span>` : ""}
-          ${b.description ? `<br><span class="muted">${esc(b.description)}</span>` : ""}</span>
-          <span class="admin-row"><a class="secondary-button" href="${API}?r=book-file&id=${b.id}">دانلود</a>
-          <button class="secondary-button" type="button" data-review="${b.id}" data-approve="1">تأیید</button>
-          <button class="secondary-button" type="button" data-review="${b.id}" data-approve="0">رد</button></span></div>`).join("")
-        : '<p class="muted">موردی در انتظار نیست.</p>';
-      $("inviteList").innerHTML = invites.invites.map(i => `<div class="admin-item"><span>${esc(i.note || "بدون یادداشت")}</span>
-          <span class="admin-row"><span class="muted">${i.used_by ? `استفاده‌شده توسط ${esc(i.used_by)}` : i.expires_at * 1000 < Date.now() ? "منقضی" : `معتبر تا ${fmtDate(i.expires_at)}`}</span>
-          ${!i.used_by && i.expires_at * 1000 > Date.now() ? `<button class="secondary-button" type="button" data-invite-revoke="${esc(i.id)}">باطل کردن</button>` : ""}</span></div>`).join("")
-        || '<p class="muted">هنوز دعوت‌نامه‌ای ساخته نشده.</p>';
-      const me = account?.user?.id;
-      $("userList").innerHTML = users.users.map(u => `<div class="admin-item" data-user="${u.id}">
-          <span>${esc(u.name)} <span class="muted" dir="ltr">${esc(u.email)}</span><br>
-          <span class="muted small">${u.role === "admin" ? "مدیر" : "کاربر"} · ${fa(u.books)} کتاب${u.last_seen ? ` · آخرین ورود ${fmtDate(u.last_seen)}` : ""}</span>
-          ${u.disabled ? '<span class="status-chip off">غیرفعال</span>' : ""}</span>
-          ${u.id === me ? '<span class="muted small">(خودت)</span>' : `<span class="admin-row">
-            <button class="secondary-button" type="button" data-user-act="${u.disabled ? "enable" : "disable"}">${u.disabled ? "فعال کردن" : "غیرفعال کردن"}</button>
-            <button class="secondary-button" type="button" data-user-act="${u.role === "admin" ? "demote" : "promote"}">${u.role === "admin" ? "کاربر عادی شود" : "مدیر شود"}</button>
-            <button class="secondary-button" type="button" data-user-act="reset">ریست رمز</button>
-            <button class="secondary-button" type="button" data-user-act="delete">حذف</button></span>`}</div>`).join("");
-    } catch (err) { $("pendingList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; }
+  const STATUS_FA = { approved: "عمومی", pending: "در انتظار", rejected: "ردشده", none: "بیرون از کتابخانهٔ عمومی" };
+  const ADMIN_TABS = ["overview", "queue", "books", "users", "invites", "api", "errors", "settings"];
+  const ADM_PER = 50;
+  const ADM_DEF = { q: "", status: "any", category: "", format: "", uploader: "", no_cover: false, sort: "date", dir: "desc", page: 1 };
+  const ADM_EDIT_FIELDS = ["title", "author", "description", "category", "publisher", "published", "language"];
+  const adm = { tab: "overview", f: { ...ADM_DEF }, data: null, books: [], sel: new Set(), all: false, last: -1, seq: 0, legacy: false, cats: null,
+                queue: { list: [], idx: 0, mode: "review", busy: false }, detail: null };
+  const admSize = n => { const v = Number(n) || 0; return v < 1048576 ? `${faNum(Math.max(1, Math.round(v / 1024)))} KB` : `${mb(v)} MB`; };
+  const admStatus = b => (b && b.catalog_status) || "none";
+
+  function admParams(f, withView) {
+    const p = new URLSearchParams();
+    if (f.q) p.set("q", f.q);
+    if (f.status !== "any") p.set("status", f.status);
+    if (f.category) p.set("category", f.category);
+    if (f.format) p.set("format", f.format);
+    if (f.uploader) p.set("uploader", f.uploader);
+    if (f.no_cover) p.set("no_cover", "1");
+    if (withView) {
+      if (f.sort !== ADM_DEF.sort || f.dir !== ADM_DEF.dir) { p.set("sort", f.sort); p.set("dir", f.dir); }
+      if (f.page > 1) p.set("page", String(f.page));
+    }
+    return p;
   }
+  function admFromParams(p) {
+    const f = { ...ADM_DEF }, g = k => p.get(k) || "";
+    f.q = g("q").slice(0, 200);
+    if (["approved", "pending", "rejected", "none"].includes(g("status"))) f.status = g("status");
+    f.category = g("category").slice(0, 80);
+    if (["epub", "pdf"].includes(g("format"))) f.format = g("format");
+    f.uploader = g("uploader").slice(0, 120);
+    f.no_cover = g("no_cover") === "1";
+    if (["date", "title", "size", "status"].includes(g("sort"))) f.sort = g("sort");
+    if (["asc", "desc"].includes(g("dir"))) f.dir = g("dir");
+    f.page = Math.max(1, parseInt(g("page"), 10) || 1);
+    return f;
+  }
+  const admFilterKey = f => admParams(f, true).toString();
+  function admHash() {
+    const qs = adm.tab === "books" ? admParams(adm.f, true).toString() : "";
+    return `#admin/${adm.tab}${qs ? "?" + qs : ""}`;
+  }
+  /** Adopt the tab (and the books filters) from location.hash; false when the hash is not an admin one. */
+  function admReadHash() {
+    const m = /^#admin(?:\/([a-z]+))?(?:\?(.*))?$/.exec(location.hash);
+    if (!m) return false;
+    adm.tab = ADMIN_TABS.includes(m[1]) ? m[1] : "overview";
+    if (adm.tab === "books") {
+      const f = admFromParams(new URLSearchParams(m[2] || ""));
+      if (admFilterKey(f) !== admFilterKey(adm.f)) { adm.f = f; admClearSel(); }
+    }
+    return true;
+  }
+  /** Called by showView("admin"): tab from the hash (refresh, back, deep link) or the last one used. */
+  function openAdmin() {
+    hideNewApiToken();
+    admReadHash();
+    if (location.hash !== admHash()) setHash(admHash(), false);
+    loadAdmin();
+  }
+  /** Refresh the badges/overview and the active tab (also after every admin action). */
+  function loadAdmin() {
+    renderAdminTabs();
+    loadAdminStats();
+    return loadAdminTab(adm.tab);
+  }
+  function renderAdminTabs() {
+    document.querySelectorAll("[data-admin-tab]").forEach(t => {
+      const on = t.dataset.adminTab === adm.tab;
+      t.setAttribute("aria-selected", String(on));
+    });
+    document.querySelectorAll("[data-admin-panel]").forEach(p => { p.hidden = p.dataset.adminPanel !== adm.tab; });
+    if (adm.tab !== "books") closeAdmFilters(false);
+    admRenderBulk();
+  }
+  function setAdminTab(tab, push = true) {
+    if (!ADMIN_TABS.includes(tab)) return;
+    adm.tab = tab;
+    setHash(admHash(), push && location.hash !== admHash());
+    renderAdminTabs();
+    loadAdminTab(tab);
+  }
+  function loadAdminTab(tab) {
+    if (tab === "queue") return loadQueue();
+    if (tab === "books") return loadAdminBooks();
+    if (tab === "users") return loadUsers();
+    if (tab === "invites") return loadInvites();
+    if (tab === "api") return loadApiTokens();
+    if (tab === "errors") return loadErrors(true);
+    if (tab === "settings") return loadSettings();
+    return null;
+  }
+  $("adminTabs").addEventListener("click", e => { const t = e.target.closest("[data-admin-tab]"); if (t) setAdminTab(t.dataset.adminTab); });
+
+  // ---- Overview: stats cards, badges, shortcuts ----
+  async function loadAdminStats() {
+    let stats;
+    try { stats = await api("admin-stats"); }
+    catch (err) { $("adminStats").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; return; }
+    const fa = faNum;
+    $("adminStats").innerHTML = [
+      [fa(stats.active_users) + " / " + fa(stats.users), "کاربر فعال"], [fa(stats.books), "کتاب روی سرور"], [mb(stats.storage_bytes) + " MB", "فضای کتاب‌ها"],
+      [fa(stats.catalog_approved), "در کتابخانهٔ عمومی"], [fa(stats.catalog_pending), "در انتظار تأیید"], [fa(stats.open_invites), "دعوت‌نامهٔ باز"],
+      [fa(stats.client_errors || 0), "خطای کاربران", stats.client_errors ? " stat-errors" : ""],
+    ].map(([v, l, c]) => `<div class="stat${c || ""}"><b>${v}</b><span>${l}</span></div>`).join("");
+    setAdmBadge("queue", stats.catalog_pending);
+    setAdmBadge("errors", stats.client_errors || 0);
+  }
+  function setAdmBadge(which, n) {
+    n = Number(n) || 0;
+    const el = $(which === "queue" ? "admBadgeQueue" : "admBadgeErrors");
+    el.hidden = !n; el.textContent = faNum(n);
+    el.setAttribute("aria-label", which === "queue" ? `${faNum(n)} کتاب در انتظار` : `${faNum(n)} گروه خطا`);
+    const sc = document.querySelector(`#adminShortcuts [data-sc="${which === "queue" ? "pending" : "errors"}"]`);
+    if (sc) { sc.hidden = !n; sc.textContent = faNum(n); }
+  }
+  $("adminShortcuts").addEventListener("click", e => {
+    const b = e.target.closest("[data-adm-go]");
+    if (!b) return;
+    if (b.dataset.admFilter) { adm.f = admFromParams(new URLSearchParams(b.dataset.admFilter)); admClearSel(); }
+    setAdminTab(b.dataset.admGo);
+  });
+
+  // ---- Users, invites, settings ----
+  async function loadUsers() {
+    let users;
+    try { users = await api("users"); } catch (err) { $("userList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; return; }
+    const fa = faNum, me = account?.user?.id;
+    $("userList").innerHTML = users.users.map(u => `<div class="admin-item" data-user="${u.id}">
+        <span>${esc(u.name)} <span class="muted" dir="ltr">${esc(u.email)}</span><br>
+        <span class="muted small">${u.role === "admin" ? "مدیر" : "کاربر"} · ${fa(u.books)} کتاب${u.last_seen ? ` · آخرین ورود ${fmtDate(u.last_seen)}` : ""}</span>
+        ${u.disabled ? '<span class="status-chip off">غیرفعال</span>' : ""}</span>
+        ${u.id === me ? '<span class="muted small">(خودت)</span>' : `<span class="admin-row">
+          <button class="secondary-button" type="button" data-user-act="${u.disabled ? "enable" : "disable"}">${u.disabled ? "فعال کردن" : "غیرفعال کردن"}</button>
+          <button class="secondary-button" type="button" data-user-act="${u.role === "admin" ? "demote" : "promote"}">${u.role === "admin" ? "کاربر عادی شود" : "مدیر شود"}</button>
+          <button class="secondary-button" type="button" data-user-act="reset">ریست رمز</button>
+          <button class="secondary-button" type="button" data-user-act="delete">حذف</button></span>`}</div>`).join("");
+  }
+  async function loadInvites() {
+    let invites;
+    try { invites = await api("invites"); } catch (err) { $("inviteList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; return; }
+    $("inviteList").innerHTML = invites.invites.map(i => `<div class="admin-item"><span>${esc(i.note || "بدون یادداشت")}</span>
+        <span class="admin-row"><span class="muted">${i.used_by ? `استفاده‌شده توسط ${esc(i.used_by)}` : i.expires_at * 1000 < Date.now() ? "منقضی" : `معتبر تا ${fmtDate(i.expires_at)}`}</span>
+        ${!i.used_by && i.expires_at * 1000 > Date.now() ? `<button class="secondary-button" type="button" data-invite-revoke="${esc(i.id)}">باطل کردن</button>` : ""}</span></div>`).join("")
+      || '<p class="muted">هنوز دعوت‌نامه‌ای ساخته نشده.</p>';
+  }
+  async function loadSettings() {
+    try { $("settingApproval").checked = !!(await api("settings")).catalog_requires_approval; }
+    catch (err) { showToast(apiMessage(err)); }
+  }
+
+  // ---- Books tab: server-paged table, filters, selection, bulk actions ----
+  async function admFetchBooks(f, per = ADM_PER) {
+    if (!adm.legacy) {
+      const p = admParams(f, false);
+      p.set("sort", f.sort); p.set("dir", f.dir); p.set("page", String(f.page)); p.set("per", String(per));
+      try { return await api("admin-books", { query: "&" + p.toString() }); }
+      catch (err) { if (!(err instanceof ApiFail && err.status === 404)) throw err; adm.legacy = true; }
+    }
+    return admLegacyBooks(f, per);
+  }
+  /** Servers without admin-books (before v8.9): the same result built from books-all + catalog-all. */
+  async function admLegacyBooks(f, per) {
+    const [all, cat] = await Promise.all([api("books-all"), api("catalog-all")]);
+    const meta = new Map((cat.books || []).map(b => [b.id, b]));
+    const rows = (all.books || []).map(b => {
+      const c = meta.get(b.id) || {};
+      return { ...b, catalog_status: b.catalog_status || null, category: catOf(c), description: c.description || "", submitter: c.submitter || "",
+               uploader_id: b.uploader || "", uploader_name: b.uploader || "", source: "app", in_libraries: Number(b.readers) || 0 };
+    });
+    const facets = { status: { approved: 0, pending: 0, rejected: 0, none: 0 }, formats: { epub: 0, pdf: 0 }, categories: [], uploaders: [] };
+    const cats = new Map(), ups = new Map();
+    for (const b of rows) {
+      facets.status[admStatus(b)] = (facets.status[admStatus(b)] || 0) + 1;
+      facets.formats[b.format === "pdf" ? "pdf" : "epub"]++;
+      if (b.category) cats.set(b.category, (cats.get(b.category) || 0) + 1);
+      if (b.uploader_name) ups.set(b.uploader_name, (ups.get(b.uploader_name) || 0) + 1);
+    }
+    facets.categories = [...cats].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name, "fa"));
+    facets.uploaders = [...ups].map(([name, count]) => ({ id: name, name, count }));
+    const q = libFold(f.q).key;
+    const list = rows.filter(b => (!q || libFold(`${b.title} ${b.author} ${b.publisher || ""} ${b.category} ${b.description}`).key.includes(q))
+      && (f.status === "any" || admStatus(b) === f.status)
+      && (!f.category || (f.category === "__none__" ? !b.category : b.category === f.category))
+      && (!f.format || (b.format || "epub") === f.format)
+      && (!f.uploader || (f.uploader !== "api" && b.uploader_name === f.uploader))
+      && (!f.no_cover || !b.has_cover));
+    const key = { date: b => Number(b.created_at) || 0, title: b => String(b.title || ""), size: b => Number(b.size) || 0, status: admStatus }[f.sort];
+    list.sort((a, b) => { const x = key(a), y = key(b), c = typeof x === "string" ? x.localeCompare(y, "fa") : x - y; return f.dir === "asc" ? c : -c; });
+    return { books: list.slice((f.page - 1) * per, f.page * per), total: list.length, page: f.page, per, facets };
+  }
+  async function loadAdminBooks() {
+    const seq = ++adm.seq;
+    admSyncControls();
+    if (!adm.data) $("admBooks").innerHTML = '<tr class="adm-empty"><td colspan="10">در حال بارگذاری…</td></tr>';
+    $("admBooks").setAttribute("aria-busy", "true");
+    let r;
+    try { r = await admFetchBooks(adm.f); }
+    catch (err) {
+      if (seq !== adm.seq) return;
+      $("admBooks").removeAttribute("aria-busy");
+      $("admBooks").innerHTML = `<tr class="adm-empty"><td colspan="10">${esc(apiMessage(err))}</td></tr>`;
+      $("admBooksSummary").textContent = "";
+      return;
+    }
+    if (seq !== adm.seq) return;
+    $("admBooks").removeAttribute("aria-busy");
+    const per = Number(r.per) || ADM_PER, total = Number(r.total) || 0, pages = Math.max(1, Math.ceil(total / per));
+    if (adm.f.page > pages) { adm.f.page = pages; setHash(admHash(), false); return loadAdminBooks(); } // e.g. after deleting the last page
+    adm.data = { ...r, per, total };
+    adm.books = Array.isArray(r.books) ? r.books : [];
+    for (const id of [...adm.sel]) if (!adm.books.some(b => b.id === id)) adm.sel.delete(id);
+    admRenderFacets(r.facets);
+    admRenderBooks();
+  }
+  function admRenderFacets(fc) {
+    if (!fc) return;
+    const cats = Array.isArray(fc.categories) ? fc.categories : [], ups = (Array.isArray(fc.uploaders) ? fc.uploaders : []).filter(u => String(u.id) !== "api");
+    const st = fc.status || {}, n = v => v == null ? "" : ` (${faNum(v)})`;
+    $("admFStatus").querySelectorAll("option").forEach(o => {
+      const base = o.value === "any" ? "همهٔ وضعیت‌ها" : STATUS_FA[o.value];
+      o.textContent = base + (o.value === "any" ? "" : n(st[o.value]));
+    });
+    const cat = $("admFCategory");
+    cat.innerHTML = '<option value="">همهٔ دسته‌ها</option><option value="__none__">بدون دسته</option>'
+      + cats.map(c => `<option value="${esc(c.name)}">${esc(c.name)}${n(c.count)}</option>`).join("")
+      + (adm.f.category && adm.f.category !== "__none__" && !cats.some(c => c.name === adm.f.category) ? `<option value="${esc(adm.f.category)}">${esc(adm.f.category)}</option>` : "");
+    const up = $("admFUploader");
+    up.innerHTML = '<option value="">همهٔ بارگذارها</option><option value="api">API</option>'
+      + ups.map(u => `<option value="${esc(String(u.id))}">${esc(u.name || String(u.id))}${n(u.count)}</option>`).join("")
+      + (adm.f.uploader && adm.f.uploader !== "api" && !ups.some(u => String(u.id) === adm.f.uploader) ? `<option value="${esc(adm.f.uploader)}">${esc(adm.f.uploader)}</option>` : "");
+    const fm = fc.formats || {};
+    $("admFFormat").querySelectorAll("option").forEach(o => { if (o.value) o.textContent = o.value.toUpperCase() + n(fm[o.value]); });
+    adm.cats = cats.map(c => c.name);
+    $("admCatList").innerHTML = adm.cats.map(c => `<option value="${esc(c)}"></option>`).join("");
+    admSyncControls();
+  }
+  const admActiveFilters = f => (f.status !== "any") + !!f.category + !!f.format + !!f.uploader + !!f.no_cover;
+  function admSyncControls() {
+    const f = adm.f;
+    if (document.activeElement !== $("admBookSearch")) $("admBookSearch").value = f.q;
+    $("admFStatus").value = f.status;
+    $("admFCategory").value = f.category;
+    $("admFFormat").value = f.format;
+    $("admFUploader").value = f.uploader;
+    $("admFNoCover").checked = f.no_cover;
+    $("admSort").value = `${f.sort}:${f.dir}`;
+    const n = admActiveFilters(f);
+    $("admFilterCount").hidden = !n; $("admFilterCount").textContent = faNum(n);
+    $("admFiltersOpen").setAttribute("aria-label", n ? `فیلترها (${faNum(n)} فیلتر فعال)` : "فیلترها");
+    $("admFReset").disabled = !n;
+  }
+  function admRowHtml(b, i) {
+    const st = admStatus(b), title = String(b.title || "بدون عنوان"), author = String(b.author || "").trim(), cat = catOf(b);
+    const [bg, fg] = paletteFor(title || String(b.id));
+    const thumb = b.has_cover ? `<img alt="" loading="lazy" decoding="async" src="${API}?r=book-cover&id=${b.id}">` : `<span aria-hidden="true">${esc([...title][0] || "؟")}</span>`;
+    const fmt = b.format === "pdf" ? "PDF" : "EPUB";
+    const up = b.source === "api" ? '<span class="adm-chip api">API</span>' : esc(String(b.uploader_name || b.uploader || "—"));
+    const on = adm.all || adm.sel.has(b.id);
+    return `<tr class="adm-row${on ? " selected" : ""}" data-id="${b.id}" data-idx="${i}" tabindex="0" aria-label="${esc(title)}">
+      <td class="adm-c-sel"><input type="checkbox" class="adm-sel" ${on ? "checked" : ""} aria-label="انتخاب «${esc(title)}»"></td>
+      <td class="adm-c-cover"><span class="adm-thumb" style="background:${bg};color:${fg}">${thumb}</span></td>
+      <td class="adm-c-title"><b dir="auto">${esc(title)}</b><span class="adm-author" dir="auto">${esc(author || "نویسنده نامشخص")}</span>
+        <span class="adm-m"><span class="adm-chip fmt">${fmt}</span><span class="adm-st st-${st}">${STATUS_FA[st]}</span>${cat ? `<span class="adm-chip cat" dir="auto">${esc(cat)}</span>` : ""}${b.source === "api" ? '<span class="adm-chip api">API</span>' : ""}<span>${b.created_at ? fmtDate(b.created_at) : ""}</span><span>${admSize(b.size)}</span></span></td>
+      <td class="adm-c-fmt"><span class="adm-chip fmt">${fmt}</span></td>
+      <td class="adm-c-cat" dir="auto">${cat ? esc(cat) : '<span class="muted">—</span>'}</td>
+      <td class="adm-c-st"><span class="adm-st st-${st}">${STATUS_FA[st]}</span></td>
+      <td class="adm-c-up" dir="auto">${up}</td>
+      <td class="adm-c-date">${b.created_at ? fmtDate(b.created_at) : "—"}</td>
+      <td class="adm-c-size">${admSize(b.size)}</td>
+      <td class="adm-c-libs">${faNum(Number(b.in_libraries ?? b.readers) || 0)}</td></tr>`;
+  }
+  function admRenderBooks() {
+    const r = adm.data, f = adm.f;
+    if (!r) return;
+    const pages = Math.max(1, Math.ceil(r.total / r.per));
+    const label = `صفحهٔ ${faNum(f.page)} از ${faNum(pages)} · ${faNum(r.total)} کتاب`;
+    $("admBooksSummary").textContent = r.total ? label : "";
+    $("admPageInfo").textContent = label;
+    $("admPrev").disabled = f.page <= 1; $("admNext").disabled = f.page >= pages;
+    $("admPrev").closest(".adm-pager").hidden = r.total <= r.per && f.page <= 1;
+    const filtered = !!f.q || admActiveFilters(f) > 0;
+    $("admBooks").innerHTML = adm.books.map(admRowHtml).join("")
+      || `<tr class="adm-empty"><td colspan="10">${filtered ? 'کتابی با این جستجو و فیلترها پیدا نشد. <button type="button" class="link-button" data-adm-reset>پاک کردن جستجو و فیلترها</button>' : "کتابی روی سرور نیست."}</td></tr>`;
+    adm.last = -1;
+    admRenderSel();
+  }
+  function admClearSel() { adm.sel.clear(); adm.all = false; adm.last = -1; }
+  const admSelCount = () => adm.all ? (adm.data ? adm.data.total : 0) : adm.sel.size;
+  function admRenderSel() {
+    $("admBooks").querySelectorAll("tr[data-id]").forEach(tr => {
+      const on = adm.all || adm.sel.has(Number(tr.dataset.id));
+      tr.classList.toggle("selected", on);
+      const cb = tr.querySelector(".adm-sel"); if (cb) cb.checked = on;
+    });
+    const n = adm.books.length, k = adm.books.filter(b => adm.sel.has(b.id)).length, total = adm.data ? adm.data.total : 0;
+    const sp = $("admSelPage");
+    sp.disabled = !n; sp.checked = n > 0 && (adm.all || k === n); sp.indeterminate = !adm.all && k > 0 && k < n;
+    const info = $("admSelectInfo");
+    if (adm.all) {
+      info.innerHTML = `همهٔ ${faNum(total)} نتیجهٔ این جستجو انتخاب شد. <button type="button" class="link-button" data-adm-selall="0">لغو انتخاب</button>`;
+      info.hidden = false;
+    } else if (n && k === n && total > n) {
+      info.innerHTML = `${faNum(k)} کتاب این صفحه انتخاب شد. <button id="admSelectAll" type="button" class="link-button" data-adm-selall="1">انتخاب همهٔ ${faNum(total)} نتیجه</button>`;
+      info.hidden = false;
+    } else info.hidden = true;
+    admRenderBulk();
+  }
+  function admRenderBulk() {
+    const n = adm.tab === "books" ? admSelCount() : 0;
+    $("admBulkBar").hidden = !n;
+    $("admBulkCount").textContent = adm.all ? `همهٔ ${faNum(n)} نتیجه انتخاب شد` : `${faNum(n)} کتاب انتخاب شد`;
+  }
+  function admToggle(idx, on, range) {
+    if (adm.all) { adm.all = false; adm.books.forEach(b => adm.sel.add(b.id)); }
+    const from = range && adm.last >= 0 ? Math.min(adm.last, idx) : idx, to = range && adm.last >= 0 ? Math.max(adm.last, idx) : idx;
+    for (let i = from; i <= to; i++) { const b = adm.books[i]; if (b) { if (on) adm.sel.add(b.id); else adm.sel.delete(b.id); } }
+    adm.last = idx;
+    admRenderSel();
+  }
+  $("admBooks").addEventListener("mousedown", e => { if (e.shiftKey && e.target.closest(".adm-c-sel")) e.preventDefault(); }); // no text selection on shift-click
+  $("admBooks").addEventListener("click", e => {
+    if (e.target.closest("[data-adm-reset]")) { admResetFilters(true); return; }
+    const tr = e.target.closest("tr[data-id]");
+    if (!tr) return;
+    const idx = Number(tr.dataset.idx);
+    if (e.target.closest(".adm-c-sel")) {
+      const cb = tr.querySelector(".adm-sel");
+      if (e.target !== cb) cb.checked = !cb.checked;
+      admToggle(idx, cb.checked, e.shiftKey);
+      return;
+    }
+    admOpenDetail(Number(tr.dataset.id));
+  });
+  $("admBooks").addEventListener("keydown", e => {
+    const tr = e.target.closest("tr[data-id]");
+    if (!tr || e.target !== tr) return;
+    if (e.key === "Enter") { e.preventDefault(); admOpenDetail(Number(tr.dataset.id)); }
+    else if (e.key === " ") { e.preventDefault(); const cb = tr.querySelector(".adm-sel"); admToggle(Number(tr.dataset.idx), !cb.checked, e.shiftKey); }
+  });
+  $("admSelPage").addEventListener("change", e => {
+    adm.all = false; adm.last = -1;
+    if (e.target.checked) adm.books.forEach(b => adm.sel.add(b.id)); else adm.sel.clear();
+    admRenderSel();
+  });
+  $("admSelectInfo").addEventListener("click", e => {
+    const b = e.target.closest("[data-adm-selall]");
+    if (!b) return;
+    if (b.dataset.admSelall === "1") adm.all = true; else admClearSel();
+    admRenderSel();
+  });
+  $("admBulkClear").addEventListener("click", () => { admClearSel(); admRenderSel(); });
+
+  function admSetFilter(patch) {
+    Object.assign(adm.f, patch, { page: 1 });
+    admClearSel();
+    setHash(admHash(), false);
+    loadAdminBooks();
+  }
+  function admResetFilters(withSearch) {
+    admSetFilter({ status: "any", category: "", format: "", uploader: "", no_cover: false, ...(withSearch ? { q: "" } : {}) });
+    if (withSearch) $("admBookSearch").value = "";
+  }
+  let admSearchTimer = 0;
+  $("admBookSearch").addEventListener("input", () => {
+    clearTimeout(admSearchTimer);
+    admSearchTimer = setTimeout(() => {
+      const q = $("admBookSearch").value.replace(/\s+/g, " ").trim().slice(0, 200);
+      if (q !== adm.f.q) admSetFilter({ q });
+    }, 300);
+  });
+  $("admFStatus").addEventListener("change", e => admSetFilter({ status: e.target.value }));
+  $("admFCategory").addEventListener("change", e => admSetFilter({ category: e.target.value }));
+  $("admFFormat").addEventListener("change", e => admSetFilter({ format: e.target.value }));
+  $("admFUploader").addEventListener("change", e => admSetFilter({ uploader: e.target.value }));
+  $("admFNoCover").addEventListener("change", e => admSetFilter({ no_cover: e.target.checked }));
+  $("admSort").addEventListener("change", e => { const [sort, dir] = e.target.value.split(":"); admSetFilter({ sort, dir }); });
+  $("admFReset").addEventListener("click", () => admResetFilters(false));
+  function admGoPage(p) {
+    adm.f.page = Math.max(1, p);
+    admClearSel();
+    setHash(admHash(), false);
+    loadAdminBooks().then(() => {
+      const top = $("admPanel-books").getBoundingClientRect().top;
+      if (top < 0) window.scrollBy({ top: top - 60, behavior: "auto" });
+    });
+  }
+  $("admPrev").addEventListener("click", () => admGoPage(adm.f.page - 1));
+  $("admNext").addEventListener("click", () => admGoPage(adm.f.page + 1));
+  // Phones: the filters are a bottom sheet opened from «فیلترها» (with the number of active filters).
+  const admFiltersOpen = () => $("admFilters").classList.contains("open");
+  function openAdmFilters() {
+    $("admFilters").classList.add("open");
+    $("admFilters").setAttribute("role", "dialog"); $("admFilters").setAttribute("aria-modal", "true");
+    $("admFiltersBackdrop").hidden = false;
+    $("admFiltersOpen").setAttribute("aria-expanded", "true");
+    document.body.classList.add("adm-sheet-open");
+    $("admFStatus").focus({ preventScroll: true });
+  }
+  function closeAdmFilters(focus = true) {
+    if (!admFiltersOpen()) return;
+    $("admFilters").classList.remove("open");
+    $("admFilters").setAttribute("role", "group"); $("admFilters").removeAttribute("aria-modal");
+    $("admFiltersBackdrop").hidden = true;
+    $("admFiltersOpen").setAttribute("aria-expanded", "false");
+    document.body.classList.remove("adm-sheet-open");
+    if (focus) $("admFiltersOpen").focus({ preventScroll: true });
+  }
+  $("admFiltersOpen").addEventListener("click", () => (admFiltersOpen() ? closeAdmFilters() : openAdmFilters()));
+  $("admFiltersClose").addEventListener("click", () => closeAdmFilters());
+  $("admFApply").addEventListener("click", () => closeAdmFilters());
+  $("admFiltersBackdrop").addEventListener("click", () => closeAdmFilters());
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && admFiltersOpen()) { e.preventDefault(); closeAdmFilters(); } });
+  matchMedia("(max-width: 700px)").addEventListener("change", e => { if (!e.matches) closeAdmFilters(false); });
+
+  // Bulk actions: ids of the selected rows, or the current filter for «همهٔ N نتیجه».
+  const BULK_FA = { approve: "تأیید", reject: "رد", set_category: "تعیین دسته", clear_category: "حذف دسته",
+                    add_catalog: "افزودن به کتابخانهٔ عمومی", remove_catalog: "برداشتن از کتابخانهٔ عمومی", delete: "حذف" };
+  function admBulkMessage(r) {
+    const a = Number(r && r.affected) || 0, s = Number(r && r.skipped) || 0;
+    return `انجام شد: ${faNum(a)} کتاب` + (s ? ` · ${faNum(s)} مورد نادیده گرفته شد` : "");
+  }
+  $("admBulkBar").addEventListener("click", async e => {
+    const btn = e.target.closest("[data-bulk]");
+    if (!btn) return;
+    const action = btn.dataset.bulk, n = admSelCount();
+    if (!n || !BULK_FA[action]) return;
+    const body = { action };
+    if (adm.all) {
+      const p = admParams(adm.f, false), filter = Object.fromEntries(p);
+      if (filter.no_cover) filter.no_cover = 1;
+      body.filter = filter;
+    } else body.ids = [...adm.sel];
+    const cnt = faNum(n);
+    if (action === "set_category") {
+      const c = await askCategory(`تعیین دسته برای ${cnt} کتاب`);
+      if (c == null) return;
+      body.category = c;
+    }
+    const ask = {
+      delete: `${cnt} کتاب برای همه حذف شود؟ فایل، محل مطالعه و یادداشت‌های همهٔ کاربران پاک می‌شود و این کار برگشت‌پذیر نیست.`,
+      remove_catalog: `${cnt} کتاب از کتابخانهٔ عمومی برداشته شود؟ (از کتابخانهٔ شخصی کسانی که اضافه‌اش کرده‌اند حذف نمی‌شود)`,
+      reject: `${cnt} کتاب رد شود؟`,
+      clear_category: `دستهٔ ${cnt} کتاب حذف شود؟`,
+    }[action] || (adm.all ? `«${BULK_FA[action]}» برای همهٔ ${cnt} نتیجه انجام شود؟` : "");
+    if (ask && !confirm(ask)) return;
+    const buttons = [...$("admBulkBar").querySelectorAll("button")];
+    buttons.forEach(b => { b.disabled = true; });
+    try {
+      const r = await api("admin-bulk", { method: "POST", body });
+      showToast(admBulkMessage(r));
+      admClearSel(); catalogLoaded = false;
+      loadAdminStats();
+      await loadAdminBooks();
+    } catch (err) {
+      showToast(err instanceof ApiFail && err.status === 404 ? "کار گروهی هنوز روی سرور فعال نیست." : apiMessage(err));
+    } finally { buttons.forEach(b => { b.disabled = false; }); }
+  });
+
+  // Category prompt (bulk «تعیین دسته», review queue «C»): a small dialog with the known categories as suggestions.
+  let admCatResolve = null;
+  async function admEnsureCats() {
+    if (adm.cats) return;
+    try { const r = await admFetchBooks({ ...ADM_DEF }, 1); if (!adm.cats && r && r.facets) { adm.cats = (r.facets.categories || []).map(c => c.name); $("admCatList").innerHTML = adm.cats.map(c => `<option value="${esc(c)}"></option>`).join(""); } }
+    catch (_) {}
+  }
+  function askCategory(title, value = "") {
+    admEnsureCats();
+    return new Promise(res => {
+      admCatResolve = res;
+      $("admCatTitle").textContent = title;
+      $("admCatInput").value = value;
+      $("admCatDialog").showModal();
+      $("admCatInput").focus(); $("admCatInput").select();
+    });
+  }
+  $("admCatForm").addEventListener("submit", e => {
+    e.preventDefault();
+    const v = $("admCatInput").value.replace(/\s+/g, " ").trim().slice(0, 80);
+    if (!v) { $("admCatInput").focus(); return; }
+    const r = admCatResolve; admCatResolve = null;
+    $("admCatDialog").close();
+    if (r) r(v);
+  });
+  $("admCatClose").addEventListener("click", () => $("admCatDialog").close());
+  $("admCatDialog").addEventListener("close", () => { if (admCatResolve) { const r = admCatResolve; admCatResolve = null; r(null); } });
+
+  // ---- Book details: side panel (desktop) / bottom sheet (phones) ----
+  function admFindBook(id) { return adm.books.find(x => x.id === id) || adm.queue.list.find(x => x.id === id) || null; }
+  function admOpenDetail(id) {
+    const b = admFindBook(id);
+    if (!b) return;
+    adm.detail = b;
+    admRenderDetail();
+    if (!$("admDetail").open) $("admDetail").showModal();
+    $("admDetail").scrollTop = 0;
+  }
+  function admRenderDetail() {
+    const b = adm.detail;
+    if (!b) return;
+    const st = admStatus(b), title = String(b.title || "بدون عنوان"), cat = catOf(b);
+    const [bg, fg] = paletteFor(title || String(b.id));
+    const cover = $("admDetailCover");
+    cover.style.background = bg; cover.style.color = fg;
+    cover.innerHTML = b.has_cover ? `<img alt="" src="${API}?r=book-cover&id=${b.id}">` : `<div class="cover-name">${esc(title)}</div>`;
+    $("admDetailTitle").textContent = title;
+    $("admDetailChips").innerHTML = `<span class="adm-chip fmt">${b.format === "pdf" ? "PDF" : "EPUB"}</span><span class="adm-st st-${st}">${STATUS_FA[st]}</span>`
+      + (b.source === "api" ? '<span class="adm-chip api">API</span>' : "") + (cat ? `<span class="adm-chip cat" dir="auto">${esc(cat)}</span>` : "");
+    const info = [
+      ["بارگذار", b.source === "api" ? "API" : String(b.uploader_name || b.uploader || "")],
+      ["پیشنهاددهنده", String(b.submitter || "")],
+      ["تاریخ", b.created_at ? fmtDate(b.created_at) : b.submitted_at ? fmtDate(b.submitted_at) : ""],
+      ["حجم", b.size ? admSize(b.size) : ""],
+      ["در کتابخانه‌ها", b.in_libraries != null || b.readers != null ? `${faNum(Number(b.in_libraries ?? b.readers) || 0)} کاربر` : ""],
+    ].filter(([, v]) => v);
+    $("admDetailInfo").innerHTML = info.map(([k, v]) => `<div><dt>${k}</dt><dd dir="auto">${esc(v)}</dd></div>`).join("");
+    const acts = {
+      pending: [["approve", "تأیید و انتشار", "primary-button"], ["reject", "رد", "secondary-button"]],
+      approved: [["remove_catalog", "برداشتن از کتابخانهٔ عمومی", "secondary-button"]],
+      rejected: [["approve", "تأیید و انتشار", "primary-button"], ["remove_catalog", "برداشتن از کتابخانهٔ عمومی", "secondary-button"]],
+      none: [["add_catalog", "افزودن به کتابخانهٔ عمومی", "primary-button"]],
+    }[st];
+    $("admDetailStatus").innerHTML = acts.map(([a, l, c]) => `<button type="button" class="${c}" data-dst="${a}">${l}</button>`).join("");
+    const f = $("admDetailForm"), inCatalog = st !== "none";
+    for (const k of ADM_EDIT_FIELDS) f.elements[k].value = b[k] == null ? "" : String(b[k]);
+    f.elements.category.disabled = !inCatalog; f.elements.description.disabled = !inCatalog;
+    $("admDetailCatalogNote").hidden = inCatalog;
+    $("admDetailDownload").href = `${API}?r=book-file&id=${b.id}`;
+  }
+  $("admDetailClose").addEventListener("click", () => $("admDetail").close());
+  $("admDetail").addEventListener("close", () => { adm.detail = null; });
+  function admAfterChange() {
+    catalogLoaded = false;
+    loadAdminStats();
+    if (adm.tab === "books") loadAdminBooks(); else if (adm.tab === "queue") loadQueue();
+  }
+  $("admDetailStatus").addEventListener("click", async e => {
+    const btn = e.target.closest("[data-dst]"), b = adm.detail;
+    if (!btn || !b) return;
+    const act = btn.dataset.dst, st = admStatus(b);
+    if (act === "remove_catalog" && !confirm("این کتاب از کتابخانهٔ عمومی برداشته شود؟ (از کتابخانهٔ شخصی کسانی که اضافه‌اش کرده‌اند حذف نمی‌شود)")) return;
+    btn.disabled = true;
+    try {
+      if ((act === "approve" || act === "reject") && st === "pending") await api("catalog-review", { method: "POST", body: { book_id: b.id, approve: act === "approve" } });
+      else if (act === "remove_catalog") await api("catalog-remove", { method: "POST", body: { book_id: b.id } });
+      else await api("admin-bulk", { method: "POST", body: { action: act, ids: [b.id] } });
+      b.catalog_status = act === "approve" || act === "add_catalog" ? "approved" : act === "reject" ? "rejected" : null;
+      showToast({ approve: "تأیید شد و در کتابخانهٔ عمومی قرار گرفت.", reject: "رد شد.", remove_catalog: "از کتابخانهٔ عمومی برداشته شد.", add_catalog: "به کتابخانهٔ عمومی اضافه شد." }[act]);
+      admRenderDetail();
+      admAfterChange();
+    } catch (err) { showToast(err instanceof ApiFail && err.status === 404 && act === "add_catalog" ? "این کار هنوز روی سرور فعال نیست." : apiMessage(err)); btn.disabled = false; }
+  });
+  $("admDetailForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const b = adm.detail, f = e.target;
+    if (!b) return;
+    const v = k => f.elements[k].value.replace(k === "description" ? /[ \t]+/g : /\s+/g, " ").trim();
+    if (!v("title")) { f.elements.title.focus(); return; }
+    const inCatalog = admStatus(b) !== "none";
+    const fields = inCatalog ? ADM_EDIT_FIELDS : ["title", "author", "publisher", "published", "language"];
+    const body = { book_id: b.id };
+    for (const k of fields) body[k] = v(k);
+    $("admDetailSave").disabled = true;
+    try {
+      await api(inCatalog ? "catalog-update" : "book-meta", { method: "POST", body });
+      for (const k of fields) b[k] = body[k];
+      showToast("ذخیره شد.");
+      $("admDetail").close();
+      if (adm.tab === "books") admRenderBooks(); else if (adm.tab === "queue") renderQueue();
+      admAfterChange();
+    } catch (err) { showToast(apiMessage(err)); }
+    finally { $("admDetailSave").disabled = false; }
+  });
+  $("admDetailDelete").addEventListener("click", async () => {
+    const b = adm.detail;
+    if (!b || !confirm(`«${b.title}» برای همه حذف شود؟ این کار برگشت‌پذیر نیست.`)) return;
+    try {
+      await api("book-delete", { method: "POST", body: { book_id: b.id } });
+      showToast("کتاب حذف شد.");
+      $("admDetail").close();
+      adm.queue.list = adm.queue.list.filter(x => x.id !== b.id);
+      admAfterChange();
+    } catch (err) { showToast(apiMessage(err)); }
+  });
+  $("admDetailRead").addEventListener("click", () => { if (adm.detail) adminPreview(adm.detail, $("admDetailRead")); });
+  /** «مطالعهٔ آنلاین» from the admin: the same ephemeral preview as the catalog page (nothing is stored). */
+  async function adminPreview(b, btn) {
+    const label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "در حال دریافت…"; }
+    try {
+      const blob = await (await api("book-file", { query: `&id=${b.id}` })).blob();
+      const isPdf = b.format === "pdf" || (b.format !== "epub" && await sniffPdf(blob));
+      const file = new File([blob], `${b.title}.${isPdf ? "pdf" : "epub"}`, { type: isPdf ? "application/pdf" : "application/epub+zip" });
+      if ($("admDetail").open) $("admDetail").close();
+      await openReader(null, { id: `preview-${b.id}`, preview: true, catalogId: b.id, title: b.title, author: b.author || "نویسنده نامشخص",
+                               file, size: blob.size, language: b.language || "", ...(isPdf ? { format: "pdf" } : {}) });
+    } catch (err) {
+      console.warn("Admin preview failed:", err);
+      reportError("api", err, "admin:read-online");
+      showToast(err instanceof ApiFail ? apiMessage(err) : "بازکردن کتاب ناموفق بود.");
+    } finally { if (btn) { btn.disabled = false; btn.textContent = label; } }
+  }
+
+  // ---- Review queue: one pending book at a time (A/R/C, ←/J next, →/K previous) or the compact list ----
+  async function loadQueue() {
+    let r;
+    try { r = await api("catalog-pending"); }
+    catch (err) { $("admReview").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; $("pendingList").innerHTML = ""; return; }
+    const q = adm.queue, cur = q.list[q.idx];
+    q.list = (r.books || []).map(b => ({ ...b, catalog_status: "pending" }));
+    const keep = cur ? q.list.findIndex(b => b.id === cur.id) : -1;
+    q.idx = keep >= 0 ? keep : Math.min(q.idx, Math.max(0, q.list.length - 1));
+    renderQueue();
+  }
+  function renderQueue() {
+    const q = adm.queue, n = q.list.length, review = q.mode === "review";
+    $("admQueueCount").textContent = faNum(n);
+    setAdmBadge("queue", n);
+    document.querySelectorAll("[data-queue-mode]").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.queueMode === q.mode)));
+    $("admReview").hidden = !review;
+    $("admReviewKeys").hidden = !review || !n;
+    $("pendingList").closest(".adm-pending-block").hidden = review;
+    $("pendingList").innerHTML = n ? q.list.map(b => `<div class="admin-item">
+        <span><strong dir="auto">${esc(b.title)}</strong> — <span dir="auto">${esc(b.author || "")}</span> <span class="muted">· ${esc(b.submitter || "")} · ${fmtDate(b.submitted_at)}</span>${catOf(b) ? ` <span class="status-chip cat-chip">${esc(catOf(b))}</span>` : ""}
+        ${b.description ? `<br><span class="muted">${esc(b.description)}</span>` : ""}</span>
+        <span class="admin-row"><button class="secondary-button" type="button" data-pending-open="${b.id}">جزئیات</button>
+        <button class="secondary-button" type="button" data-review="${b.id}" data-approve="1">تأیید</button>
+        <button class="secondary-button" type="button" data-review="${b.id}" data-approve="0">رد</button></span></div>`).join("")
+      : '<p class="muted">موردی در انتظار نیست.</p>';
+    if (!n) { $("admReview").innerHTML = '<div class="adm-rv-empty"><p>موردی در انتظار نیست. 🎉</p></div>'; return; }
+    const b = q.list[q.idx], title = String(b.title || "بدون عنوان"), cat = catOf(b);
+    const [bg, fg] = paletteFor(title || String(b.id));
+    const rows = [
+      ["پیشنهاددهنده", esc(String(b.submitter || "").trim())],
+      ["تاریخ ارسال", b.submitted_at ? fmtDate(b.submitted_at) : ""],
+      ["ناشر", esc(String(b.publisher || "").trim())],
+      ["تاریخ انتشار", esc(faDigits(String(b.published || "").trim()))],
+      ["زبان", esc(langName(b.language))],
+      ["حجم", b.size ? admSize(b.size) : ""],
+    ].filter(([, v]) => v);
+    $("admReview").innerHTML = `<article class="adm-rv" data-rv-id="${b.id}">
+      <div class="book-cover-thumb adm-rv-cover" style="background:${bg};color:${fg}">${b.has_cover ? `<img alt="" src="${API}?r=book-cover&id=${b.id}">` : `<div class="cover-name">${esc(title)}</div>`}</div>
+      <div class="adm-rv-body">
+        <p class="adm-rv-pos muted small">کتاب ${faNum(q.idx + 1)} از ${faNum(n)}</p>
+        <h3 class="adm-rv-title" dir="auto">${esc(title)}</h3>
+        <p class="adm-rv-author" dir="auto">${esc(b.author || "نویسنده نامشخص")}</p>
+        <p class="adm-detail-chips"><span class="adm-chip fmt">${b.format === "pdf" ? "PDF" : "EPUB"}</span>${cat ? `<span class="adm-chip cat" dir="auto">${esc(cat)}</span>` : '<span class="adm-chip">بدون دسته</span>'}</p>
+        ${rows.length ? `<table class="meta-table adm-rv-meta">${rows.map(([k, v]) => `<tr><th scope="row">${k}</th><td dir="auto">${v}</td></tr>`).join("")}</table>` : ""}
+        ${b.description ? `<p class="adm-rv-desc" dir="auto">${esc(b.description)}</p>` : '<p class="muted small">بدون توضیح.</p>'}
+        <div class="adm-rv-actions">
+          <button type="button" class="primary-button" data-rv="approve" aria-keyshortcuts="A">تأیید <kbd>A</kbd></button>
+          <button type="button" class="secondary-button" data-rv="reject" aria-keyshortcuts="R">رد <kbd>R</kbd></button>
+          <button type="button" class="secondary-button" data-rv="category" aria-keyshortcuts="C">تعیین دسته <kbd>C</kbd></button>
+          <span class="adm-rv-nav"><button type="button" class="secondary-button" data-rv="prev" aria-keyshortcuts="K ArrowRight" ${q.idx ? "" : "disabled"}>→ قبلی</button>
+          <button type="button" class="secondary-button" data-rv="next" aria-keyshortcuts="J ArrowLeft" ${q.idx < n - 1 ? "" : "disabled"}>بعدی ←</button></span>
+        </div>
+        <div class="adm-rv-more"><button type="button" class="text-button" data-rv="preview">📖 پیش‌نمایش متن</button><button type="button" class="text-button" data-rv="details">ویرایش جزئیات</button><a class="text-button" href="${API}?r=book-file&id=${b.id}" download>دانلود</a></div>
+      </div></article>`;
+  }
+  async function queueAct(act, btn) {
+    const q = adm.queue, b = q.list[q.idx];
+    if (!b || q.busy) return;
+    if (act === "next") { if (q.idx < q.list.length - 1) { q.idx++; renderQueue(); } else showToast("این آخرین مورد صف است."); return; }
+    if (act === "prev") { if (q.idx > 0) { q.idx--; renderQueue(); } return; }
+    if (act === "preview") { adminPreview(b, btn); return; }
+    if (act === "details") { admOpenDetail(b.id); return; }
+    q.busy = true;
+    try {
+      if (act === "approve" || act === "reject") {
+        await api("catalog-review", { method: "POST", body: { book_id: b.id, approve: act === "approve" } });
+        q.list = q.list.filter(x => x.id !== b.id);
+        if (q.idx >= q.list.length) q.idx = Math.max(0, q.list.length - 1);
+        catalogLoaded = false;
+        showToast(act === "approve" ? `«${b.title}» تأیید شد.` : `«${b.title}» رد شد.`);
+        renderQueue();
+        loadAdminStats();
+      } else if (act === "category") {
+        const c = await askCategory(`دسته برای «${b.title}»`, catOf(b));
+        if (c == null) return;
+        await api("catalog-update", { method: "POST", body: { book_id: b.id, category: c } });
+        b.category = c; catalogLoaded = false;
+        showToast("دسته ثبت شد.");
+        renderQueue();
+      }
+    } catch (err) { showToast(apiMessage(err)); }
+    finally { q.busy = false; }
+  }
+  $("admReview").addEventListener("click", e => { const b = e.target.closest("[data-rv]"); if (b && !b.disabled) queueAct(b.dataset.rv, b); });
+  document.querySelector(".adm-queue-mode").addEventListener("click", e => {
+    const b = e.target.closest("[data-queue-mode]");
+    if (!b) return;
+    adm.queue.mode = b.dataset.queueMode;
+    renderQueue();
+  });
+  const QUEUE_KEYS = { KeyA: "approve", KeyR: "reject", KeyC: "category", KeyJ: "next", ArrowLeft: "next", KeyK: "prev", ArrowRight: "prev" };
+  document.addEventListener("keydown", e => {
+    if (adm.tab !== "queue" || adm.queue.mode !== "review" || $("viewAdmin").hidden || readerOpen() || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (document.querySelector("dialog[open]")) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    const act = QUEUE_KEYS[e.code];
+    if (!act) return;
+    e.preventDefault();
+    queueAct(act, act === "preview" ? null : document.querySelector(`#admReview [data-rv="${act}"]`));
+  });
+  $("pendingList").addEventListener("click", e => { const o = e.target.closest("[data-pending-open]"); if (o) admOpenDetail(Number(o.dataset.pendingOpen)); });
+
   // v8.4: client error reports, grouped by fingerprint (newest first), filter by app version.
   let errPage = 1;
   const fmtDateTime = s => new Date(s * 1000).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" });
@@ -3816,6 +4479,7 @@
     sel.value = r.versions.includes(keep) ? keep : "";
     $("errorsCount").textContent = fa(r.total);
     $("errorsCount").classList.toggle("off", r.total > 0);
+    if (!version) setAdmBadge("errors", r.total);
     const html = r.errors.map(e => `<div class="admin-item err-item" data-err-fp="${esc(e.fingerprint)}">
         <details class="err-details"><summary><strong class="err-msg" dir="auto">${esc(e.message)}</strong>
           <span class="status-chip">${esc(e.kind)}</span>${e.app_version ? ` <span class="status-chip cat-chip" dir="ltr">${esc(e.app_version)}</span>` : ""}
@@ -3849,6 +4513,7 @@
     try {
       await api("catalog-review", { method: "POST", body: { book_id: Number(btn.dataset.review), approve: btn.dataset.approve === "1" } });
       showToast(btn.dataset.approve === "1" ? "تأیید شد و در کتابخانهٔ عمومی قرار گرفت." : "رد شد.");
+      catalogLoaded = false;
       loadAdmin();
     } catch (err) { showToast(apiMessage(err)); }
   });
@@ -3860,28 +4525,6 @@
   $("viewAdmin").addEventListener("click", async e => {
     const t = e.target;
     if (t.closest("[data-invite-revoke]")) return adminAction("invite-revoke", { id: t.closest("[data-invite-revoke]").dataset.inviteRevoke }, "دعوت‌نامه باطل شد.");
-    if (t.closest("[data-cat-remove]")) {
-      if (!confirm("این کتاب از کتابخانهٔ عمومی برداشته شود؟ (از کتابخانهٔ شخصی کسانی که اضافه‌اش کرده‌اند حذف نمی‌شود)")) return;
-      return adminAction("catalog-remove", { book_id: Number(t.closest("[data-cat-remove]").dataset.catRemove) }, "از کتابخانهٔ عمومی برداشته شد.");
-    }
-    if (t.closest("[data-cat-edit]")) {
-      const id = Number(t.closest("[data-cat-edit]").dataset.catEdit);
-      let all;
-      try { all = (await api("catalog-all")).books; } catch (err) { showToast(apiMessage(err)); return; }
-      const b = all.find(x => x.id === id);
-      if (!b) return;
-      fillCategoryList(all.map(catOf));
-      const f = $("catalogEditForm");
-      f.dataset.bookId = String(id);
-      for (const k of CATALOG_EDIT_FIELDS) f.elements[k].value = b[k] == null ? "" : String(b[k]);
-      $("catalogEditDialog").showModal();
-      return;
-    }
-    if (t.closest("[data-book-delete]")) {
-      const el = t.closest("[data-book-delete]");
-      if (!confirm(`«${el.dataset.title}» برای همه حذف شود؟ این کار برگشت‌پذیر نیست.`)) return;
-      return adminAction("book-delete", { book_id: Number(el.dataset.bookDelete) }, "کتاب حذف شد.");
-    }
     const act = t.closest("[data-user-act]")?.dataset.userAct;
     if (act) {
       const userId = Number(t.closest("[data-user]").dataset.user);
@@ -3898,18 +4541,6 @@
         return adminAction("user-delete", { user_id: userId }, "کاربر حذف شد.");
       }
     }
-  });
-  const CATALOG_EDIT_FIELDS = ["title", "author", "description", "category", "publisher", "published", "language"];
-  $("catalogEditClose").addEventListener("click", () => $("catalogEditDialog").close());
-  $("catalogEditForm").addEventListener("submit", async e => {
-    e.preventDefault();
-    const f = e.target, body = { book_id: Number(f.dataset.bookId) };
-    for (const k of CATALOG_EDIT_FIELDS) body[k] = f.elements[k].value.replace(k === "description" ? /[ \t]+/g : /\s+/g, " ").trim();
-    if (!body.title) { f.elements.title.focus(); return; }
-    $("catalogEditSave").disabled = true;
-    const r = await adminAction("catalog-update", body, "ذخیره شد.");
-    $("catalogEditSave").disabled = false;
-    if (r) { $("catalogEditDialog").close(); catalogLoaded = false; }
   });
   $("createInvite").addEventListener("click", async () => {
     try {
