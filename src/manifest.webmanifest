@@ -2,7 +2,7 @@
   "id": "./",
   "name": "بُرگ — کتاب‌خوان فارسی",
   "short_name": "بُرگ",
-  "description": "کتاب‌خوان فارسی با پشتیبانی از EPUB",
+  "description": "کتاب‌خوان فارسی با پشتیبانی از EPUB و PDF",
   "lang": "fa",
   "dir": "rtl",
   "start_url": "./",
@@ -37,6 +37,8 @@
           "accept": [
             "application/epub+zip",
             ".epub",
+            "application/pdf",
+            ".pdf",
             "application/octet-stream"
           ]
         }
@@ -49,6 +51,9 @@
       "accept": {
         "application/epub+zip": [
           ".epub"
+        ],
+        "application/pdf": [
+          ".pdf"
         ]
       }
     }

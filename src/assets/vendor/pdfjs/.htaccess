@@ -1,0 +1,5 @@
+# v8.8: pdf.js is loaded as an ES module (import()) and runs in a module worker; browsers refuse both unless they are
+# served with a JavaScript MIME type, and older Apache mime.types do not know the .mjs extension.
+<IfModule mod_mime.c>
+  AddType text/javascript .mjs
+</IfModule>
