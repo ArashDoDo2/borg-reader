@@ -397,6 +397,7 @@ async def run(url):
         check("setup logs in as admin", await wait_synced(A) and await A.inner_text("#accountButton") == "مدیر بُرگ")
         check("admin sees catalog and admin tabs", await A.is_visible('[data-view="catalog"]') and await A.is_visible('[data-view="admin"]'))
         await A.click('[data-view="admin"]'); await A.wait_for_timeout(800)
+        await A.click('[data-admin-tab="invites"]'); await A.wait_for_timeout(300)  # v8.9: admin sub-tabs
         await A.fill("#inviteNote", "دوست"); await A.click("#createInvite"); await A.wait_for_timeout(800)
         code = (await A.inner_text("#inviteResult")).split(":")[-1].strip()
         check("admin creates an invite code", len(code) == 10, code)
@@ -587,16 +588,22 @@ async def run(url):
         E.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
         await E.click('[data-view="admin"]'); await E.wait_for_timeout(1500)
         check("admin stats shown", await E.locator("#adminStats .stat").count() == 7)  # v8.4: + client errors
+        await E.click('[data-admin-tab="settings"]'); await E.wait_for_timeout(600)  # v8.9: admin sub-tabs
         check("approval setting on by default", await E.is_checked("#settingApproval"))
         await E.click("#settingApproval"); await E.wait_for_timeout(1200)
         check("approval setting saved", not await E.is_checked("#settingApproval"))
         await E.click("#settingApproval"); await E.wait_for_timeout(1200)
+        await E.click('[data-admin-tab="users"]'); await E.wait_for_timeout(800)
         friend = E.locator('#userList .admin-item:has-text("friend@example.com")')
         await friend.locator('[data-user-act="disable"]').click(); await E.wait_for_timeout(1200)
         check("admin disables a user", await E.locator('#userList .admin-item:has-text("friend@example.com") .status-chip.off').count() == 1)
         await E.locator('#userList .admin-item:has-text("friend@example.com") [data-user-act="enable"]').click(); await E.wait_for_timeout(1200)
         check("admin re-enables the user", await E.locator('#userList .admin-item:has-text("friend@example.com") .status-chip.off').count() == 0)
-        check("whole catalog and server books listed", await E.locator("#catalogAdminList .admin-item").count() >= 1 and await E.locator("#booksAdminList .admin-item").count() >= 1)
+        await E.click('[data-admin-tab="books"]')  # v8.9: one paged books table replaces the catalog / all-books lists
+        try: await poll(lambda: _count_gt(E, "#admBooks tr.adm-row", 0), 8000)
+        except TimeoutError: pass
+        check("whole catalog and server books listed", await E.locator('#admBooks tr.adm-row:has-text("کتاب آزمایشی") .adm-c-st .st-approved').count() == 1
+              and "کتاب" in await E.inner_text("#admBooksSummary"), await E.inner_text("#admBooks"))
         allerrs = errsD + errsE
         check("v7.2 sync/admin: no JS errors", len(allerrs) == 0, str(allerrs[:3]))
         await ctxD.close(); await ctxE.close()
@@ -813,15 +820,18 @@ async def run(url):
         answers[:] = ["", ""]
         await H.click('#bookGrid .book-card:has-text("کتاب چهارم") .share-book'); await H.wait_for_timeout(1200)
         check("books shared to the catalog with a category", "عمومی" in await H.inner_text('#bookGrid .book-card:has-text("کتاب سوم") .book-badge'))
-        await H.click('[data-view="admin"]'); await H.wait_for_timeout(1500)
-        await H.click('#catalogAdminList .admin-item:has-text("کتاب آزمایشی") [data-cat-edit]'); await H.wait_for_timeout(500)
-        check("admin catalog editor opens with the current values", await H.is_visible("#catalogEditDialog") and await H.input_value('#catalogEditForm [name="title"]') == "کتاب آزمایشی")
-        await H.fill('#catalogEditForm [name="category"]', "رمان")
-        await H.fill('#catalogEditForm [name="publisher"]', "نشر تست")
-        await H.fill('#catalogEditForm [name="published"]', "1402")
-        await H.click("#catalogEditSave"); await H.wait_for_timeout(1500)
-        check("admin edit saves category/publisher/date", not await H.is_visible("#catalogEditDialog")
-              and await H.locator('#catalogAdminList .admin-item:has-text("کتاب آزمایشی") .cat-chip:has-text("رمان")').count() == 1)
+        await H.click('[data-view="admin"]'); await H.wait_for_timeout(800)
+        await H.click('[data-admin-tab="books"]')  # v8.9: the catalog editor is the book details panel of the books tab
+        try: await poll(lambda: _count_gt(H, '#admBooks tr.adm-row:has-text("کتاب آزمایشی")', 0), 8000)
+        except TimeoutError: pass
+        await H.click('#admBooks tr.adm-row:has-text("کتاب آزمایشی") .adm-c-title'); await H.wait_for_timeout(500)
+        check("admin catalog editor opens with the current values", await H.is_visible("#admDetail") and await H.input_value('#admDetailForm [name="title"]') == "کتاب آزمایشی")
+        await H.fill('#admDetailForm [name="category"]', "رمان")
+        await H.fill('#admDetailForm [name="publisher"]', "نشر تست")
+        await H.fill('#admDetailForm [name="published"]', "1402")
+        await H.click("#admDetailSave"); await H.wait_for_timeout(1500)
+        check("admin edit saves category/publisher/date", not await H.is_visible("#admDetail")
+              and await H.locator('#admBooks tr.adm-row:has-text("کتاب آزمایشی") .adm-c-cat:has-text("رمان")').count() == 1)
         check("v8.1 admin/upload: no JS errors", len(errsH) == 0, str(errsH[:3]))
         await ctxH.close()
 
@@ -1401,12 +1411,15 @@ async def run(url):
         await Y.goto(url); await Y.wait_for_timeout(800)
         await auth(Y, "login", email="admin@example.com", password="password1"); await wait_synced(Y)
         await Y.click('[data-view="admin"]')
+        await poll(lambda: _count_gt(Y, "#adminStats .stat", 0), 8000)
+        stats_ok = await Y.locator("#adminStats .stat-errors").is_visible() and "خطای کاربران" in await Y.inner_text("#adminStats")
+        await Y.click('[data-admin-tab="errors"]')  # v8.9: admin sub-tabs
         await poll(lambda: _count_gt(Y, "#errorsList .err-item", 0), 8000)
         item = Y.locator('#errorsList .err-item:has-text("borg-e2e-error 19")')
         check("v8.4 errors: admin sees the error with its count and version", await item.count() == 1 and await item.is_visible()
               and "× ۲" in await item.inner_text() and await item.locator(".cat-chip").count() == 1, (await Y.inner_text("#errorsList"))[:300])
-        check("v8.4 errors: error badge in the admin stats", await Y.locator("#adminStats .stat-errors").is_visible()
-              and "خطای کاربران" in await Y.inner_text("#adminStats"))
+        check("v8.4 errors: error badge in the admin stats and on the «خطاها» tab", stats_ok and await Y.is_visible("#admBadgeErrors")
+              and int((await Y.inner_text("#admBadgeErrors")).translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789"))) >= 2)
         await item.locator("summary").click(); await Y.wait_for_timeout(200)
         check("v8.4 errors: details expand to stack / user agent", await item.locator(".err-meta").is_visible()
               and "مرورگر" in await item.locator(".err-meta").inner_text() and await item.locator(".err-stack").is_visible(), await item.inner_text())
@@ -1876,7 +1889,7 @@ async def run(url):
               and "روی سرور ذخیره شد" in await K.inner_text("#cleanSyncState"), str(p2[-1:])[:300])
         await K.click("#cleanClose")
         # API keys in the admin panel
-        await K.click('[data-view="admin"]')
+        await K.click('[data-view="admin"]'); await K.click('[data-admin-tab="api"]')  # v8.9: admin sub-tabs
         try:
             await poll(lambda: _count_gt(K, "#apiTokenList .api-item", 1), 8000)
         except TimeoutError:
@@ -2270,6 +2283,326 @@ async def run(url):
         unexpected = [e for e in errsM if "Metadata extraction failed" not in e]  # the corrupt file is expected to fail
         check("v8.8.1 multi import: no unexpected JS errors", not unexpected, str(unexpected[:3]))
         await ctxM.close()
+        # 30. v8.9 admin: sub-tabs with #admin/<tab> deep links, a server-paged books table (filters in the hash),
+        # bulk actions (ids or the whole filter), details panel, review queue with keyboard shortcuts, phone layout.
+        # admin-books / admin-bulk / catalog-pending / catalog-review / catalog-update / book-meta are mocked. The login is real but uses
+        # the invited user from scenario 10 with role "admin" patched into login/me (the admin's e-mail has used up its login rate
+        # limit, 10 per 15 min, by now); the few admin-only routes this section touches are mocked too.
+        import json as _json30, time as _time30
+        from urllib.parse import urlparse as _up30, parse_qs as _pq30
+        ext30, errs30 = [], []
+        ctx30, Q = await new_ctx(b, url, ext30, errs30)
+        dlg30 = []
+        def _dlg30(d):
+            dlg30.append(d.message); asyncio.ensure_future(d.accept())
+        Q.on("dialog", _dlg30)
+        now30 = int(_time30.time())
+        CATS30 = ["رمان", "شعر", "تاریخ"]
+        books30 = [{"id": 9000 + i, "sha256": "", "size": 150000 + i * 5000, "title": f"کتاب نمونهٔ {i}", "author": f"نویسنده {i % 7}",
+                    "language": "fa", "publisher": "", "published": "", "has_cover": i % 10 == 0, "format": "pdf" if i % 9 == 0 else "epub",
+                    "catalog_status": [None, "approved", "pending", "rejected", "approved"][i % 5], "category": "" if i % 4 == 0 else CATS30[i % 3],
+                    "description": "توضیح" if i % 2 else "", "submitter": "مدیر بُرگ", "uploader_id": 1 if i % 3 else 0,
+                    "uploader_name": "مدیر بُرگ" if i % 3 else "", "created_at": now30 - i * 3600, "source": "app" if i % 3 else "api",
+                    "in_libraries": i % 4} for i in range(1, 231)]
+        pend30 = [{"id": 9501 + k, "sha256": "", "size": 200000, "title": t, "author": "نویسندهٔ صف", "language": "fa", "publisher": "نشر صف",
+                   "published": "1401", "has_cover": False, "format": "epub", "description": "یک توضیح کوتاه برای بررسی.", "category": "",
+                   "submitter": "دوست", "submitted_at": now30 - k * 60} for k, t in enumerate(["صف یکم", "صف دوم", "صف سوم"])]
+        m30 = {"calls": []}
+        PNG30 = bytes.fromhex("89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+                              "1f15c4890000000d49444154789c6360f8cfc0f01f0005000201e2b1e9a00000000049454e44ae426082")
+        def books_resp30(qs):
+            g = lambda k, d="": qs.get(k, [d])[0]
+            rows = books30
+            if g("q"): rows = [x for x in rows if g("q") in x["title"]]
+            if g("status") and g("status") != "any": rows = [x for x in rows if (x["catalog_status"] or "none") == g("status")]
+            if g("category"): rows = [x for x in rows if (x["category"] == "" if g("category") == "__none__" else x["category"] == g("category"))]
+            if g("format"): rows = [x for x in rows if x["format"] == g("format")]
+            if g("uploader"): rows = [x for x in rows if (x["source"] == "api" if g("uploader") == "api" else str(x["uploader_id"]) == g("uploader"))]
+            if g("no_cover") == "1": rows = [x for x in rows if not x["has_cover"]]
+            page, per = int(g("page", "1")), min(100, int(g("per", "50")))
+            st = {k: sum(1 for x in books30 if (x["catalog_status"] or "none") == k) for k in ("approved", "pending", "rejected", "none")}
+            return {"books": rows[(page - 1) * per: page * per], "total": len(rows), "page": page, "per": per,
+                    "facets": {"status": st, "categories": [{"name": c, "count": sum(1 for x in books30 if x["category"] == c)} for c in CATS30],
+                               "uploaders": [{"id": 1, "name": "مدیر بُرگ", "count": 153}], "formats": {"epub": 205, "pdf": 25}}}
+        async def api30(route):
+            req = route.request
+            pu = _up30(req.url); qs = _pq30(pu.query)
+            r = qs.get("r", [""])[0]
+            if r == "book-cover":
+                await route.fulfill(status=200, content_type="image/png", body=PNG30); return
+            body = None
+            if req.method == "POST":
+                try: body = _json30.loads(req.post_data or "null")
+                except Exception: body = None
+            m30["calls"].append({"m": req.method, "r": r, "qs": qs, "body": body, "csrf": req.headers.get("x-csrf-token")})
+            data = {"ok": True}
+            if r == "admin-books": data = books_resp30(qs)
+            elif r == "admin-bulk": data = {"affected": len(body.get("ids") or []) or 230, "skipped": 2 if body.get("filter") else 0}
+            elif r == "catalog-pending": data = {"books": pend30}
+            elif r == "admin-stats": data = {"users": 2, "active_users": 2, "books": 230, "storage_bytes": 52428800, "catalog_approved": 92,
+                                             "catalog_pending": len(pend30), "open_invites": 0, "client_errors": 0}
+            elif r == "settings": data = {"catalog_requires_approval": True}
+            elif r == "clean-rules": data = {"rules": []}
+            elif r == "users": data = {"users": []}
+            elif r == "catalog-review":
+                pend30[:] = [x for x in pend30 if x["id"] != body["book_id"]]
+                data = {"status": "approved" if body.get("approve") else "rejected"}
+            await route.fulfill(status=200, content_type="application/json", body=_json30.dumps(data))
+        MOCK30 = ("admin-books", "admin-bulk", "catalog-pending", "catalog-review", "catalog-update", "book-meta", "admin-stats", "settings", "clean-rules", "users")
+        await ctx30.route(lambda u: any(f"/api/?r={x}" in u for x in MOCK30) or ("/api/?r=book-cover" in u and "id=9" in u), api30)
+        async def as_admin30(route):
+            resp = await route.fetch()
+            try:
+                j = await resp.json()
+                if isinstance(j, dict) and j.get("user"): j["user"]["role"] = "admin"
+                await route.fulfill(response=resp, json=j)
+            except Exception:
+                await route.fulfill(response=resp)
+        await ctx30.route(lambda u: u.endswith("/api/?r=login") or u.endswith("/api/?r=me"), as_admin30)
+        calls30 = lambda r, m=None: [c for c in m30["calls"] if c["r"] == r and (m is None or c["m"] == m)]
+        last_books30 = lambda: (calls30("admin-books") or [{"qs": {}}])[-1]["qs"]
+        qv30 = lambda qs, k: qs.get(k, [None])[0]
+        await Q.goto(url); await Q.wait_for_timeout(800)
+        h30 = await (await Q.request.get(url + "api/?r=health")).json()
+        if h30.get("needs_setup"):  # this section run on its own
+            await auth(Q, "setup", setup_key=SETUP_KEY, name="مدیر بُرگ", email="admin@example.com", password="password1")
+        else:
+            await auth(Q, "login", email="friend@example.com", password="password2")
+        await wait_synced(Q)
+        # Tabs + overview
+        await Q.click('[data-view="admin"]')
+        try: await poll(lambda: _count_gt(Q, "#adminStats .stat", 6), 8000)
+        except TimeoutError: pass
+        tabs = await Q.locator("#adminTabs [role=tab]").all_inner_texts()
+        check("v8.9 admin: eight sub-tabs, overview first with the stats cards, hash #admin/overview",
+              len(tabs) == 8 and tabs[0].strip() == "نمای کلی" and "صف تأیید" in tabs[1] and "خطاها" in tabs[6]
+              and await Q.locator("#adminStats .stat").count() == 7 and await Q.is_visible("#adminShortcuts")
+              and await Q.evaluate("location.hash") == "#admin/overview", str(tabs))
+        check("v8.9 admin: only the active tab's data is loaded (no books/queue/keys requests on the overview)",
+              not calls30("admin-books") and not calls30("catalog-pending") and await Q.locator("#apiTokenList .api-item").count() == 0, str([c["r"] for c in m30["calls"]]))
+        # Books tab: 50 rows of 230, paging text, request params
+        await Q.click('[data-admin-tab="books"]')
+        try: await poll(lambda: _count_gt(Q, "#admBooks tr.adm-row", 49), 8000)
+        except TimeoutError: pass
+        q1 = last_books30()
+        summ = await Q.inner_text("#admBooksSummary")
+        check("v8.9 books: 50 rows from a 230-book result, «صفحهٔ ۱ از ۵ · ۲۳۰ کتاب», request page=1 per=50 sort=date desc",
+              await Q.locator("#admBooks tr.adm-row").count() == 50 and "صفحهٔ ۱ از ۵ · ۲۳۰ کتاب" in summ
+              and qv30(q1, "page") == "1" and qv30(q1, "per") == "50" and qv30(q1, "sort") == "date" and qv30(q1, "dir") == "desc"
+              and await Q.evaluate("location.hash") == "#admin/books", f"{summ} {q1}")
+        row0 = Q.locator("#admBooks tr.adm-row").first
+        r0 = await row0.inner_text()
+        check("v8.9 books: a row shows title, author, format chip, category, status, uploader, Persian date, size, libraries",
+              "کتاب نمونهٔ 1" in r0 and "نویسنده" in r0 and "EPUB" in r0 and "شعر" in r0 and "عمومی" in r0
+              and "مدیر بُرگ" in r0 and "KB" in r0 and await row0.locator(".adm-c-date").inner_text() != "" and await row0.locator(".adm-thumb").is_visible(), r0)
+        api_row = Q.locator('#admBooks tr[data-id="9003"]')
+        check("v8.9 books: books sent with an API key show an «API» chip as uploader; lazy cover images",
+              await api_row.locator(".adm-c-up .adm-chip.api").inner_text() == "API"
+              and await Q.locator('#admBooks tr[data-id="9010"] img[loading="lazy"]').count() == 1)
+        # Next page
+        await Q.click("#admNext")
+        try: await poll(lambda: _contains(Q, "#admBooksSummary", "صفحهٔ ۲ از ۵"), 6000)
+        except TimeoutError: pass
+        check("v8.9 books: «بعدی» loads page 2 from the server and puts it in the hash",
+              qv30(last_books30(), "page") == "2" and "صفحهٔ ۲ از ۵" in await Q.inner_text("#admBooksSummary")
+              and "page=2" in await Q.evaluate("location.hash") and await Q.locator('#admBooks tr[data-id="9051"]').count() == 1)
+        # Debounced search
+        n_before = len(calls30("admin-books"))
+        await Q.click("#admBookSearch"); await Q.keyboard.type("نمونهٔ 12", delay=40); await Q.wait_for_timeout(700)
+        sq = calls30("admin-books")[n_before:]
+        check("v8.9 books: search is debounced (one request after typing) and sends q, back on page 1",
+              len(sq) == 1 and qv30(sq[0]["qs"], "q") == "نمونهٔ 12" and qv30(sq[0]["qs"], "page") == "1"
+              and await Q.locator("#admBooks tr.adm-row").count() == 11, f"{len(sq)} {sq[-1]['qs'] if sq else ''}")
+        await Q.fill("#admBookSearch", ""); await Q.wait_for_timeout(600)
+        # Filters
+        await Q.select_option("#admFStatus", "pending"); await Q.wait_for_timeout(500)
+        await Q.select_option("#admFCategory", "__none__"); await Q.wait_for_timeout(500)
+        await Q.select_option("#admFFormat", "epub"); await Q.wait_for_timeout(500)
+        await Q.select_option("#admFUploader", "api"); await Q.wait_for_timeout(500)
+        await Q.check("#admFNoCover"); await Q.wait_for_timeout(500)
+        await Q.select_option("#admSort", "title:asc"); await Q.wait_for_timeout(600)
+        fq = last_books30()
+        check("v8.9 books: filters and sort are sent as status/category(__none__)/format/uploader(api)/no_cover/sort/dir",
+              qv30(fq, "status") == "pending" and qv30(fq, "category") == "__none__" and qv30(fq, "format") == "epub" and qv30(fq, "uploader") == "api"
+              and qv30(fq, "no_cover") == "1" and qv30(fq, "sort") == "title" and qv30(fq, "dir") == "asc" and qv30(fq, "q") is None, str(fq))
+        cat_opts = await Q.locator("#admFCategory option").all_inner_texts()
+        up_opts = await Q.locator("#admFUploader option").all_inner_texts()
+        check("v8.9 books: category and uploader filters come from the facets (incl. «بدون دسته» and «API»)",
+              "بدون دسته" in cat_opts and any("رمان" in o for o in cat_opts) and "API" in up_opts and any("مدیر بُرگ" in o for o in up_opts), f"{cat_opts} {up_opts}")
+        hash30 = await Q.evaluate("location.hash")
+        await Q.reload(); await Q.wait_for_timeout(600)
+        try: await poll(lambda: _count_gt(Q, "#admBooks tr.adm-row, #admBooks tr.adm-empty", 0), 10000)
+        except TimeoutError: pass
+        rq = last_books30()
+        check("v8.9 books: refresh keeps the tab and every filter (hash query → controls → request)",
+              await Q.evaluate("location.hash") == hash30 and await Q.input_value("#admFStatus") == "pending" and await Q.input_value("#admFCategory") == "__none__"
+              and await Q.is_checked("#admFNoCover") and await Q.input_value("#admSort") == "title:asc" and qv30(rq, "uploader") == "api"
+              and await Q.get_attribute("#admTab-books", "aria-selected") == "true", f"{hash30} {rq}")
+        await Q.click("#admFReset"); await Q.wait_for_timeout(500)
+        await Q.select_option("#admSort", "date:desc"); await Q.wait_for_timeout(600)
+        check("v8.9 books: «پاک کردن فیلترها» goes back to all 230 books", "۲۳۰ کتاب" in await Q.inner_text("#admBooksSummary")
+              and qv30(last_books30(), "status") is None)
+        # Selection: shift-click range, page, all results
+        await Q.locator('#admBooks tr.adm-row').nth(1).locator(".adm-sel").click()
+        await Q.locator('#admBooks tr.adm-row').nth(5).locator(".adm-sel").click(modifiers=["Shift"])
+        check("v8.9 bulk: shift-click selects the range (5 rows) and the bar shows the count",
+              await Q.locator("#admBooks tr.adm-row.selected").count() == 5 and await Q.is_visible("#admBulkBar")
+              and "۵ کتاب انتخاب شد" in await Q.inner_text("#admBulkCount"))
+        await Q.click('#admBulkBar [data-bulk="set_category"]'); await Q.wait_for_timeout(300)
+        cat_dialog = await Q.is_visible("#admCatDialog")
+        await Q.fill("#admCatInput", "رمان"); await Q.press("#admCatInput", "Enter")
+        try: await poll(lambda: asyncio.sleep(0, len(calls30("admin-bulk")) >= 1), 5000)
+        except TimeoutError: pass
+        bc = calls30("admin-bulk")
+        check("v8.9 bulk: «تعیین دسته» asks in a dialog (categories suggested) and sends ids + category",
+              cat_dialog and len(bc) == 1 and bc[0]["body"]["action"] == "set_category" and bc[0]["body"]["category"] == "رمان"
+              and sorted(bc[0]["body"]["ids"]) == [9002, 9003, 9004, 9005, 9006] and "filter" not in bc[0]["body"] and bool(bc[0]["csrf"])
+              and await Q.locator("#admCatList option").count() == 3, str(bc[:1]))
+        try: await poll(lambda: _contains(Q, "#toast", "انجام شد"), 4000)
+        except TimeoutError: pass
+        check("v8.9 bulk: toast with the affected count, selection cleared, page reloaded",
+              "انجام شد: ۵ کتاب" in await Q.inner_text("#toast") and not await Q.is_visible("#admBulkBar"), await Q.inner_text("#toast"))
+        await Q.check("#admSelPage"); await Q.wait_for_timeout(200)
+        check("v8.9 bulk: «انتخاب همهٔ این صفحه» selects 50 and offers «انتخاب همهٔ ۲۳۰ نتیجه»",
+              await Q.locator("#admBooks tr.adm-row.selected").count() == 50 and "۵۰ کتاب انتخاب شد" in await Q.inner_text("#admBulkCount")
+              and await Q.is_visible("#admSelectAll") and "۲۳۰" in await Q.inner_text("#admSelectAll"))
+        await Q.click('#admBulkBar [data-bulk="approve"]')
+        try: await poll(lambda: asyncio.sleep(0, len(calls30("admin-bulk")) >= 2), 5000)
+        except TimeoutError: pass
+        bc = calls30("admin-bulk")
+        check("v8.9 bulk: approve the page sends its 50 ids (no confirmation needed)",
+              len(bc) == 2 and bc[1]["body"]["action"] == "approve" and len(bc[1]["body"]["ids"]) == 50 and len(dlg30) == 0, str(len(bc)))
+        await Q.select_option("#admFStatus", "approved"); await Q.wait_for_timeout(600)
+        await Q.check("#admSelPage"); await Q.wait_for_timeout(200)
+        total_appr = sum(1 for x in books30 if x["catalog_status"] == "approved")
+        await Q.click("#admSelectAll"); await Q.wait_for_timeout(200)
+        sel_all_txt = await Q.inner_text("#admBulkCount")
+        await Q.click('#admBulkBar [data-bulk="delete"]')
+        try: await poll(lambda: asyncio.sleep(0, len(calls30("admin-bulk")) >= 3), 5000)
+        except TimeoutError: pass
+        bc = calls30("admin-bulk")
+        fa_total = str(total_appr).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+        check("v8.9 bulk: «انتخاب همهٔ N نتیجه» + delete confirms with the exact count and sends the filter instead of ids",
+              f"همهٔ {fa_total} نتیجه" in sel_all_txt and len(dlg30) == 1 and fa_total in dlg30[0] and "حذف" in dlg30[0]
+              and len(bc) == 3 and bc[2]["body"]["action"] == "delete" and "ids" not in bc[2]["body"] and bc[2]["body"].get("filter") == {"status": "approved"},
+              f"{sel_all_txt} {dlg30} {bc[-1:]}")
+        try: await poll(lambda: _contains(Q, "#toast", "نادیده"), 4000)
+        except TimeoutError: pass
+        check("v8.9 bulk: the toast reports skipped items too", "۲ مورد نادیده گرفته شد" in await Q.inner_text("#toast"), await Q.inner_text("#toast"))
+        await Q.select_option("#admFStatus", "any"); await Q.wait_for_timeout(600)
+        # Details panel (desktop side panel), save through catalog-update / book-meta
+        await Q.locator('#admBooks tr[data-id="9002"] .adm-c-title').click(); await Q.wait_for_timeout(400)
+        dg = await Q.evaluate("() => { const r = document.getElementById('admDetail').getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, h: r.height, w: r.width, vh: innerHeight }; }")
+        check("v8.9 details: clicking a row opens a side panel (left edge in RTL, full height) with the book's fields",
+              await Q.is_visible("#admDetail") and dg["l"] <= 1 and dg["w"] <= 470 and dg["h"] >= dg["vh"] - 2
+              and await Q.input_value('#admDetailForm [name="title"]') == "کتاب نمونهٔ 2" and "در انتظار" in await Q.inner_text("#admDetailChips")
+              and await Q.locator('#admDetailStatus [data-dst="approve"]').is_visible(), str(dg))
+        await Q.fill('#admDetailForm [name="category"]', "تاریخ")
+        await Q.fill('#admDetailForm [name="publisher"]', "نشر نمونه")
+        await Q.click("#admDetailSave")
+        try:
+            await poll(lambda: asyncio.sleep(0, len(calls30("catalog-update")) >= 1), 5000)
+            await poll(lambda: Q.is_hidden("#admDetail"), 4000)
+        except TimeoutError: pass
+        cu = calls30("catalog-update")
+        check("v8.9 details: «ذخیره» sends every field through catalog-update and closes the panel",
+              len(cu) == 1 and cu[0]["body"]["book_id"] == 9002 and cu[0]["body"]["category"] == "تاریخ" and cu[0]["body"]["publisher"] == "نشر نمونه"
+              and cu[0]["body"]["title"] == "کتاب نمونهٔ 2" and not await Q.is_visible("#admDetail"), str(cu))
+        await Q.locator('#admBooks tr[data-id="9005"] .adm-c-title').click(); await Q.wait_for_timeout(300)
+        none_ok = await Q.is_disabled('#admDetailForm [name="category"]') and await Q.is_visible('#admDetailStatus [data-dst="add_catalog"]')
+        await Q.fill('#admDetailForm [name="author"]', "نویسندهٔ تازه"); await Q.click("#admDetailSave")
+        try: await poll(lambda: asyncio.sleep(0, len(calls30("book-meta")) >= 1), 5000)
+        except TimeoutError: pass
+        bm = [c for c in calls30("book-meta") if (c["body"] or {}).get("book_id") == 9005]
+        check("v8.9 details: a book outside the public catalog saves through book-meta (no category/description) and offers «افزودن به کتابخانهٔ عمومی»",
+              none_ok and len(bm) == 1 and bm[0]["body"]["author"] == "نویسندهٔ تازه" and "category" not in bm[0]["body"], str(bm))
+        # Review queue with keyboard shortcuts
+        await Q.click('[data-admin-tab="queue"]')
+        try: await poll(lambda: _contains(Q, "#admReview", "صف یکم"), 6000)
+        except TimeoutError: pass
+        check("v8.9 queue: review mode shows one pending book (cover, metadata, description, uploader) with shortcut hints",
+              "کتاب ۱ از ۳" in await Q.inner_text("#admReview") and "دوست" in await Q.inner_text("#admReview") and "یک توضیح کوتاه" in await Q.inner_text("#admReview")
+              and await Q.is_visible("#admReviewKeys") and await Q.locator("#admReview kbd").count() >= 3 and await Q.evaluate("location.hash") == "#admin/queue")
+        await Q.keyboard.press("j"); await Q.wait_for_timeout(150)
+        j_ok = "کتاب ۲ از ۳" in await Q.inner_text("#admReview") and "صف دوم" in await Q.inner_text("#admReview")
+        await Q.keyboard.press("k"); await Q.wait_for_timeout(150)
+        k_ok = "صف یکم" in await Q.inner_text("#admReview")
+        await Q.keyboard.press("ArrowLeft"); await Q.wait_for_timeout(150)
+        al_ok = "صف دوم" in await Q.inner_text("#admReview")
+        await Q.keyboard.press("ArrowRight"); await Q.wait_for_timeout(150)
+        check("v8.9 queue: J / ← next, K / → previous", j_ok and k_ok and al_ok and "صف یکم" in await Q.inner_text("#admReview"))
+        await Q.keyboard.press("a")
+        try: await poll(lambda: _contains(Q, "#admReview", "کتاب ۱ از ۲"), 4000)
+        except TimeoutError: pass
+        rv = calls30("catalog-review")
+        check("v8.9 queue: A approves the shown book (catalog-review) and the next one appears",
+              len(rv) == 1 and rv[0]["body"] == {"book_id": 9501, "approve": True} and "صف دوم" in await Q.inner_text("#admReview")
+              and await Q.inner_text("#admQueueCount") == "۲", str(rv))
+        await Q.keyboard.press("c"); await Q.wait_for_timeout(300)
+        c_open = await Q.is_visible("#admCatDialog")
+        await Q.fill("#admCatInput", "شعر"); await Q.press("#admCatInput", "Enter")
+        try: await poll(lambda: _contains(Q, "#admReview .adm-detail-chips", "شعر"), 4000)
+        except TimeoutError: pass
+        cu = calls30("catalog-update")
+        check("v8.9 queue: C opens the category dialog and saves via catalog-update", c_open and cu[-1]["body"] == {"book_id": 9502, "category": "شعر"}
+              and "شعر" in await Q.inner_text("#admReview"), str(cu[-1:]))
+        await Q.keyboard.press("r")
+        try: await poll(lambda: _contains(Q, "#admReview", "کتاب ۱ از ۱"), 4000)
+        except TimeoutError: pass
+        rv = calls30("catalog-review")
+        check("v8.9 queue: R rejects", len(rv) == 2 and rv[1]["body"] == {"book_id": 9502, "approve": False} and "صف سوم" in await Q.inner_text("#admReview"), str(rv))
+        await Q.click('[data-queue-mode="list"]'); await Q.wait_for_timeout(200)
+        check("v8.9 queue: the compact list view lists the pending books with approve/reject",
+              await Q.is_visible("#pendingList") and not await Q.is_visible("#admReview") and await Q.locator("#pendingList [data-review]").count() == 2)
+        await Q.click('[data-queue-mode="review"]')
+        # Back / forward between tabs, deep link on a fresh load
+        await Q.click('[data-admin-tab="users"]'); await Q.wait_for_timeout(500)
+        await Q.go_back(); await Q.wait_for_timeout(500)
+        back_ok = await Q.get_attribute("#admTab-queue", "aria-selected") == "true" and await Q.is_visible("#admReview")
+        await Q.goto(url + "#admin/settings"); await Q.reload(); await Q.wait_for_timeout(300)
+        try: await poll(lambda: Q.is_visible("#settingApproval"), 8000)
+        except TimeoutError: pass
+        check("v8.9 admin: back returns to the previous tab; a #admin/settings link opens that tab directly",
+              back_ok and await Q.is_visible("#settingApproval") and await Q.get_attribute("#admTab-settings", "aria-selected") == "true"
+              and not await Q.is_visible("#admBooks"))
+        sticky = await Q.evaluate("getComputedStyle(document.getElementById('adminTabs')).position")
+        check("v8.9 admin: the sub-navigation is sticky", sticky == "sticky", sticky)
+        # Phone: list rows, filters sheet, details sheet, no horizontal overflow
+        await Q.set_viewport_size({"width": 390, "height": 844}); await Q.wait_for_timeout(200)
+        await Q.click('[data-admin-tab="books"]')
+        try: await poll(lambda: _count_gt(Q, "#admBooks tr.adm-row", 49), 8000)
+        except TimeoutError: pass
+        mg = await Q.evaluate("""() => { const tr = document.querySelector('#admBooks tr.adm-row'), r = tr.getBoundingClientRect();
+            const vis = s => { const e = tr.querySelector(s); return e && e.getBoundingClientRect().width > 0; };
+            return { h: r.height, w: r.width, l: r.left, rr: r.right, disp: getComputedStyle(tr).display, head: document.querySelector('.adm-table thead').getBoundingClientRect().height,
+                     date: vis('.adm-c-date'), meta: vis('.adm-m'), sel: tr.querySelector('.adm-sel').getBoundingClientRect().width,
+                     sw: document.documentElement.scrollWidth, filt: document.getElementById('admFilters').getBoundingClientRect().height }; }""")
+        check("v8.9 mobile 390px: compact list rows (checkbox, cover, title + chips), no table header, filters folded, no horizontal scroll",
+              mg["disp"] == "grid" and mg["h"] < 100 and mg["head"] == 0 and not mg["date"] and mg["meta"] and mg["sel"] >= 20
+              and mg["rr"] <= 391 and mg["l"] >= -1 and mg["sw"] <= 390 and mg["filt"] == 0 and await Q.is_visible("#admFiltersOpen"), str(mg))
+        await Q.click("#admFiltersOpen"); await Q.wait_for_timeout(400)
+        sh = await Q.evaluate("() => { const r = document.getElementById('admFilters').getBoundingClientRect(); return { t: r.top, b: r.bottom, l: r.left, r: r.right, vh: innerHeight }; }")
+        check("v8.9 mobile: «فیلترها» opens a bottom sheet with the filters", await Q.is_visible("#admFStatus") and abs(sh["b"] - sh["vh"]) <= 2
+              and sh["l"] >= -1 and sh["r"] <= 391 and sh["t"] > 100 and await Q.is_visible("#admFApply"), str(sh))
+        await Q.select_option("#admFStatus", "rejected"); await Q.wait_for_timeout(500)
+        await Q.click("#admFApply"); await Q.wait_for_timeout(400)
+        check("v8.9 mobile: a filter chosen in the sheet is sent; the button shows the active-filter count",
+              qv30(last_books30(), "status") == "rejected" and not await Q.is_visible("#admFStatus")
+              and await Q.inner_text("#admFilterCount") == "۱" and await Q.is_visible("#admFilterCount"))
+        await Q.locator("#admBooks tr.adm-row").first.locator(".adm-sel").click(); await Q.wait_for_timeout(200)
+        bb = await Q.evaluate("() => { const r = document.getElementById('admBulkBar').getBoundingClientRect(); return { l: r.left, r: r.right, b: r.bottom, vh: innerHeight, sw: document.documentElement.scrollWidth }; }")
+        check("v8.9 mobile: the bulk bar fits the screen at the bottom", await Q.is_visible("#admBulkBar") and bb["l"] >= 0 and bb["r"] <= 390 and bb["b"] <= bb["vh"] and bb["sw"] <= 390, str(bb))
+        await Q.click("#admBulkClear")
+        await Q.locator("#admBooks tr.adm-row").first.locator(".adm-c-title").click(); await Q.wait_for_timeout(400)
+        ds = await Q.evaluate("() => { const r = document.getElementById('admDetail').getBoundingClientRect(); return { t: r.top, b: r.bottom, l: r.left, r: r.right, vh: innerHeight }; }")
+        check("v8.9 mobile: the details panel is a bottom sheet", await Q.is_visible("#admDetail") and abs(ds["b"] - ds["vh"]) <= 2 and ds["l"] >= -1 and ds["r"] <= 391, str(ds))
+        await Q.click("#admDetailClose")
+        await Q.click('[data-admin-tab="queue"]'); await Q.wait_for_timeout(600)
+        qsw = await Q.evaluate("() => ({ sw: document.documentElement.scrollWidth, r: document.querySelector('#admReview .adm-rv').getBoundingClientRect().right })")
+        check("v8.9 mobile: review card and tabs fit (no horizontal page scroll)", qsw["sw"] <= 390 and qsw["r"] <= 391, str(qsw))
+        await Q.set_viewport_size({"width": 1280, "height": 800})
+        check("v8.9 admin: no JS errors, no external requests", not errs30 and not ext30, str(errs30[:3] + ext30[:3]))
+        await ctx30.close()
         # 31. v8.9 catalog paging: the public catalog is loaded page by page (server mocked: 130 books), search/filters/sort
         # go to the server, scroll position survives a book page, similar books need no full list, old servers still work
         import json as _json, re as _re
@@ -2316,7 +2649,8 @@ async def run(url):
             await pg.goto(url); await pg.wait_for_timeout(800)
             await pg.click("#accountButton"); await pg.wait_for_timeout(500)
             await pg.click('[data-auth="login"]')
-            await pg.fill('#authForm [name="email"]', "admin@example.com"); await pg.fill('#authForm [name="password"]', "password1")
+            # The invited user: the admin's e-mail has used up its login rate limit (10 / 15 min) by this point
+            await pg.fill('#authForm [name="email"]', "friend@example.com"); await pg.fill('#authForm [name="password"]', "password2")
             await pg.click("#authSubmit")
             await poll(lambda: pg.is_visible('[data-view="catalog"]'), 15000)
             await pg.wait_for_timeout(500)

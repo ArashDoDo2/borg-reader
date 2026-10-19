@@ -862,3 +862,203 @@ body.drop-active #app{outline:3px dashed var(--green2);outline-offset:-10px}
  .catalog-format button{flex:1;min-height:40px}
  .catalog-sort{flex:0 1 140px;min-height:40px;font-size:16px}
 }
+
+/* v8.9 admin */
+/* Sub-navigation: one sticky row of tabs (scrolls sideways on phones), badges for the queue and errors. */
+.admin-tabs{position:sticky;top:0;z-index:20;display:flex;gap:4px;align-items:center;margin:0 0 18px;padding:8px 0;background:var(--bg);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.admin-tabs::-webkit-scrollbar{display:none}
+.admin-tabs [role=tab]{flex-shrink:0;display:inline-flex;align-items:center;gap:6px;border:1px solid transparent;background:transparent;color:var(--muted);border-radius:11px;padding:7px 12px;font-weight:700;font-size:13px;min-height:38px;white-space:nowrap}
+.admin-tabs [role=tab]:hover{color:var(--ink);background:var(--paper)}
+.admin-tabs [role=tab][aria-selected="true"]{background:var(--paper);color:var(--green2);border-color:var(--line);box-shadow:0 2px 8px #1e3a2b0d}
+.adm-badge{display:inline-block;min-width:19px;height:19px;padding:0 5px;border-radius:10px;background:var(--green2);color:#fff;font-size:10.5px;line-height:19px;text-align:center;font-weight:700}
+.adm-badge.warn{background:#b3412e}
+.adm-badge[hidden]{display:none}
+body.dark .adm-badge{color:#10201a}
+body.dark .adm-badge.warn{background:#e0876f}
+.adm-panel[hidden]{display:none}
+.adm-shortcuts{display:flex;flex-wrap:wrap;gap:8px}
+.adm-shortcuts .secondary-button{padding:9px 14px}
+#viewAdmin kbd{display:inline-block;min-width:1.6em;padding:0 4px;border:1px solid currentColor;border-radius:5px;font:700 10px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;text-align:center;opacity:.75;direction:ltr}
+
+/* Books: toolbar, inline filters (desktop) */
+.adm-toolbar{display:flex;gap:10px;align-items:center}
+.adm-search{flex:1;min-width:0}
+.adm-filters-open{display:none;flex:none;min-height:45px}
+.adm-filters{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-end;margin:12px 0 10px}
+.adm-field{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted)}
+.adm-field .admin-input{min-width:0;flex:none;width:auto;max-width:220px;padding:7px 9px;font-size:13px}
+.adm-nocover{padding-bottom:8px;font-size:12.5px}
+.adm-filter-actions{display:flex;gap:8px;align-items:center;padding-bottom:4px}
+.adm-filter-actions .text-button[disabled]{opacity:.45;cursor:default}
+.adm-sheet-head,.adm-apply,.adm-backdrop{display:none}
+.adm-summary-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:4px 0 8px}
+.adm-selpage{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;cursor:pointer}
+.adm-selpage input,.adm-sel{width:18px;height:18px;margin:0;cursor:pointer}
+.adm-summary{margin:0;font-size:12.5px}
+.adm-select-info{margin:0 0 8px;padding:7px 12px;border-radius:10px;background:var(--mint);font-size:12.5px}
+.adm-select-info[hidden]{display:none}
+
+/* Books: compact table */
+.adm-table-wrap{background:var(--paper);border:1px solid var(--line);border-radius:14px;overflow-x:auto}
+.adm-table{width:100%;border-collapse:collapse;font-size:12.5px}
+.adm-table .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.adm-table th{text-align:start;font-size:11px;font-weight:600;color:var(--muted);padding:9px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.adm-table td{padding:6px 8px;border-top:1px solid var(--line);vertical-align:middle;white-space:nowrap}
+.adm-table tbody tr:first-child td{border-top:0}
+.adm-row{cursor:pointer;transition:background .12s}
+.adm-row:hover{background:color-mix(in srgb,var(--mint) 55%,transparent)}
+.adm-row.selected{background:var(--mint)}
+.adm-row:focus-visible{outline:2px solid var(--green2);outline-offset:-2px}
+.adm-c-sel{width:34px;text-align:center;user-select:none}
+.adm-c-cover{width:44px}
+.adm-thumb{position:relative;display:grid;place-items:center;width:32px;height:44px;border-radius:4px 7px 7px 4px;overflow:hidden;font-weight:800;font-size:14px;border:1px solid #0000000d}
+.adm-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.adm-c-title{max-width:360px;white-space:normal}
+.adm-c-title b{display:block;font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.adm-author{display:block;color:var(--muted);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.adm-c-cat{max-width:140px;overflow:hidden;text-overflow:ellipsis}
+.adm-c-up{max-width:130px;overflow:hidden;text-overflow:ellipsis}
+.adm-c-date,.adm-c-size,.adm-c-libs{color:var(--muted)}
+.adm-c-libs{text-align:center}
+.adm-m{display:none}
+.adm-empty td{padding:26px 12px;text-align:center;color:var(--muted);white-space:normal}
+.adm-chip{display:inline-block;border-radius:6px;padding:0 6px;font-size:10.5px;line-height:1.75;border:1px solid var(--line);background:var(--bg);color:var(--ink);white-space:nowrap}
+.adm-chip.fmt{direction:ltr;letter-spacing:.03em;font-weight:700;color:var(--green2)}
+.adm-chip.api{background:#e9e4f7;border-color:#d5cbef;color:#4b3a8c;font-weight:700;direction:ltr}
+.adm-chip.cat{background:#f1e6cc;border-color:#eadcb8;color:#6b5428}
+body.dark .adm-chip.api{background:#302a46;border-color:#433a63;color:#c9bdf5}
+body.dark .adm-chip.cat{background:#3d3524;border-color:#4d4330;color:#e5c58b}
+.adm-st{display:inline-block;border-radius:20px;padding:0 8px;font-size:10.5px;line-height:1.75;white-space:nowrap}
+.adm-st.st-approved{background:var(--mint);color:var(--green2)}
+.adm-st.st-pending{background:#f7ead0;color:#7d5a17}
+.adm-st.st-rejected{background:#f6dcd3;color:#9b3d23}
+.adm-st.st-none{background:var(--bg);color:var(--muted);border:1px solid var(--line)}
+body.dark .adm-st.st-pending{background:#3d3220;color:#f0d9a8}
+body.dark .adm-st.st-rejected{background:#45281f;color:#f0a58c}
+.adm-pager{display:flex;align-items:center;justify-content:center;gap:14px;margin:14px 0 4px;font-size:12.5px}
+.adm-pager[hidden]{display:none}
+.adm-pager .secondary-button{padding:8px 14px}
+.adm-pager .secondary-button[disabled],.adm-bulkbar button[disabled]{opacity:.45;cursor:default}
+#admPanel-books{padding-bottom:84px}
+
+/* Bulk action bar: sticky at the bottom while rows are selected */
+.adm-bulkbar{position:fixed;z-index:40;bottom:calc(16px + env(safe-area-inset-bottom));left:0;right:0;margin:0 auto;width:max-content;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 24px);padding:8px 10px 8px 8px;border-radius:16px;background:#173b35;color:#fff;box-shadow:0 14px 40px #0004}
+.adm-bulkbar[hidden]{display:none}
+.adm-bulk-count{font-weight:700;font-size:12.5px;white-space:nowrap;padding-inline:6px}
+.adm-bulk-actions{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;min-width:0}
+.adm-bulk-actions::-webkit-scrollbar{display:none}
+.adm-bulkbar .secondary-button{flex-shrink:0;padding:7px 11px;font-size:12px;background:#ffffff14;border-color:#ffffff30;color:#fff}
+.adm-bulkbar .secondary-button:hover{background:#ffffff26;border-color:#ffffff55}
+.adm-bulkbar .adm-danger{color:#ffc4b3;border-color:#ff9f8540}
+.adm-bulkbar .icon-button{flex:none;min-width:36px;height:36px;background:transparent;border-color:#ffffff40;color:#fff;font-size:18px}
+body.dark .adm-bulkbar{background:#0f1a15;border:1px solid var(--line)}
+.adm-danger{color:#9b3d23}
+body.dark .adm-danger{color:#f0a58c}
+
+/* Book details: side panel on desktop, bottom sheet on phones (the shared .account-dialog sheet rules) */
+.adm-detail-head{display:grid;grid-template-columns:116px minmax(0,1fr);gap:14px;align-items:start;margin-bottom:12px}
+.adm-detail-cover{width:116px;padding:8px}
+.adm-detail-cover img,.adm-rv-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.adm-detail-cover .cover-name{font-size:12px;line-height:1.6}
+.adm-detail .adm-detail-sum h2{margin:0 0 6px;padding-left:40px;font-size:17px;line-height:1.6;overflow-wrap:anywhere}
+.adm-detail-chips{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 8px}
+.adm-detail-info{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin:0;font-size:12px}
+.adm-detail-info dt{color:var(--muted);font-size:10.5px}
+.adm-detail-info dd{margin:0;overflow-wrap:anywhere}
+.adm-detail-status{margin:0 0 14px}
+.adm-detail-form{gap:10px}
+.adm-detail-form input:disabled,.adm-detail-form textarea:disabled{opacity:.55}
+.adm-detail-form p{margin:-4px 0 0}
+.adm-detail-more{border-top:1px solid var(--line);padding-top:12px;margin-top:14px}
+.adm-detail-more .secondary-button{padding:8px 12px;font-size:12px}
+@media(min-width:701px){
+ .account-dialog.adm-detail{position:fixed;top:0;bottom:0;inset-inline-start:auto;inset-inline-end:0;margin:0;width:min(460px,100vw);height:100dvh;max-height:100dvh;overflow:auto;border-radius:0;border-start-start-radius:20px;border-end-start-radius:20px;padding:22px 20px 24px;overscroll-behavior:contain}
+ .adm-detail[open]{animation:adm-panel-in .2s ease-out}
+}
+@keyframes adm-panel-in{from{transform:translateX(-30px);opacity:.5}to{transform:none;opacity:1}}
+.adm-cat-dialog{width:min(380px,calc(100vw - 24px))}
+
+/* Review queue: one book at a time */
+.adm-queue-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.adm-queue-head h3{margin:0;font-size:15px}
+.adm-queue-mode button{min-height:36px;padding:6px 14px}
+.adm-review[hidden],.adm-keys[hidden],.adm-pending-block[hidden]{display:none}
+.adm-rv{display:grid;grid-template-columns:190px minmax(0,1fr);gap:24px;background:var(--paper);border:1px solid var(--line);border-radius:18px;padding:20px}
+.adm-rv-cover{width:100%;padding:12px}
+.adm-rv-pos{margin:0}
+.adm-rv-title{margin:2px 0 2px;font-size:20px;line-height:1.6;overflow-wrap:anywhere}
+.adm-rv-author{margin:0 0 8px;color:var(--muted)}
+.adm-rv-meta{margin-top:6px}
+.adm-rv-desc{margin:12px 0 0;max-height:13em;overflow:auto;white-space:pre-line;line-height:1.95;font-size:13px}
+.adm-rv-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:16px}
+.adm-rv-actions kbd{margin-inline-start:2px}
+.adm-rv-nav{display:flex;gap:8px;margin-inline-start:auto}
+.adm-rv-nav .secondary-button[disabled]{opacity:.45;cursor:default}
+.adm-rv-more{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.adm-rv-more .text-button{text-decoration:none;display:inline-flex;align-items:center}
+.adm-rv-empty{background:var(--paper);border:1px dashed var(--line);border-radius:18px;padding:40px 16px;text-align:center;color:var(--muted)}
+.adm-keys{margin:10px 2px 0}
+
+@media(max-width:700px){
+ .admin-tabs{margin-bottom:12px;padding:6px 0}
+ .admin-tabs [role=tab]{min-height:42px;padding:8px 11px}
+ /* books: list rows (checkbox · cover · title + one line of chips) */
+ .adm-filters-open{display:inline-flex}
+ .adm-filters{display:none}
+ .adm-filters.open{display:flex;flex-direction:column;align-items:stretch;flex-wrap:nowrap;gap:10px;position:fixed;z-index:61;left:0;right:0;bottom:0;margin:0;max-height:min(86dvh,640px);overflow:auto;background:var(--paper);border-radius:22px 22px 0 0;padding:0 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -12px 40px #0003;animation:borg-sheet-up .24s ease-out;overscroll-behavior:contain}
+ .adm-filters.open .adm-sheet-head{display:flex}
+ .adm-backdrop:not([hidden]){display:block;position:fixed;inset:0;z-index:60;background:rgba(10,20,16,.45)}
+ body.adm-sheet-open{overflow:hidden}
+ .adm-field{font-size:12px}
+ .adm-field .admin-input{max-width:none;width:100%;min-height:44px;font-size:16px}
+ .adm-nocover{padding:6px 0;min-height:44px}
+ .adm-filter-actions{justify-content:space-between;padding:4px 0 0}
+ .adm-filter-actions .text-button{min-height:44px}
+ .adm-apply{display:inline-flex;flex:1;min-height:46px}
+ .adm-selpage{min-height:40px}
+ .adm-table-wrap{overflow:visible}
+ .adm-table,.adm-table tbody{display:block}
+ .adm-table thead{display:none}
+ .adm-table tr.adm-row{display:grid;grid-template-columns:40px 38px minmax(0,1fr);align-items:center;column-gap:8px;padding:8px 10px 8px 12px;border-top:1px solid var(--line)}
+ .adm-table tbody tr:first-child{border-top:0}
+ .adm-table tr.adm-row td{border:0;padding:0}
+ .adm-table tr.adm-row td.adm-c-fmt,.adm-table tr.adm-row td.adm-c-cat,.adm-table tr.adm-row td.adm-c-st,.adm-table tr.adm-row td.adm-c-up,.adm-table tr.adm-row td.adm-c-date,.adm-table tr.adm-row td.adm-c-size,.adm-table tr.adm-row td.adm-c-libs{display:none}
+ .adm-c-sel{width:40px;height:44px;display:grid;place-items:center}
+ .adm-sel,.adm-selpage input{width:22px;height:22px}
+ .adm-c-cover{width:auto}
+ .adm-thumb{width:36px;height:50px}
+ .adm-c-title{max-width:none;min-width:0}
+ .adm-m{display:flex;flex-wrap:wrap;gap:3px 6px;align-items:center;margin-top:3px;font-size:10.5px;color:var(--muted)}
+ .adm-table tr.adm-empty{display:block}
+ .adm-table tr.adm-empty td{display:block}
+ .adm-pager .secondary-button{min-height:44px}
+ /* bulk bar: full width at the bottom, actions scroll sideways */
+ .adm-bulkbar{left:8px;right:8px;width:auto;max-width:none;bottom:calc(8px + env(safe-area-inset-bottom));flex-wrap:wrap;gap:6px 8px;padding:8px}
+ .adm-bulk-count{order:0;flex:1}
+ .adm-bulkbar .icon-button{order:1;min-width:40px;height:40px}
+ .adm-bulk-actions{order:2;flex:1 1 100%}
+ .adm-bulkbar .secondary-button{min-height:42px}
+ #admPanel-books{padding-bottom:130px}
+ /* details sheet */
+ .account-dialog.adm-detail{max-height:calc(100dvh - 40px)}
+ .adm-detail-head{grid-template-columns:88px minmax(0,1fr);gap:12px}
+ .adm-detail-cover{width:88px}
+ .adm-detail .adm-detail-sum h2{padding-left:52px}
+ .adm-detail-status .primary-button,.adm-detail-status .secondary-button,.adm-detail-more .secondary-button{flex:1 1 auto;min-height:44px}
+ /* review card */
+ .adm-rv{grid-template-columns:96px minmax(0,1fr);gap:14px;padding:14px}
+ .adm-rv-cover{padding:6px}
+ .adm-rv-cover .cover-name{font-size:11px;line-height:1.5}
+ .adm-rv-title{font-size:16px}
+ .adm-rv-body{display:contents}
+ .adm-rv-body>*{grid-column:1/-1}
+ .adm-rv-body>.adm-rv-pos,.adm-rv-body>.adm-rv-title,.adm-rv-body>.adm-rv-author,.adm-rv-body>.adm-detail-chips{grid-column:2}
+ .adm-rv-cover{grid-row:1/span 4;align-self:start}
+ .adm-rv-actions .primary-button,.adm-rv-actions .secondary-button{flex:1 1 auto;min-height:44px}
+ .adm-rv-nav{flex:1 1 100%;margin:0}
+ .adm-rv-nav .secondary-button{flex:1}
+ #viewAdmin .adm-rv-actions kbd,.adm-keys{display:none}
+ .adm-rv-more .text-button{min-height:42px}
+}
+@media(hover:none) and (pointer:coarse){#viewAdmin .adm-rv-actions kbd,.adm-keys{display:none}}
+@media(prefers-reduced-motion:reduce){.adm-detail[open],.adm-filters.open{animation:none}}

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.8.1">
+  <meta name="app-version" content="8.9.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -146,38 +146,118 @@
         </section>
       </div>
       <div id="viewAdmin" class="view" hidden>
-        <div id="adminStats" class="admin-stats"></div>
-        <div class="admin-block"><h3>تنظیمات</h3>
-          <label class="admin-toggle"><input id="settingApproval" type="checkbox"> کتاب‌هایی که کاربران پیشنهاد می‌دهند، قبل از انتشار در کتابخانهٔ عمومی تأیید شوند</label></div>
-        <div class="admin-block"><h3>کتاب‌های در انتظار تأیید</h3><div id="pendingList" class="admin-list"></div></div>
-        <div class="admin-block"><h3>کتابخانهٔ عمومی</h3><div id="catalogAdminList" class="admin-list"></div></div>
-        <div class="admin-block"><h3>همهٔ کتاب‌های روی سرور</h3><div id="booksAdminList" class="admin-list"></div></div>
-        <div class="admin-block"><h3>دعوت‌نامه‌ها</h3>
-          <div class="admin-row"><input id="inviteNote" class="admin-input" placeholder="برای چه کسی؟ (اختیاری)" maxlength="120"><button id="createInvite" class="secondary-button" type="button">ساخت کد دعوت</button></div>
-          <p id="inviteResult" class="invite-result" aria-live="polite"></p>
-          <div id="inviteList" class="admin-list"></div></div>
-        <div class="admin-block"><h3>کاربران</h3><div id="userList" class="admin-list"></div></div>
-        <div id="apiBlock" class="admin-block api-block"><h3>کلیدهای API</h3>
-          <p class="muted small api-intro">برنامه‌های دیگر با این کلید می‌توانند کتاب را مستقیم به کتابخانهٔ عمومی بفرستند؛ قانون‌های پاک‌سازی متن روی آن‌ها اعمال می‌شود.</p>
-          <form id="apiTokenForm" class="admin-row api-form" novalidate>
-            <input id="apiTokenName" class="admin-input" placeholder="نام کلید، مثلاً: ربات تلگرام" maxlength="80" aria-label="نام کلید" autocomplete="off">
-            <label class="admin-toggle api-review"><input id="apiTokenReview" type="checkbox"> کتاب‌ها منتظر تأیید بمانند</label>
-            <button id="apiTokenCreate" class="secondary-button" type="submit">ساخت کلید</button>
-          </form>
-          <p id="apiTokenError" class="form-error" role="alert"></p>
-          <div id="apiTokenNew" class="api-new" hidden>
-            <p class="api-warn" role="status">این کلید فقط همین یک بار نمایش داده می‌شود</p>
-            <div class="admin-row"><input id="apiTokenValue" class="admin-input api-token-value" readonly dir="ltr" aria-label="کلید جدید" autocomplete="off" spellcheck="false"><button id="apiTokenCopy" class="secondary-button" type="button">کپی</button></div>
+        <nav id="adminTabs" class="admin-tabs" role="tablist" aria-label="بخش‌های مدیریت">
+          <button type="button" role="tab" id="admTab-overview" data-admin-tab="overview" aria-controls="admPanel-overview" aria-selected="true">نمای کلی</button>
+          <button type="button" role="tab" id="admTab-queue" data-admin-tab="queue" aria-controls="admPanel-queue" aria-selected="false">صف تأیید <span id="admBadgeQueue" class="adm-badge" hidden></span></button>
+          <button type="button" role="tab" id="admTab-books" data-admin-tab="books" aria-controls="admPanel-books" aria-selected="false">کتاب‌ها</button>
+          <button type="button" role="tab" id="admTab-users" data-admin-tab="users" aria-controls="admPanel-users" aria-selected="false">کاربران</button>
+          <button type="button" role="tab" id="admTab-invites" data-admin-tab="invites" aria-controls="admPanel-invites" aria-selected="false">دعوت‌ها</button>
+          <button type="button" role="tab" id="admTab-api" data-admin-tab="api" aria-controls="admPanel-api" aria-selected="false">کلیدهای API</button>
+          <button type="button" role="tab" id="admTab-errors" data-admin-tab="errors" aria-controls="admPanel-errors" aria-selected="false">خطاها <span id="admBadgeErrors" class="adm-badge warn" hidden></span></button>
+          <button type="button" role="tab" id="admTab-settings" data-admin-tab="settings" aria-controls="admPanel-settings" aria-selected="false">تنظیمات</button>
+        </nav>
+        <section id="admPanel-overview" class="adm-panel" role="tabpanel" aria-labelledby="admTab-overview" data-admin-panel="overview">
+          <div id="adminStats" class="admin-stats"></div>
+          <div class="admin-block"><h3>میان‌برها</h3>
+            <div id="adminShortcuts" class="adm-shortcuts">
+              <button type="button" class="secondary-button" data-adm-go="queue">بررسی صف تأیید <span class="adm-badge" data-sc="pending" hidden></span></button>
+              <button type="button" class="secondary-button" data-adm-go="books" data-adm-filter="category=__none__">کتاب‌های بدون دسته</button>
+              <button type="button" class="secondary-button" data-adm-go="books" data-adm-filter="no_cover=1">کتاب‌های بدون جلد</button>
+              <button type="button" class="secondary-button" data-adm-go="books" data-adm-filter="uploader=api">کتاب‌های ارسالی با API</button>
+              <button type="button" class="secondary-button" data-adm-go="books" data-adm-filter="status=rejected">کتاب‌های ردشده</button>
+              <button type="button" class="secondary-button" data-adm-go="errors">خطاهای کاربران <span class="adm-badge warn" data-sc="errors" hidden></span></button>
+              <button type="button" class="secondary-button" data-adm-go="invites">ساخت دعوت‌نامه</button>
+            </div></div>
+        </section>
+        <section id="admPanel-queue" class="adm-panel" role="tabpanel" aria-labelledby="admTab-queue" data-admin-panel="queue" hidden>
+          <div class="adm-queue-head">
+            <h3>کتاب‌های در انتظار تأیید <span id="admQueueCount" class="status-chip"></span></h3>
+            <div class="segmented adm-queue-mode" role="group" aria-label="نحوهٔ نمایش صف"><button type="button" data-queue-mode="review" aria-pressed="true">یکی‌یکی</button><button type="button" data-queue-mode="list" aria-pressed="false">فهرست</button></div>
           </div>
-          <div id="apiTokenList" class="admin-list api-list"></div>
-          <p class="muted small api-guide">راهنما: <code dir="ltr">docs/api-books.md</code> در مخزن. نمونه:</p>
-          <pre id="apiCurl" class="api-curl" dir="ltr"></pre></div>
-        <div id="errorsBlock" class="admin-block"><h3>خطاهای کاربران <span id="errorsCount" class="status-chip"></span></h3>
-          <div class="admin-row errors-tools"><select id="errorsVersion" class="admin-input" aria-label="نسخه"><option value="">همهٔ نسخه‌ها</option></select>
-            <button id="errorsRefresh" class="secondary-button" type="button">تازه‌سازی</button>
-            <button id="errorsClearAll" class="secondary-button" type="button">پاک کردن همه</button></div>
-          <div id="errorsList" class="admin-list"></div>
-          <button id="errorsMore" class="secondary-button" type="button" hidden>نمایش بیشتر</button></div>
+          <div id="admReview" class="adm-review" aria-live="polite"></div>
+          <p id="admReviewKeys" class="muted small adm-keys">میان‌برها: <kbd>A</kbd> تأیید · <kbd>R</kbd> رد · <kbd>C</kbd> تعیین دسته · <kbd>←</kbd> یا <kbd>J</kbd> بعدی · <kbd>→</kbd> یا <kbd>K</kbd> قبلی</p>
+          <div class="admin-block adm-pending-block" hidden><div id="pendingList" class="admin-list"></div></div>
+        </section>
+        <section id="admPanel-books" class="adm-panel" role="tabpanel" aria-labelledby="admTab-books" data-admin-panel="books" hidden>
+          <div class="adm-toolbar">
+            <div class="search-box adm-search" role="search"><span aria-hidden="true">⌕</span><input id="admBookSearch" type="search" placeholder="جستجو در عنوان، نویسنده، ناشر…" autocomplete="off" aria-label="جستجو در کتاب‌های سرور" enterkeyhint="search"></div>
+            <button id="admFiltersOpen" class="secondary-button adm-filters-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="admFilters">فیلترها <span id="admFilterCount" class="adm-badge" hidden></span></button>
+          </div>
+          <div id="admFiltersBackdrop" class="adm-backdrop" hidden></div>
+          <div id="admFilters" class="adm-filters" role="group" aria-label="فیلترهای کتاب‌ها">
+            <div class="sheet-head adm-sheet-head"><span class="sheet-grab" aria-hidden="true"></span><h2 class="sheet-title">فیلترها</h2><button id="admFiltersClose" class="icon-button sheet-close" type="button" aria-label="بستن فیلترها"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+            <label class="adm-field"><span>وضعیت</span><select id="admFStatus" class="admin-input"><option value="any">همهٔ وضعیت‌ها</option><option value="approved">عمومی</option><option value="pending">در انتظار</option><option value="rejected">ردشده</option><option value="none">بیرون از کتابخانهٔ عمومی</option></select></label>
+            <label class="adm-field"><span>دسته</span><select id="admFCategory" class="admin-input"><option value="">همهٔ دسته‌ها</option><option value="__none__">بدون دسته</option></select></label>
+            <label class="adm-field"><span>قالب</span><select id="admFFormat" class="admin-input"><option value="">همهٔ قالب‌ها</option><option value="epub">EPUB</option><option value="pdf">PDF</option></select></label>
+            <label class="adm-field"><span>بارگذار</span><select id="admFUploader" class="admin-input"><option value="">همهٔ بارگذارها</option><option value="api">API</option></select></label>
+            <label class="adm-field"><span>ترتیب</span><select id="admSort" class="admin-input"><option value="date:desc">تازه‌ترین</option><option value="date:asc">قدیمی‌ترین</option><option value="title:asc">عنوان (الف تا ی)</option><option value="title:desc">عنوان (ی تا الف)</option><option value="size:desc">حجم (بزرگ‌ترین)</option><option value="size:asc">حجم (کوچک‌ترین)</option><option value="status:asc">وضعیت</option></select></label>
+            <label class="admin-toggle adm-nocover"><input id="admFNoCover" type="checkbox"> فقط بدون جلد</label>
+            <div class="adm-filter-actions"><button id="admFReset" class="text-button" type="button">پاک کردن فیلترها</button><button id="admFApply" class="primary-button adm-apply" type="button">نمایش نتیجه‌ها</button></div>
+          </div>
+          <div class="adm-summary-row">
+            <label class="adm-selpage"><input id="admSelPage" type="checkbox"> انتخاب همهٔ این صفحه</label>
+            <p id="admBooksSummary" class="adm-summary muted" aria-live="polite"></p>
+          </div>
+          <p id="admSelectInfo" class="adm-select-info" hidden></p>
+          <div class="adm-table-wrap">
+            <table class="adm-table" aria-label="کتاب‌های روی سرور">
+              <thead><tr><th class="adm-c-sel"><span class="sr-only">انتخاب</span></th><th class="adm-c-cover"><span class="sr-only">جلد</span></th><th>کتاب</th><th class="adm-c-fmt">قالب</th><th class="adm-c-cat">دسته</th><th class="adm-c-st">وضعیت</th><th class="adm-c-up">بارگذار</th><th class="adm-c-date">تاریخ</th><th class="adm-c-size">حجم</th><th class="adm-c-libs" title="در چند کتابخانه">کتابخانه‌ها</th></tr></thead>
+              <tbody id="admBooks"></tbody>
+            </table>
+          </div>
+          <div class="adm-pager"><button id="admPrev" class="secondary-button" type="button">→ قبلی</button><span id="admPageInfo" class="muted"></span><button id="admNext" class="secondary-button" type="button">بعدی ←</button></div>
+          <div id="admBulkBar" class="adm-bulkbar" role="toolbar" aria-label="کار گروهی روی کتاب‌های انتخاب‌شده" hidden>
+            <span id="admBulkCount" class="adm-bulk-count"></span>
+            <div class="adm-bulk-actions">
+              <button type="button" class="secondary-button" data-bulk="approve">تأیید</button>
+              <button type="button" class="secondary-button" data-bulk="reject">رد</button>
+              <button type="button" class="secondary-button" data-bulk="set_category">تعیین دسته</button>
+              <button type="button" class="secondary-button" data-bulk="clear_category">حذف دسته</button>
+              <button type="button" class="secondary-button" data-bulk="add_catalog">افزودن به کتابخانهٔ عمومی</button>
+              <button type="button" class="secondary-button" data-bulk="remove_catalog">برداشتن از کتابخانهٔ عمومی</button>
+              <button type="button" class="secondary-button adm-danger" data-bulk="delete">حذف</button>
+            </div>
+            <button id="admBulkClear" class="icon-button" type="button" aria-label="لغو انتخاب" title="لغو انتخاب">×</button>
+          </div>
+        </section>
+        <section id="admPanel-users" class="adm-panel" role="tabpanel" aria-labelledby="admTab-users" data-admin-panel="users" hidden>
+          <div class="admin-block"><h3>کاربران</h3><div id="userList" class="admin-list"></div></div>
+        </section>
+        <section id="admPanel-invites" class="adm-panel" role="tabpanel" aria-labelledby="admTab-invites" data-admin-panel="invites" hidden>
+          <div class="admin-block"><h3>دعوت‌نامه‌ها</h3>
+            <div class="admin-row"><input id="inviteNote" class="admin-input" placeholder="برای چه کسی؟ (اختیاری)" maxlength="120"><button id="createInvite" class="secondary-button" type="button">ساخت کد دعوت</button></div>
+            <p id="inviteResult" class="invite-result" aria-live="polite"></p>
+            <div id="inviteList" class="admin-list"></div></div>
+        </section>
+        <section id="admPanel-api" class="adm-panel" role="tabpanel" aria-labelledby="admTab-api" data-admin-panel="api" hidden>
+          <div id="apiBlock" class="admin-block api-block"><h3>کلیدهای API</h3>
+            <p class="muted small api-intro">برنامه‌های دیگر با این کلید می‌توانند کتاب را مستقیم به کتابخانهٔ عمومی بفرستند؛ قانون‌های پاک‌سازی متن روی آن‌ها اعمال می‌شود.</p>
+            <form id="apiTokenForm" class="admin-row api-form" novalidate>
+              <input id="apiTokenName" class="admin-input" placeholder="نام کلید، مثلاً: ربات تلگرام" maxlength="80" aria-label="نام کلید" autocomplete="off">
+              <label class="admin-toggle api-review"><input id="apiTokenReview" type="checkbox"> کتاب‌ها منتظر تأیید بمانند</label>
+              <button id="apiTokenCreate" class="secondary-button" type="submit">ساخت کلید</button>
+            </form>
+            <p id="apiTokenError" class="form-error" role="alert"></p>
+            <div id="apiTokenNew" class="api-new" hidden>
+              <p class="api-warn" role="status">این کلید فقط همین یک بار نمایش داده می‌شود</p>
+              <div class="admin-row"><input id="apiTokenValue" class="admin-input api-token-value" readonly dir="ltr" aria-label="کلید جدید" autocomplete="off" spellcheck="false"><button id="apiTokenCopy" class="secondary-button" type="button">کپی</button></div>
+            </div>
+            <div id="apiTokenList" class="admin-list api-list"></div>
+            <p class="muted small api-guide">راهنما: <code dir="ltr">docs/api-books.md</code> در مخزن. نمونه:</p>
+            <pre id="apiCurl" class="api-curl" dir="ltr"></pre></div>
+        </section>
+        <section id="admPanel-errors" class="adm-panel" role="tabpanel" aria-labelledby="admTab-errors" data-admin-panel="errors" hidden>
+          <div id="errorsBlock" class="admin-block"><h3>خطاهای کاربران <span id="errorsCount" class="status-chip"></span></h3>
+            <div class="admin-row errors-tools"><select id="errorsVersion" class="admin-input" aria-label="نسخه"><option value="">همهٔ نسخه‌ها</option></select>
+              <button id="errorsRefresh" class="secondary-button" type="button">تازه‌سازی</button>
+              <button id="errorsClearAll" class="secondary-button" type="button">پاک کردن همه</button></div>
+            <div id="errorsList" class="admin-list"></div>
+            <button id="errorsMore" class="secondary-button" type="button" hidden>نمایش بیشتر</button></div>
+        </section>
+        <section id="admPanel-settings" class="adm-panel" role="tabpanel" aria-labelledby="admTab-settings" data-admin-panel="settings" hidden>
+          <div class="admin-block"><h3>تنظیمات</h3>
+            <label class="admin-toggle"><input id="settingApproval" type="checkbox"> کتاب‌هایی که کاربران پیشنهاد می‌دهند، قبل از انتشار در کتابخانهٔ عمومی تأیید شوند</label></div>
+        </section>
       </div>
     </section>
   </main>
@@ -394,24 +474,47 @@
     <div id="cleanResults" class="clean-results"></div>
     <div id="cleanApplyRow" class="dialog-actions" hidden><button id="cleanApply" class="primary-button" type="button">حذف از فایل‌ها</button></div>
   </dialog>
-  <dialog id="catalogEditDialog" class="account-dialog" aria-labelledby="catalogEditTitle">
-    <button id="catalogEditClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
-    <h2 id="catalogEditTitle">ویرایش کتاب در کتابخانهٔ عمومی</h2>
-    <form id="catalogEditForm" class="auth-form" novalidate>
-      <label>عنوان<input name="title" maxlength="500" required></label>
-      <label>نویسنده<input name="author" maxlength="300"></label>
-      <label>توضیحات<textarea name="description" maxlength="2000" rows="4"></textarea></label>
-      <label>دسته‌بندی<input name="category" maxlength="80" list="categoryList" autocomplete="off"></label>
-      <label>ناشر<input name="publisher" maxlength="300"></label>
+  <dialog id="admDetail" class="account-dialog adm-detail" aria-labelledby="admDetailTitle">
+    <button id="admDetailClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <div class="adm-detail-head">
+      <div id="admDetailCover" class="book-cover-thumb adm-detail-cover" aria-hidden="true"></div>
+      <div class="adm-detail-sum">
+        <h2 id="admDetailTitle" dir="auto"></h2>
+        <p id="admDetailChips" class="adm-detail-chips"></p>
+        <dl id="admDetailInfo" class="adm-detail-info"></dl>
+      </div>
+    </div>
+    <div id="admDetailStatus" class="dialog-actions adm-detail-status"></div>
+    <form id="admDetailForm" class="auth-form adm-detail-form" novalidate>
+      <label>عنوان<input name="title" maxlength="500" required dir="auto"></label>
+      <label>نویسنده<input name="author" maxlength="300" dir="auto"></label>
+      <label>دسته‌بندی<input name="category" maxlength="80" list="admCatList" autocomplete="off" dir="auto"></label>
+      <label>توضیحات<textarea name="description" maxlength="2000" rows="4" dir="auto"></textarea></label>
+      <p id="admDetailCatalogNote" class="muted small" hidden>دسته و توضیحات فقط برای کتاب‌های کتابخانهٔ عمومی ذخیره می‌شوند.</p>
+      <label>ناشر<input name="publisher" maxlength="300" dir="auto"></label>
       <label>سال / تاریخ انتشار<input name="published" maxlength="40" placeholder="مثلاً ۱۴۰۲ یا 2019-05-01"></label>
       <label>زبان (کد)<input name="language" maxlength="20" dir="ltr" placeholder="fa"></label>
-      <button id="catalogEditSave" class="primary-button" type="submit">ذخیره</button>
+      <button id="admDetailSave" class="primary-button" type="submit">ذخیره</button>
+    </form>
+    <div class="dialog-actions adm-detail-more">
+      <button id="admDetailRead" class="secondary-button" type="button">📖 مطالعهٔ آنلاین</button>
+      <a id="admDetailDownload" class="secondary-button" href="#" download>دانلود</a>
+      <button id="admDetailDelete" class="secondary-button adm-danger" type="button">حذف کامل</button>
+    </div>
+  </dialog>
+  <dialog id="admCatDialog" class="account-dialog adm-cat-dialog" aria-labelledby="admCatTitle">
+    <button id="admCatClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <h2 id="admCatTitle">تعیین دسته</h2>
+    <form id="admCatForm" class="auth-form" novalidate>
+      <label><span id="admCatLabel">دسته</span><input id="admCatInput" name="category" maxlength="80" list="admCatList" autocomplete="off" dir="auto" placeholder="مثلاً رمان، شعر، تاریخ"></label>
+      <button id="admCatOk" class="primary-button" type="submit">ثبت دسته</button>
     </form>
   </dialog>
+  <datalist id="admCatList"></datalist>
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۸.۱</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۹.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>
