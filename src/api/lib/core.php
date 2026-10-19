@@ -135,6 +135,10 @@ function migrations(): array {
             // Settings whose JSON value does not fit settings.value (VARCHAR(500)), e.g. clean_rules (up to 50 rules).
             "CREATE TABLE settings_text (name VARCHAR(64) PRIMARY KEY, value TEXT NOT NULL)",
         ],
+        7 => [
+            // Text-based PDFs (magazines) opened directly: 'epub' (all books before this migration) or 'pdf'.
+            "ALTER TABLE books ADD COLUMN format VARCHAR(8) NOT NULL DEFAULT 'epub'",
+        ],
     ];
 }
 function schema_version(): int {
@@ -291,5 +295,16 @@ function storage(string $sub = ''): string {
     if (!is_dir($dir) && !mkdir($dir, 0700, true) && !is_dir($dir)) fail(500, 'storage', 'Storage is not writable.');
     return $dir;
 }
-function book_path(string $sha): string { return storage('books/' . substr($sha, 0, 2)) . "/$sha.epub"; }
+/** Where a book file is stored: books/xx/<sha>.epub, or <sha>.pdf for a PDF (format column, migration 7). */
+function book_path(string $sha, string $format = 'epub'): string {
+    return storage('books/' . substr($sha, 0, 2)) . "/$sha." . ($format === 'pdf' ? 'pdf' : 'epub');
+}
+/** The stored file of a books row (by its format; the other extension as a fallback). */
+function book_file_of(array $b): string {
+    $fmt = (string)($b['format'] ?? 'epub');
+    $p = book_path($b['sha256'], $fmt);
+    if (is_file($p)) return $p;
+    $alt = book_path($b['sha256'], $fmt === 'pdf' ? 'epub' : 'pdf');
+    return is_file($alt) ? $alt : $p;
+}
 function cover_path(int $id): string { return storage('covers') . "/$id.img"; }

@@ -7,6 +7,15 @@
 Your own program can put a few EPUBs a day straight into Borg's **public catalog** (never into anyone's personal
 library). Before the book is stored, the server applies the cleanup rules you defined in the admin panel.
 
+**PDF هم پذیرفته می‌شود** (مجله‌های متنی فارسی و انگلیسی، بدون تبدیل): نوع فایل از خود بایت‌ها تشخیص داده می‌شود
+(`%PDF-` در ۱۰۲۴ بایت اول و `%%EOF` در ۲ کیلوبایت آخر). روی PDF **پاک‌سازی متن اجرا نمی‌شود** و فایل بی‌تغییر ذخیره
+می‌شود؛ جلد هم در سرور ساخته نمی‌شود (مرورگر بعداً جلد را می‌سازد). PDF باید متنی باشد (PDF اسکن‌شده خوانده می‌شود ولی
+متنی برای جست‌وجو ندارد).
+**PDFs are accepted too** (text-based English/Persian magazines, opened directly, no conversion). The type is detected
+from the bytes (`%PDF-` within the first 1024 bytes and `%%EOF` within the last 2 KB). PDFs get **no text cleanup** and
+are stored unchanged; no cover is made on the server (the app renders one later). Send text-based PDFs; a scanned PDF
+opens but has no text to search.
+
 ## ۱. ساخت کلید / Create a key
 پنل مدیر ← «کلیدهای API» ← نام کلید (مثلاً «برنامهٔ آپلود») ← ساخت. کلید (`borg_…`، ۴۵ نویسه) **فقط یک بار** نشان داده
 می‌شود؛ آن را در تنظیمات برنامه‌تان نگه دارید (نه در گیت). اگر «نیاز به بازبینی» را بزنید، کتاب‌های این کلید در صف
@@ -21,26 +30,33 @@ Revoke a leaked key and create a new one. The server stores only a hash of the k
 curl -H "Authorization: Bearer borg_…" \
      -F file=@book.epub -F category=رمان \
      "https://parsun.com/borg/api/index.php?r=api-book"
+# PDF: the same request
+curl -H "Authorization: Bearer borg_…" -F file=@issue-12.pdf -F category=مجله \
+     "https://parsun.com/borg/api/index.php?r=api-book"
 ```
 اگر میزبان سرآیند `Authorization` را حذف کرد، به جایش `-H "X-Borg-Token: borg_…"` بفرستید.
 If the host strips the `Authorization` header, send `-H "X-Borg-Token: borg_…"` instead.
 
 | فیلد / field | | |
 |---|---|---|
-| `file` | الزامی / required | فایل EPUB (`multipart/form-data`) |
-| `title` | ≤ 500 | اگر نباشد از OPF، بعد از نام فایل / from the OPF, else the file name |
-| `author` | ≤ 300 | اگر نباشد از OPF / from the OPF |
-| `language`, `publisher`, `published` | ≤ 20 / 300 / 40 | اگر نباشد از OPF (`dc:date` → `YYYY-MM-DD`) |
+| `file` | الزامی / required | فایل EPUB یا PDF (`multipart/form-data`) / EPUB or PDF file |
+| `title` | ≤ 500 | اگر نباشد از OPF (PDF: `Title` در Info)، بعد از نام فایل / from the OPF (PDF: Info `Title`), else the file name |
+| `author` | ≤ 300 | اگر نباشد از OPF (PDF: `Author` در Info) / from the OPF (PDF: Info `Author`) |
+| `language`, `publisher`, `published` | ≤ 20 / 300 / 40 | اگر نباشد از OPF (`dc:date` → `YYYY-MM-DD`)؛ برای PDF فقط از درخواست / PDF: request only |
 | `category` | ≤ 80 | دستهٔ کاتالوگ / catalog category |
 | `description` | ≤ 2000 | توضیح در کاتالوگ / catalog description |
 
 جلد از OPF برداشته می‌شود (EPUB 3 `cover-image` یا EPUB 2 `meta name="cover"`؛ PNG/JPEG/WebP/GIF تا ۱٫۵ مگابایت).
 The cover is taken from the OPF (EPUB 3 `cover-image` or EPUB 2 `meta name="cover"`; PNG/JPEG/WebP/GIF up to 1.5 MB).
+برای PDF عنوان و نویسنده در صورت امکان از دیکشنری Info خوانده می‌شود (رشتهٔ ساده یا UTF-16BE؛ اگر Info در «object stream»
+فشرده یا PDF رمزدار باشد، خوانده نمی‌شود و نام فایل عنوان می‌شود). بهتر است `title`/`author` را خودتان بفرستید.
+For a PDF, title and author come from its Info dictionary when that is cheap to read (plain or UTF-16BE strings; not from
+compressed object streams or encrypted files, then the file name is the title). Sending `title`/`author` is safest.
 
 ## ۳. پاسخ / Response — `201`
 ```json
 {"book": {"id": 12, "sha256": "…", "size": 123456, "title": "…", "author": "…", "language": "fa",
-          "publisher": "…", "published": "2020-03-04", "has_cover": true},
+          "publisher": "…", "published": "2020-03-04", "has_cover": true, "format": "epub"},
  "catalog_status": "approved", "duplicate": false,
  "cleaned": 5, "cleanup": "applied", "skipped_rules": []}
 ```
@@ -49,8 +65,9 @@ The cover is taken from the OPF (EPUB 3 `cover-image` or EPUB 2 `meta name="cove
   An entry already in the catalog keeps its status; `category`/`description` are updated when sent.
 - `duplicate: true`: همین فایل (پس از پاک‌سازی) قبلاً ذخیره شده بود؛ نسخهٔ دومی ساخته نمی‌شود.
   The same (cleaned) file was already stored; no second copy is made.
+- `book.format`: `epub` یا `pdf` (از بایت‌های فایل تشخیص داده می‌شود). Detected from the file's bytes.
 - `cleanup`: `applied` (قاعده‌ها اجرا شد)، `no-rules` (قاعده‌ای تعریف نشده)، `unavailable` (سرور ZipArchive/DOM
-  ندارد؛ کتاب بدون تغییر ذخیره شد). `cleaned` = تعداد موارد حذف‌شده.
+  ندارد؛ کتاب بدون تغییر ذخیره شد)، `not-applicable` (PDF؛ پاک‌سازی ندارد، `cleaned: 0`). `cleaned` = تعداد موارد حذف‌شده.
 - `skipped_rules`: شناسهٔ قاعده‌هایی که برای این کتاب «بیش از حد کلی» بودند و اجرا نشدند (بیش از ۳۰۰ مورد، یا بیش از
   ۲٪ متن؛ برای «کل خط» ۱۰٪) — مثل پاک‌سازی خودکار هنگام افزودن کتاب در مرورگر.
   Ids of rules judged too broad for this book (> 300 matches, or > 2% of the text; whole-line rules 10%), as in the
@@ -73,7 +90,8 @@ Changing the rules does not touch books already stored.
 | 429 | `rate_limited` | بیش از ۶۰ درخواست در ساعت با یک کلید، یا ۳۰ کلید اشتباه در ۱۵ دقیقه از یک IP |
 | 415 | `bad_content_type` | بدنه `multipart/form-data` نیست |
 | 400 | `missing_file`, `empty_file`, `partial_upload` | فایل نرسید / خالی / ناقص — دوباره بفرستید |
-| 400 | `not_epub` | فایل EPUB معتبر نیست |
+| 400 | `not_epub` | فایل نه EPUB معتبر است نه PDF / neither a valid EPUB nor a PDF |
+| 400 | `not_pdf` | با `%PDF-` شروع می‌شود ولی ناقص است (`%%EOF` در انتها نیست) / starts like a PDF but is truncated |
 | 400 | `too_long_<field>`, `bad_<field>` | فیلدی بلندتر از حد یا نامعتبر |
 | 413 | `too_large` | بزرگ‌تر از حد کتاب در تنظیمات سرور (`max_book_bytes`، پیش‌فرض ۱۰۰ مگابایت) |
 | 413 | `file_too_large_for_php`, `post_too_large` | بزرگ‌تر از `upload_max_filesize` / `post_max_size` در PHP میزبان (مقدار در پیام هست) |

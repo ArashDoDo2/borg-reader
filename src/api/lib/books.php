@@ -21,6 +21,7 @@ function book_out(array $b): array {
         'title' => $b['title'], 'author' => $b['author'], 'language' => $b['language'],
         'publisher' => (string)($b['publisher'] ?? ''), 'published' => (string)($b['published'] ?? ''),
         'has_cover' => (int)$b['has_cover'] === 1,
+        'format' => ($b['format'] ?? 'epub') === 'pdf' ? 'pdf' : 'epub',
     ];
 }
 /** Optional EPUB metadata fields shared by upload, book-meta and catalog-update: key => max length. */
@@ -51,7 +52,8 @@ function gc_book(int $bookId): void {
     if ($refs > 0) return;
     $b = one('SELECT * FROM books WHERE id = ?', [$bookId]);
     if (!$b) return;
-    @unlink(book_path($b['sha256']));
+    @unlink(book_path($b['sha256'], 'epub'));
+    @unlink(book_path($b['sha256'], 'pdf'));
     @unlink(cover_path($bookId));
     q('DELETE FROM books WHERE id = ?', [$bookId]);
 }
@@ -124,6 +126,34 @@ function validate_epub(string $path): void {
     if (!str_starts_with($head, "PK\x03\x04") || !str_contains($head, 'mimetypeapplication/epub+zip')) fail(422, 'not_epub', 'File is not a valid EPUB.');
 }
 
+/** PDF check without parsing: "%PDF-" within the first 1024 bytes and "%%EOF" within the last 2 KB. */
+function is_pdf_file(string $path): bool {
+    $size = (int)@filesize($path);
+    if ($size < 16) return false;
+    $head = (string)@file_get_contents($path, false, null, 0, 1024);
+    $tail = (string)@file_get_contents($path, false, null, max(0, $size - 2048));
+    return str_contains($head, '%PDF-') && str_contains($tail, '%%EOF');
+}
+/**
+ * The format of an uploaded book, detected from its bytes ('pdf' or 'epub'); the client's hint only picks the error
+ * code. A ZIP is checked as an EPUB. Otherwise a PDF header without "%%EOF" near the end, or a "pdf" hint for a file
+ * that is neither, fails as not_pdf; anything else must pass validate_epub (not_epub).
+ * $status: HTTP status of a failure (422 in the upload flow, 400 in api-book).
+ */
+function detect_book_format(string $path, string $hint = '', int $status = 422): string {
+    $head = (string)@file_get_contents($path, false, null, 0, 1024);
+    $zip = str_starts_with($head, "PK\x03\x04"); // a ZIP is never taken for a PDF (an EPUB may embed one)
+    if (!$zip && is_pdf_file($path)) return 'pdf';
+    if (!$zip && str_contains($head, '%PDF-')) fail($status, 'not_pdf', 'File is not a valid PDF (incomplete or damaged).');
+    try {
+        validate_epub($path);
+    } catch (ApiError $e) {
+        if ($hint === 'pdf') fail($status, 'not_pdf', 'File is not a valid PDF.');
+        fail($status, 'not_epub', $e->getMessage());
+    }
+    return 'epub';
+}
+
 /** Accepts a data: URL with a small raster image and stores it as the book cover. */
 function store_cover(int $bookId, ?string $dataUrl): bool {
     if (!$dataUrl || !preg_match('#^data:image/(png|jpe?g|webp|gif);base64,#', $dataUrl)) return false;
@@ -138,9 +168,9 @@ function store_cover_bytes(int $bookId, string $bin): bool {
 }
 /** Insert a books row for a stored file and return it (shared by upload-complete and api-book). */
 function insert_book(string $sha, int $size, array $meta, int $uploadedBy): array {
-    q('INSERT INTO books (sha256, size, title, author, language, publisher, published, has_cover, uploaded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)',
+    q('INSERT INTO books (sha256, size, title, author, language, publisher, published, has_cover, uploaded_by, created_at, format) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
       [$sha, $size, $meta['title'] ?? 'بدون عنوان', $meta['author'] ?? '', $meta['language'] ?? '',
-       $meta['publisher'] ?? '', $meta['published'] ?? '', $uploadedBy, time()]);
+       $meta['publisher'] ?? '', $meta['published'] ?? '', $uploadedBy, time(), ($meta['format'] ?? 'epub') === 'pdf' ? 'pdf' : 'epub']);
     return one('SELECT * FROM books WHERE sha256 = ?', [$sha]);
 }
 
@@ -249,6 +279,9 @@ function handle_books_route(string $route): bool {
             if (!preg_match('/^[a-f0-9]{64}$/', $sha)) fail(400, 'bad_sha256', 'Invalid hash.');
             $size = (int)($d['size'] ?? 0);
             if ($size <= 0 || $size > config()['max_book_bytes']) fail(413, 'too_large', 'Book is too large.');
+            // Optional format hint ("epub" | "pdf"); the real format is detected from the bytes in upload-complete.
+            $hint = strtolower((string)(opt_str_param($d, 'format', 8) ?? ''));
+            if (!in_array($hint, ['', 'epub', 'pdf'], true)) fail(400, 'bad_format', 'format must be "epub" or "pdf".');
             $existing = one('SELECT * FROM books WHERE sha256 = ?', [$sha]);
             if ($existing) {
                 insert_ignore('user_books', ['user_id' => $s['id'], 'book_id' => $existing['id'], 'added_at' => time()]);
@@ -258,7 +291,7 @@ function handle_books_route(string $route): bool {
             $id = bin2hex(random_bytes(16));
             $meta = [
                 'title' => str_param($d, 'title', 500), 'author' => str_param($d, 'author', 300, false),
-                'language' => '', 'publisher' => '', 'published' => '',
+                'language' => '', 'publisher' => '', 'published' => '', 'format_hint' => $hint,
             ];
             $meta = array_merge($meta, book_meta_from($d));
             q('INSERT INTO uploads (id, user_id, sha256, size, meta, received, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)',
@@ -296,11 +329,12 @@ function handle_books_route(string $route): bool {
             };
             if ((int)$u['received'] !== (int)$u['size'] || filesize($part) !== (int)$u['size']) { $finish(); fail(400, 'incomplete', 'Upload is incomplete.'); }
             if (!hash_equals($u['sha256'], hash_file('sha256', $part))) { $finish(); fail(400, 'hash_mismatch', 'File hash does not match.'); }
-            try { validate_epub($part); } catch (ApiError $e) { $finish(); throw $e; }
+            $meta = array_merge(json_decode($u['meta'], true) ?: [], $late);
+            try { $format = detect_book_format($part, (string)($meta['format_hint'] ?? '')); } catch (ApiError $e) { $finish(); throw $e; }
             $existing = one('SELECT * FROM books WHERE sha256 = ?', [$u['sha256']]);
             if (!$existing) {
-                $meta = array_merge(json_decode($u['meta'], true) ?: [], $late);
-                if (!rename($part, book_path($u['sha256']))) { $finish(); fail(500, 'storage', 'Could not store the file.'); }
+                $meta['format'] = $format;
+                if (!rename($part, book_path($u['sha256'], $format))) { $finish(); fail(500, 'storage', 'Could not store the file.'); }
                 $existing = insert_book($u['sha256'], (int)$u['size'], $meta, (int)$s['id']);
                 $coverFile = upload_dir() . "/$id.cover";
                 if (is_file($coverFile) && store_cover((int)$existing['id'], (string)file_get_contents($coverFile))) {
@@ -319,9 +353,10 @@ function handle_books_route(string $route): bool {
             $bookId = int_param($_GET['id'] ?? '');
             $b = one('SELECT * FROM books WHERE id = ?', [$bookId]);
             if (!$b || !can_read_book($s, $bookId)) fail(404, 'not_found', 'Book not found.');
-            $path = $route === 'book-file' ? book_path($b['sha256']) : cover_path($bookId);
+            $path = $route === 'book-file' ? book_file_of($b) : cover_path($bookId);
             if (!is_file($path)) fail(404, 'not_found', 'File not found.');
-            $type = 'application/epub+zip';
+            $isPdf = ($b['format'] ?? 'epub') === 'pdf';
+            $type = $isPdf ? 'application/pdf' : 'application/epub+zip';
             if ($route === 'book-cover') {
                 $info = @getimagesize($path);
                 $type = $info['mime'] ?? 'application/octet-stream';
@@ -330,7 +365,7 @@ function handle_books_route(string $route): bool {
             header('Content-Length: ' . filesize($path));
             header('Cache-Control: private, max-age=86400');
             header('X-Content-Type-Options: nosniff');
-            if ($route === 'book-file') header('Content-Disposition: attachment; filename="book-' . $bookId . '.epub"');
+            if ($route === 'book-file') header('Content-Disposition: attachment; filename="book-' . $bookId . ($isPdf ? '.pdf' : '.epub') . '"');
             readfile($path);
             exit;
 

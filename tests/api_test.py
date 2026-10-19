@@ -32,10 +32,10 @@ def spawn_php(tmp):
         except OSError: time.sleep(0.1)
     return proc, f"http://127.0.0.1:{port}/borg/api/"
 
-def start_php(tmp):
+def start_php(tmp, dsn=None):
     docroot = tmp / "www"; docroot.mkdir()
     (docroot / "borg").symlink_to(ROOT / "src", target_is_directory=True)
-    dsn = os.environ.get("BORG_TEST_DSN") or f"sqlite:{tmp / 'borg.sqlite'}"
+    dsn = dsn or os.environ.get("BORG_TEST_DSN") or f"sqlite:{tmp / 'borg.sqlite'}"
     cfg = tmp / "config.php"
     cfg.write_text("<?php return " + json.dumps({
         "db_dsn": dsn, "db_user": os.environ.get("BORG_TEST_DB_USER"), "db_pass": os.environ.get("BORG_TEST_DB_PASS"),
@@ -536,6 +536,170 @@ def run_api_books(base, tmp, admin, user):
     st, r = api_book(base, tok, fields={"x": "1"})
     check("rate limit is per key", st == 400 and r.get("error") == "missing_file")
 
+# ---------- PDF books (text-based magazines opened directly; migration 7 books.format) ----------
+def make_pdf(text="Hello from Borg", info="/Title (Test Magazine) /Author (Borg)", xref=True):
+    """A minimal valid PDF written by hand: catalog, pages, one page with a Helvetica text stream, xref, trailer + Info."""
+    stream = f"BT /F1 24 Tf 72 720 Td ({text}) Tj ET".encode()
+    objs = [b"<< /Type /Catalog /Pages 2 0 R >>",
+            b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+            b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+            b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    if info is not None: objs.append(b"<< " + (info.encode("latin-1") if isinstance(info, str) else info) + b" >>")
+    out, offs = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n"), []
+    for i, o in enumerate(objs, 1):
+        offs.append(len(out)); out += f"{i} 0 obj\n".encode() + o + b"\nendobj\n"
+    start = len(out)
+    if xref:
+        out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode() + b"".join(f"{o:010d} 00000 n \n".encode() for o in offs)
+    trailer = f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R" + (f" /Info {len(objs)} 0 R" if info is not None else "") + " >>\n"
+    out += trailer.encode() + f"startxref\n{start if xref else 0}\n%%EOF\n".encode()
+    return bytes(out)
+
+def raw_get(c, route, query):
+    """GET a binary route with the client's session: (status, body bytes, headers)."""
+    req = urllib.request.Request(f"{c.base}?r={route}{query}")
+    try:
+        with c.opener.open(req) as r: return r.status, r.read(), r.headers
+    except urllib.error.HTTPError as e: return e.code, e.read(), e.headers
+
+def run_pdfs(base, tmp, admin, user):
+    import random
+    st, r = admin.call("POST", "invites", {"note": "pdf reader"})
+    reader = Client(base)
+    reader.call("POST", "register", {"invite": r["code"], "email": "pdf@x.io", "password": "password7", "name": "خوانندهٔ PDF"})
+    st, h = reader.call("GET", "health")
+    check("pdf: health reports migration 7", h.get("schema_version", 0) >= 7, str(h.get("schema_version")))
+    storage = tmp / "storage" / "books"
+
+    # Chunked upload with the "pdf" hint
+    pdf = make_pdf("Chunked upload"); sha = hashlib.sha256(pdf).hexdigest()
+    p = tmp / "mag.pdf"; p.write_bytes(pdf)
+    st, r = upload(user, p, "مجله", "نویسنده", init_extra={"format": "pdf"})
+    b = r.get("book") or {}
+    check("pdf: chunked upload accepted, format pdf", st == 201 and b.get("format") == "pdf" and b.get("sha256") == sha and b.get("title") == "مجله", str(r)[:300])
+    pid = b.get("id")
+    check("pdf: stored as <sha>.pdf (no .epub)", (storage / sha[:2] / f"{sha}.pdf").is_file() and not (storage / sha[:2] / f"{sha}.epub").exists())
+    st, L = user.call("GET", "library")
+    fm = {x["id"]: x.get("format") for x in L["books"]}
+    check("pdf: library lists format pdf, EPUBs keep format epub", fm.get(pid) == "pdf" and fm and all(v == "epub" for k, v in fm.items() if k != pid), str(fm))
+    st, body, hd = raw_get(user, "book-file", f"&id={pid}")
+    check("pdf: book-file serves application/pdf with identical bytes", st == 200 and hd.get("Content-Type") == "application/pdf" and body == pdf
+          and ".pdf" in (hd.get("Content-Disposition") or ""), f"{st} {hd.get('Content-Type')} {len(body)}")
+    epub_id = next((k for k, v in fm.items() if v == "epub"), None)
+    st, body, hd = raw_get(user, "book-file", f"&id={epub_id}")
+    check("pdf: EPUB book-file unchanged (application/epub+zip)", st == 200 and hd.get("Content-Type") == "application/epub+zip" and body[:2] == b"PK"
+          and ".epub" in (hd.get("Content-Disposition") or ""), str(hd.get("Content-Type")))
+    st, r = user.call("POST", "upload-init", {"sha256": sha, "size": len(pdf), "title": "again", "format": "pdf"})
+    check("pdf: same PDF again dedupes by SHA-256", st == 200 and r.get("exists") is True and (r.get("book") or {}).get("id") == pid, str(r)[:200])
+    PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    st, r = user.call("POST", "book-meta", {"book_id": pid, "cover": PNG})
+    st2, cov, hd = raw_get(user, "book-cover", f"&id={pid}")
+    check("pdf: client-rendered cover can be stored and served", st == 200 and (r.get("book") or {}).get("has_cover") is True and st2 == 200
+          and hd.get("Content-Type") == "image/png", str(r)[:200])
+
+    # Detection from the bytes, not the hint
+    p2 = tmp / "nohint.pdf"; p2.write_bytes(make_pdf("No hint"))
+    st, r = upload(user, p2, "بدون اشاره")
+    check("pdf: detected from the bytes without a hint", st == 201 and (r.get("book") or {}).get("format") == "pdf", str(r)[:200])
+    st, r = upload(user, make_variant(tmp, "hint-lies"), "EPUB با اشارهٔ pdf", init_extra={"format": "pdf"})
+    hb = r.get("book") or {}
+    check("pdf: an EPUB sent with format pdf is stored as EPUB", st == 201 and hb.get("format") == "epub"
+          and (storage / hb.get("sha256", "xx")[:2] / f"{hb.get('sha256')}.epub").is_file(), str(r)[:200])
+    import zipfile
+    emb = tmp / "embeds-pdf.epub"
+    src = zipfile.ZipFile(FIX / "sample-fa.epub")
+    with zipfile.ZipFile(emb, "w") as z:  # "%PDF-" within the first 1024 bytes of a valid EPUB
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        z.writestr("OEBPS/a.pdf", make_pdf("Embedded")[:300], compress_type=zipfile.ZIP_STORED)
+        for info in src.infolist():
+            if info.filename != "mimetype": z.writestr(info, src.read(info.filename), compress_type=zipfile.ZIP_DEFLATED)
+    st, r = upload(user, emb, "EPUB با PDF درونی")
+    check("pdf: an EPUB with an embedded PDF near the start is still an EPUB", st == 201 and (r.get("book") or {}).get("format") == "epub", str(r)[:200])
+    user.call("POST", "library-remove", {"book_id": (r.get("book") or {}).get("id", 0)})
+    st, r = user.call("POST", "upload-init", {"sha256": "a" * 64, "size": 10, "title": "x", "format": "docx"})
+    check("pdf: upload-init unknown format hint -> 400 bad_format", st == 400 and r.get("error") == "bad_format", str(r))
+
+    # Rejections
+    fake = tmp / "fake.pdf"; fake.write_bytes(make_pdf("Truncated")[:-40])
+    rnd = tmp / "random.pdf"; rnd.write_bytes(random.Random(11).randbytes(5000))
+    st1, r1 = upload(user, fake, "ناقص", init_extra={"format": "pdf"})
+    st2, r2 = upload(user, rnd, "تصادفی", init_extra={"format": "pdf"})
+    st3, r3 = upload(user, rnd, "تصادفی")
+    check("pdf: PDF without %%EOF -> 422 not_pdf", st1 == 422 and r1.get("error") == "not_pdf", str(r1))
+    check("pdf: random bytes sent as pdf -> 422 not_pdf", st2 == 422 and r2.get("error") == "not_pdf", str(r2))
+    check("pdf: random bytes without a hint -> 422 not_epub", st3 == 422 and r3.get("error") == "not_epub", str(r3))
+    st, L = user.call("GET", "library")
+    check("pdf: rejected uploads leave no book", len(L["books"]) == len(fm) + 2, f"{len(L['books'])} vs {len(fm) + 2}")
+
+    # api-book
+    st, r = admin.call("POST", "api-token-create", {"name": "pdf"})
+    tok = r.get("token", "")
+    apdf = make_pdf("API upload")
+    st, r = api_book(base, tok, fields={"category": "مجله"}, file=("weekly-issue.pdf", apdf))
+    ab = r.get("book") or {}
+    check("api-book pdf -> 201 approved, cleanup not-applicable", st == 201 and r.get("catalog_status") == "approved" and r.get("duplicate") is False
+          and r.get("cleanup") == "not-applicable" and r.get("cleaned") == 0 and r.get("skipped_rules") == [], str(r)[:300])
+    check("api-book pdf: format pdf, metadata from the Info dictionary, no cover, file unchanged", ab.get("format") == "pdf" and ab.get("title") == "Test Magazine"
+          and ab.get("author") == "Borg" and ab.get("has_cover") is False and ab.get("sha256") == hashlib.sha256(apdf).hexdigest(), str(ab))
+    st, C = reader.call("GET", "catalog")
+    cb = next((x for x in C.get("books", []) if x["id"] == ab.get("id")), {})
+    check("api-book pdf: in the catalog with format pdf", cb.get("format") == "pdf" and cb.get("category") == "مجله", str(cb)[:200])
+    st, body, hd = raw_get(reader, "book-file", f"&id={ab.get('id')}")
+    check("api-book pdf: book-file application/pdf, identical bytes", st == 200 and hd.get("Content-Type") == "application/pdf" and body == apdf)
+    st, r = api_book(base, tok, file=("again.pdf", apdf))
+    check("api-book pdf duplicate -> duplicate:true, same book", st == 201 and r.get("duplicate") is True and (r.get("book") or {}).get("id") == ab.get("id"), str(r)[:200])
+    st, r = api_book(base, tok, fields={"title": "عنوان درخواست", "author": "نویسندهٔ درخواست", "language": "fa"}, file=("x.pdf", make_pdf("Fields")))
+    rb = r.get("book") or {}
+    check("api-book pdf: request fields win over the Info dictionary", st == 201 and rb.get("title") == "عنوان درخواست" and rb.get("author") == "نویسندهٔ درخواست"
+          and rb.get("language") == "fa", str(rb))
+    fa_title = "مجلهٔ هفتگی".encode("utf-16-be")
+    info = b"/Title <FEFF" + fa_title.hex().upper().encode() + b"> /Author (Caf\\351 \\(Ed.\\) \\\\ Borg)"
+    st, r = api_book(base, tok, file=("fa.pdf", make_pdf("Persian", info=info)))
+    check("api-book pdf: UTF-16BE hex title and escaped literal author decoded", st == 201 and (r.get("book") or {}).get("title") == "مجلهٔ هفتگی"
+          and r["book"].get("author") == "Café (Ed.) \\ Borg", str(r.get("book"))[:300])
+    st, r = api_book(base, tok, file=("no-xref.pdf", make_pdf("No xref table", info="/Title (Scanned For) /Author (Nobody)", xref=False)))
+    check("api-book pdf: Info found by scanning when there is no xref table", st == 201 and (r.get("book") or {}).get("title") == "Scanned For", str(r.get("book"))[:200])
+    st, r = api_book(base, tok, file=("شمارهٔ ۱۲.pdf", make_pdf("No info", info=None)))
+    check("api-book pdf without Info: title from the file name", st == 201 and (r.get("book") or {}).get("title") == "شمارهٔ ۱۲" and r["book"].get("author") == "", str(r.get("book"))[:200])
+    st1, r1 = api_book(base, tok, file=("fake.pdf", make_pdf("Truncated")[:-40]))
+    st2, r2 = api_book(base, tok, file=("random.pdf", random.Random(12).randbytes(4000)))
+    check("api-book fake pdf -> 400 not_pdf, random bytes -> 400 not_epub", (st1, r1.get("error"), st2, r2.get("error")) == (400, "not_pdf", 400, "not_epub"), f"{r1} {r2}")
+
+    # Garbage collection removes the .pdf file
+    user.call("POST", "library-remove", {"book_id": pid})
+    st, _ = admin.call("GET", "book-file", query=f"&id={pid}")
+    check("pdf: removing an unreferenced PDF deletes the .pdf file", st == 404 and not (storage / sha[:2] / f"{sha}.pdf").exists())
+
+def run_migration7():
+    """Migration 7 on an existing database: a v8.7 schema (no books.format) with an EPUB gets format 'epub' and keeps working."""
+    import sqlite3
+    tmp2 = Path(tempfile.mkdtemp(prefix="borg-m7-"))
+    proc, base2 = start_php(tmp2, dsn=f"sqlite:{tmp2 / 'old.sqlite'}")
+    try:
+        a = Client(base2)
+        a.call("POST", "setup", {"setup_key": SETUP_KEY, "email": "m7@x.io", "password": "password1", "name": "M7"})
+        epub = (FIX / "sample-fa.epub").read_bytes()
+        st, r = upload(a, FIX / "sample-fa.epub", "قدیمی")
+        bid = (r.get("book") or {}).get("id")
+        proc.terminate(); proc.wait(5)
+        # Turn the database back into a schema-6 one: drop the column and forget migration 7.
+        db = sqlite3.connect(tmp2 / "old.sqlite")
+        db.execute("ALTER TABLE books DROP COLUMN format"); db.execute("DELETE FROM schema_migrations WHERE version = 7"); db.commit()
+        cols = [c[1] for c in db.execute("PRAGMA table_info(books)")]
+        db.close()
+        proc, base2 = spawn_php(tmp2)
+        a.base = base2
+        st, h = a.call("GET", "health")
+        st2, L = a.call("GET", "library")
+        bk = next((x for x in L.get("books", []) if x["id"] == bid), {})
+        st3, body, hd = raw_get(a, "book-file", f"&id={bid}")
+        check("migration 7 applied on an existing database", "format" not in cols and h.get("schema_version") == 7, f"{cols} {h.get('schema_version')}")
+        check("migration 7: existing book reads as format epub and its file is still served", bk.get("format") == "epub" and st3 == 200
+              and body == epub and hd.get("Content-Type") == "application/epub+zip", f"{bk} {st3}")
+    finally:
+        proc.terminate(); proc.wait(5); shutil.rmtree(tmp2, ignore_errors=True)
+
 def _texts(node):
     out = []
     for c in node.childNodes:
@@ -844,6 +1008,8 @@ def run(base, tmp):
     run_replace(base, tmp, admin, user)
     run_errors(base, admin, user)
     run_api_books(base, tmp, admin, user)
+    run_pdfs(base, tmp, admin, user)
+    run_migration7()
 
     st, r = anon.call("GET", "nope")
     check("unknown route 404", st == 404)

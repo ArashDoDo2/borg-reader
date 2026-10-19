@@ -256,11 +256,21 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   created_at, last_used_at, uses, revoked, require_review; counters/flags `NOT NULL DEFAULT 0`) and `settings_text`
   (name, value TEXT) for settings too long for `settings.value` VARCHAR(500) — the cleanup rules live there as
   `clean_rules`.
+  Migration 7 (PDF support) adds `books.format` VARCHAR(8) `NOT NULL DEFAULT 'epub'` (`epub`|`pdf`); existing rows are EPUBs.
 - **Auth:** invite-only. First admin via `setup` (needs `setup_key`, only while no users exist). Session token in an
   HttpOnly/Secure/SameSite=Lax cookie scoped to the app path; DB stores only its SHA-256. Mutating routes need the
   per-session CSRF token in `X-CSRF-Token`; JSON routes reject non-JSON bodies. Login/register/setup are rate limited.
 - **Books:** chunked upload (`upload-init` → `upload-chunk` × n → `upload-complete`), chunk ≤ min(2 MB, 80% of PHP
   limits). Server verifies size, SHA-256 and EPUB structure (no extraction), stores `~/borg-storage/books/xx/<sha>.epub`.
+  **PDFs (text-based magazines opened directly):** accepted by the same flow. `upload-init` takes an optional
+  `format` hint (`epub`|`pdf`, else 400 `bad_format`); `upload-complete` detects the type from the bytes and ignores
+  the hint: a file starting with the ZIP signature is checked as an EPUB (`validate_epub`); otherwise PDF = `%PDF-`
+  within the first 1024 bytes and `%%EOF` within the last 2 KB. A `%PDF-` file without `%%EOF`, or a file that is
+  neither while the hint says `pdf`, → 422 `not_pdf`; anything else that is not an EPUB → 422 `not_epub` (as before).
+  PDFs are stored as `books/xx/<sha>.pdf` (`book_path($sha, $format)`; EPUB naming unchanged; `book_file_of()` looks
+  up by `books.format` with the other extension as fallback; `gc_book` removes both). `book-file` sends
+  `application/pdf` and `book-<id>.pdf` for PDFs (EPUB unchanged). `book-cover`/`book-meta` covers work the same (the
+  client renders and uploads a PDF's first page). Same `max_book_bytes` limit and SHA-256 dedupe.
   Same file = one copy for everyone (dedupe by hash). Downloads/covers go through PHP with a permission check
   (own library, approved catalog entry, or admin). Unreferenced books are garbage-collected.
 - **Progress:** last write wins by client timestamp (ms); older writes are ignored.
@@ -269,7 +279,7 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   `category` per book. Admin `catalog-update` updates only the keys present among `description`, `title`, `author`,
   `category`, `publisher`, `published`, `language`; all are validated before anything is written.
 - **Book fields:** every book object (`book_out`) has `id, sha256, size, title, author, language, publisher, published,
-  has_cover`. `upload-init` accepts optional `language` (≤20), `publisher` (≤300), `published` (≤40); the same keys
+  has_cover, format` (`format`: `"epub"` or `"pdf"`). `upload-init` accepts optional `language` (≤20), `publisher` (≤300), `published` (≤40); the same keys
   sent to `upload-complete` override them (used only when the file is new, not on dedupe).
 - **Metadata:** `book-meta` lets the uploader or an admin correct title/author/language/publisher/published/cover;
   each field changes only when its key is present (`title`, if present, must be non-empty).
@@ -315,7 +325,8 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   optional `title` ≤500, `author` ≤300, `language` ≤20, `publisher` ≤300, `published` ≤40, `category` ≤80,
   `description` ≤2000. Errors: 415 not multipart; 413 `post_too_large` / `file_too_large_for_php` (PHP
   `post_max_size` / `upload_max_filesize`, value named in the message) / `too_large` (`max_book_bytes`); 400
-  `missing_file`, `partial_upload`, `empty_file`, `not_epub` (same `validate_epub` as the upload flow), `too_long_*`.
+  `missing_file`, `partial_upload`, `empty_file`, `not_epub` (same `validate_epub` as the upload flow), `not_pdf`
+  (same detection as the upload flow), `too_long_*`.
   Steps: validate → read OPF metadata (dc:title/creator/language/publisher/date, date `YYYY-MM-DDT…` cut to the date)
   and the cover (EPUB 3 `properties~="cover-image"`, else EPUB 2 `<meta name="cover">`; png/jpeg/webp/gif ≤1.5 MB, else
   skipped) → apply `clean_rules` → validate again → SHA-256 of the **cleaned** file → dedupe → store with
@@ -327,6 +338,13 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   (ids judged too broad for this book)}`. Without ZipArchive/DOM the book is stored unmodified (`unavailable`), metadata
   then comes only from the request. `health` reports `zip` and `dom`. `.htaccess` copies the `Authorization` header to
   `HTTP_AUTHORIZATION` for CGI/FastCGI.
+  **PDF via api-book:** detected from the bytes like the upload flow and stored unchanged (no cleanup: `cleanup:
+  "not-applicable"`, `cleaned: 0`, `skipped_rules: []`; no server-side cover). Title/author: request fields, else the
+  trailer's `/Info` dictionary (`pdf_info_meta`, best effort, never fails: last `/Info N G R` in the last 64 KB, object
+  found through a classic `xref` table (following `/Prev`) or by scanning ≤32 MB; literal strings with escapes, hex
+  strings, UTF-16BE with BOM, UTF-8, else PDFDocEncoding read as Latin-1; one level of indirect string; skipped for
+  encrypted files and objects inside compressed object streams), else the file name without `.pdf`.
+  `language`/`publisher`/`published` only from the request.
 - **Server-side cleanup (`lib/clean.php`):** a port of the browser's `cleanEpub`/`cleanDocument`/`cleanLines`/
   `epubContentFiles` (§4a) and must stay in step with it. Content documents come from the OPF manifest
   (`application/xhtml+xml`, `text/html`; href URL-decoded and resolved; fallback every `*.x?html?` entry). XHTML is
