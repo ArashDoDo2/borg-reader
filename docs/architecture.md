@@ -102,7 +102,8 @@ Migration rules:
   a removable chip), description clamped to 5 lines with «بیشتر بخوانید» shown only when it is really cut off,
   metadata table (category, language, publisher, date, size, submitter — only rows with a value), breadcrumb
   (catalog / category / title), «کتاب‌های مشابه» (same author first, then same category, max 6).
-  The catalog view has category chips (built from `category` of the loaded books) combined with search and author filter.
+  The flat category chips of 8.1 were replaced by the v8.10 category navigator (§4f); a book without `categories` still
+  links its free-text `category`, shown as a removable chip like the author filter.
 - **Online preview (v8.1):** «مطالعهٔ آنلاین» fetches `book-file` into memory and opens the reader with an ephemeral
   record `{id: "preview-<catalogId>", preview: true}`. Nothing is written: no `books` record or cached locations,
   no progress (`saveProgress` and `saveAnnotation` ignore `preview-` ids as a last guard), no bookmarks/highlights/notes
@@ -215,6 +216,40 @@ lists and the `#catalogEditDialog` editor were removed (replaced by the books ta
   reviewed book leaves the local list and the next one is shown without a reload. «فهرست» switches to the compact
   `#pendingList` (approve/reject/details per row).
 - **CSS:** one block `/* v8.9 admin */` at the end of `app.css` (palette variables, `body.dark` variants).
+
+## 4f. Categories (v8.10, client side)
+A fixed two-level list (category → subcategory) kept by the admin; a book can have several. `GET categories` →
+`{categories: [{id, name, parent_id, sort, count, count_all (admins)}]}`, flat, each top-level entry followed by its children
+(a top-level count includes its children). `loadCategories()` caches it for 5 min (dedupes concurrent calls, `force` after an
+admin change); a 404 counts as an empty list. **An empty list switches every category UI off** and the free-text
+`category` flows of 8.1/8.9 stay (prompt-based suggestion, details text field, «تعیین/حذف دسته», `category=` filter).
+Books carry `categories: [{id, name, parent_id, parent_name}]` (`bookCats()`; `catPathOf()` → «ادبیات › شعر»).
+- **Public catalog:** `catalogFilter.cat` → `catalog&cat=ID` (a top-level id includes its children); old whole-list
+  servers filter locally (`bookInCat`). ≥ 900 px: `#catNav` column on the right (RTL) with «همهٔ کتاب‌ها» and the top
+  categories (count, chevron when they have children); hover (fine pointer) or click opens `#catNavPanel` to its left:
+  «همهٔ کتاب‌های X ›» + subcategories in two columns; Escape / leaving / clicking outside closes it. Below 900 px:
+  «دسته‌ها» (`#catSheetOpen`, shows the chosen name) opens `#catSheet` (bottom sheet on phones) with a drill-down: top
+  level → subcategories, back arrow, «همه…» at each level; it reopens at the chosen category's level. The choice is
+  shown as `#catCrumbs` «کتابخانهٔ عمومی › ادبیات › شعر» with «✕ همهٔ دسته‌ها». Hash `#catalog?cat=ID`: a choice pushes a
+  history entry; `routeFromHash` reads it (back, refresh, deep link). Navigator and button are hidden when the list is empty.
+- **Book page:** row «دسته‌ها» with one link per category («ادبیات › شعر» → `#catalog?cat=ID`); the breadcrumb uses the
+  first category. «کتاب‌های مشابه» (`relatedSteps`): same subcategory (≤ 2), same author, same top category, old
+  free-text category — one `per=6` page each until 6 books.
+- **Admin «دسته‌ها» tab** (`#admin/cats`, after «کتاب‌ها»): tree `#catTree` with counts (`count_all`); add a top category
+  (`#catAddTop`), «+ زیردسته», rename inline (Enter saves, Escape cancels), «انتقال به…» for a subcategory (other top
+  categories) — all `category-save {id?, name, parent_id}`; ↑/↓ → `category-order {parent_id, ids}` (the siblings in their
+  new order); «حذف» → `#catDelDialog`: unlink (`{id}`) or move the books (`{id, move_to}`), toast from `{moved, unlinked}`.
+  "No parent" is sent as the value the server uses for its top-level entries (null when unknown). Persian errors
+  (`CAT_ERRORS`): duplicate, too_deep, has_children (explained in the dialog), missing/too long name, not found.
+- **Picker** (`makeCatPicker`): chips with ×, search (`libFold`), options grouped by parent (the parent stays as the group
+  head while searching), max 10 (the rest disabled with a note), Enter in the search picks the first match. Used in the
+  details panel (replaces the text field; saved as `catalog-update {…, categories}` without `category`), in
+  `#catPickDialog` (review queue «C» → `catalog-update {book_id, categories}`; single mode for bulk) and in the user's
+  suggestion dialog `#submitDialog` (`catalog-submit {book_id, description, categories}`).
+- **Books tab:** `#admFCategory` becomes the tree (parents first, children indented; `cat=ID` / `cat=none`, kept in the hash;
+  «کتاب‌های بدون دسته» → `cat=none`). Bulk «افزودن دسته…» / «برداشتن دسته…» pick one category → `admin-bulk {action:
+  add_category | remove_category, category_id, ids | filter}` (remove asks with the name and count).
+- **CSS:** one block `/* v8.10 categories */` at the end of `app.css`.
 
 ## 4b. Reader engine (v8)
 Details and history of each workaround: `docs/context/reader-engine-notes.md`.
@@ -342,6 +377,14 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   bulk bar and details sheet fit, no horizontal scroll; no JS errors or external requests. Older admin checks (sections
   10, 12, 15, 19, 27) click the matching sub-tab first; section 12/15 use the books tab (real `admin-books`, or the
   `books-all` + `catalog-all` fallback on an older server).
+- e2e section 32 (v8.10 categories, mocks of `categories`, `catalog`, `category-*`, `admin-books`, `admin-bulk`,
+  `catalog-update/-pending/-submit`; the invited user with role "admin" patched in): navigator geometry and panel (two
+  columns, left of the list), `cat=` requests, hash + back + refresh + deep link, clearing, book page links and similar
+  books by subcategory, phone sheet drill-down, admin tree CRUD/order/delete payloads and Persian errors, tree filter in the
+  hash, picker (search, grouping, ×, max 10) payloads, bulk add/remove payloads, queue «C», the user's suggestion dialog,
+  390 px without horizontal scroll; no JS errors or external requests. `BORG_SHOTS=<dir>` saves screenshots.
+  `new_ctx` (and section 31's contexts) answer a 404 from `categories` with an empty list (`categories_fallback`), so the
+  older sections do not depend on the server version.
 - e2e section 27 (v8.7): API keys and admin cleanup-rule sync with Playwright route mocks of `api-tokens`,
   `api-token-create`, `api-token-revoke` and `clean-rules` (real admin login): adopt server rules when local is empty,
   debounced POST of the full list on add/delete, key shown once + copy, list/revoked state, revoke call, 390 px fit,

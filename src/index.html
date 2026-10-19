@@ -91,10 +91,19 @@
         <div class="section-heading"><div><p class="eyebrow">برای همه</p><h2>کتابخانهٔ عمومی</h2></div>
           <div class="library-controls"><label class="search-box"><span>⌕</span><input id="catalogSearch" type="search" placeholder="جست‌وجو در کتابخانهٔ عمومی…" autocomplete="off"></label></div></div>
         <p class="muted catalog-hint">برای پیشنهاد یک کتاب، در «کتابخانهٔ من» دکمهٔ ⇪ روی جلد آن را بزن.</p>
+        <div id="catalogLayout" class="catalog-layout">
+        <nav id="catNav" class="cat-nav" aria-label="دسته‌های کتابخانهٔ عمومی" hidden>
+          <h3 class="cat-nav-title">دسته‌ها</h3>
+          <ul id="catNavList" class="cat-nav-list"></ul>
+          <div id="catNavPanel" class="cat-nav-panel" hidden></div>
+        </nav>
+        <div class="catalog-main">
+        <nav id="catCrumbs" class="breadcrumb cat-crumbs" aria-label="دستهٔ انتخاب‌شده" hidden></nav>
         <div id="catalogFilters" class="filter-chips catalog-filters" role="group" aria-label="فیلتر کتابخانهٔ عمومی" hidden></div>
         <div class="catalog-toolbar">
           <p id="catalogCount" class="catalog-count" aria-live="polite"></p>
           <div class="catalog-tools">
+            <button id="catSheetOpen" class="secondary-button cat-sheet-open" type="button" aria-haspopup="dialog" aria-controls="catSheet" hidden><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span id="catSheetOpenLabel">دسته‌ها</span></button>
             <div id="catalogFormat" class="segmented catalog-format" role="group" aria-label="نوع فایل">
               <button type="button" data-format="" aria-pressed="true">همه</button><button type="button" data-format="epub" aria-pressed="false">EPUB</button><button type="button" data-format="pdf" aria-pressed="false">PDF</button>
             </div>
@@ -106,6 +115,8 @@
         <div id="catalogGrid" class="book-grid"></div>
         <div id="catalogMore" class="catalog-more" hidden><button id="catalogMoreButton" class="secondary-button" type="button">بیشتر</button></div>
         <p id="catalogEmpty" class="muted" hidden>هنوز کتابی در کتابخانهٔ عمومی نیست.</p>
+        </div>
+        </div>
       </div>
       <div id="viewBook" class="view book-page" hidden>
         <div class="book-page-top">
@@ -150,6 +161,7 @@
           <button type="button" role="tab" id="admTab-overview" data-admin-tab="overview" aria-controls="admPanel-overview" aria-selected="true">نمای کلی</button>
           <button type="button" role="tab" id="admTab-queue" data-admin-tab="queue" aria-controls="admPanel-queue" aria-selected="false">صف تأیید <span id="admBadgeQueue" class="adm-badge" hidden></span></button>
           <button type="button" role="tab" id="admTab-books" data-admin-tab="books" aria-controls="admPanel-books" aria-selected="false">کتاب‌ها</button>
+          <button type="button" role="tab" id="admTab-cats" data-admin-tab="cats" aria-controls="admPanel-cats" aria-selected="false">دسته‌ها</button>
           <button type="button" role="tab" id="admTab-users" data-admin-tab="users" aria-controls="admPanel-users" aria-selected="false">کاربران</button>
           <button type="button" role="tab" id="admTab-invites" data-admin-tab="invites" aria-controls="admPanel-invites" aria-selected="false">دعوت‌ها</button>
           <button type="button" role="tab" id="admTab-api" data-admin-tab="api" aria-controls="admPanel-api" aria-selected="false">کلیدهای API</button>
@@ -213,12 +225,21 @@
               <button type="button" class="secondary-button" data-bulk="reject">رد</button>
               <button type="button" class="secondary-button" data-bulk="set_category">تعیین دسته</button>
               <button type="button" class="secondary-button" data-bulk="clear_category">حذف دسته</button>
+              <button type="button" class="secondary-button" data-bulk="add_category" hidden>افزودن دسته…</button>
+              <button type="button" class="secondary-button" data-bulk="remove_category" hidden>برداشتن دسته…</button>
               <button type="button" class="secondary-button" data-bulk="add_catalog">افزودن به کتابخانهٔ عمومی</button>
               <button type="button" class="secondary-button" data-bulk="remove_catalog">برداشتن از کتابخانهٔ عمومی</button>
               <button type="button" class="secondary-button adm-danger" data-bulk="delete">حذف</button>
             </div>
             <button id="admBulkClear" class="icon-button" type="button" aria-label="لغو انتخاب" title="لغو انتخاب">×</button>
           </div>
+        </section>
+        <section id="admPanel-cats" class="adm-panel" role="tabpanel" aria-labelledby="admTab-cats" data-admin-panel="cats" hidden>
+          <div class="admin-block cat-admin"><h3>دسته‌ها <span id="catAdmTotal" class="status-chip"></span></h3>
+            <p class="muted small">دو سطح: دسته و زیردسته. هر کتاب می‌تواند چند دسته داشته باشد. ترتیب این‌جا همان ترتیب فهرست کتابخانهٔ عمومی است.</p>
+            <form id="catAddTop" class="admin-row cat-add" novalidate><input id="catAddTopName" class="admin-input" maxlength="80" placeholder="نام دستهٔ اصلی تازه، مثلاً ادبیات" aria-label="نام دستهٔ اصلی تازه" autocomplete="off" dir="auto"><button class="secondary-button" type="submit">افزودن دستهٔ اصلی</button></form>
+            <p id="catAdmError" class="form-error" role="alert"></p>
+            <ul id="catTree" class="cat-tree" aria-label="درخت دسته‌ها"></ul></div>
         </section>
         <section id="admPanel-users" class="adm-panel" role="tabpanel" aria-labelledby="admTab-users" data-admin-panel="users" hidden>
           <div class="admin-block"><h3>کاربران</h3><div id="userList" class="admin-list"></div></div>
@@ -488,7 +509,8 @@
     <form id="admDetailForm" class="auth-form adm-detail-form" novalidate>
       <label>عنوان<input name="title" maxlength="500" required dir="auto"></label>
       <label>نویسنده<input name="author" maxlength="300" dir="auto"></label>
-      <label>دسته‌بندی<input name="category" maxlength="80" list="admCatList" autocomplete="off" dir="auto"></label>
+      <label id="admDetailCatLabel">دسته‌بندی<input name="category" maxlength="80" list="admCatList" autocomplete="off" dir="auto"></label>
+      <div id="admDetailCatsWrap" class="cp-field" hidden><span class="cp-label">دسته‌ها</span><div id="admDetailCats"></div><p id="admDetailLegacyCat" class="muted small" hidden></p></div>
       <label>توضیحات<textarea name="description" maxlength="2000" rows="4" dir="auto"></textarea></label>
       <p id="admDetailCatalogNote" class="muted small" hidden>دسته و توضیحات فقط برای کتاب‌های کتابخانهٔ عمومی ذخیره می‌شوند.</p>
       <label>ناشر<input name="publisher" maxlength="300" dir="auto"></label>
@@ -508,6 +530,44 @@
     <form id="admCatForm" class="auth-form" novalidate>
       <label><span id="admCatLabel">دسته</span><input id="admCatInput" name="category" maxlength="80" list="admCatList" autocomplete="off" dir="auto" placeholder="مثلاً رمان، شعر، تاریخ"></label>
       <button id="admCatOk" class="primary-button" type="submit">ثبت دسته</button>
+    </form>
+  </dialog>
+  <dialog id="catPickDialog" class="account-dialog cat-pick-dialog" aria-labelledby="catPickTitle">
+    <button id="catPickClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <h2 id="catPickTitle">دسته‌ها</h2>
+    <form id="catPickForm" class="auth-form" novalidate>
+      <div id="catPickBox"></div>
+      <button id="catPickOk" class="primary-button" type="submit">ثبت</button>
+    </form>
+  </dialog>
+  <dialog id="catDelDialog" class="account-dialog cat-del-dialog" aria-labelledby="catDelTitle">
+    <button id="catDelClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <h2 id="catDelTitle">حذف دسته</h2>
+    <form id="catDelForm" class="auth-form" novalidate>
+      <p id="catDelInfo" class="cat-del-info"></p>
+      <label class="cat-del-opt"><input type="radio" name="mode" value="unlink" checked> فقط از کتاب‌ها برداشته شود</label>
+      <label class="cat-del-opt"><input type="radio" name="mode" value="move"> کتاب‌هایش به این دسته منتقل شوند:</label>
+      <select id="catDelMoveTo" class="admin-input" aria-label="دستهٔ مقصد"></select>
+      <p id="catDelError" class="form-error" role="alert"></p>
+      <button id="catDelOk" class="primary-button" type="submit">حذف دسته</button>
+    </form>
+  </dialog>
+  <dialog id="catSheet" class="account-dialog cat-sheet" aria-labelledby="catSheetTitle">
+    <div class="cat-sheet-head">
+      <button id="catSheetBack" class="icon-button cat-sheet-back" type="button" aria-label="بازگشت به همهٔ دسته‌ها" hidden><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 6l6 6-6 6"/></svg></button>
+      <h2 id="catSheetTitle">دسته‌ها</h2>
+      <button id="catSheetClose" class="icon-button cat-sheet-close" type="button" aria-label="بستن">×</button>
+    </div>
+    <ul id="catSheetList" class="cat-sheet-list"></ul>
+  </dialog>
+  <dialog id="submitDialog" class="account-dialog submit-dialog" aria-labelledby="submitTitle">
+    <button id="submitClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <h2 id="submitTitle">پیشنهاد برای کتابخانهٔ عمومی</h2>
+    <form id="submitForm" class="auth-form" novalidate>
+      <p id="submitBook" class="muted small submit-book" dir="auto"></p>
+      <label>توضیح کوتاه (اختیاری)<textarea name="description" maxlength="2000" rows="3" dir="auto"></textarea></label>
+      <div class="cp-field"><span class="cp-label">دسته‌ها (اختیاری، حداکثر ۱۰)</span><div id="submitCats"></div></div>
+      <button id="submitOk" class="primary-button" type="submit">ارسال برای کتابخانهٔ عمومی</button>
     </form>
   </dialog>
   <datalist id="admCatList"></datalist>

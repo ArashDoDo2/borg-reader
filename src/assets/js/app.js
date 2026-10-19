@@ -3116,7 +3116,7 @@
     if (view === "admin") openAdmin();
   }
   document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.addEventListener("click", () => {
-    if (t.dataset.view === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; catalogState.at = 0; }
+    if (t.dataset.view === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; catalogFilter.cat = ""; catalogState.at = 0; }
     setHash(t.dataset.view === "catalog" ? "#catalog" : "", false);
     showView(t.dataset.view);
   }));
@@ -3413,7 +3413,9 @@
   // categories). A server without paging answers with the whole list and no `total`: the client then filters and sorts
   // that list itself, as before. Loaded pages stay in memory, so coming back from a book page restores list and scroll.
   let catalogBooks = [], catalogLoaded = false;
-  const catalogFilter = { author: "", category: "", format: "", sort: "new" };
+  // v8.10: `cat` is a category id from the admin's two-level list (a top-level id includes its subcategories); `category`
+  // is the old free-text category, still reachable from a book page whose book has no categories yet.
+  const catalogFilter = { author: "", category: "", cat: "", format: "", sort: "new" };
   const CATALOG_PER = 24, CATALOG_TTL = 5 * 60 * 1000;
   // mode: "" unknown, "paged" server pages, "full" whole list filtered here. seq invalidates answers to older requests.
   const catalogState = { mode: "", key: "", total: 0, page: 0, facets: [], loading: false, failed: false, seq: 0, at: 0, scrollY: null };
@@ -3427,6 +3429,127 @@
     Object.assign(catalogState, { mode: "", key: "", total: 0, page: 0, facets: [], loading: false, failed: false, at: 0, scrollY: null });
     catalogState.seq++;
     catalogSeen.clear(); relatedCache.clear(); detailChecked.clear(); detailFetching = 0;
+    catalogFilter.cat = ""; setCategories([]); cats.loaded = false; cats.seq++; cats.pending = null;
+  }
+
+  // ---------- v8.10 categories: a fixed two-level list (category → subcategory) kept by the admin ----------
+  // GET categories → {categories: [{id, name, parent_id, sort, count, count_all (admins)}]}, flat: each top-level category
+  // followed by its children; a top-level count includes its children's books. Books carry `categories: [{id, name,
+  // parent_id, parent_name}]`. An empty list (or a server without the route) turns every category UI off: the old
+  // free-text category flows stay as they were.
+  const cats = { list: [], byId: new Map(), tops: [], kids: new Map(), loaded: false, supported: true, at: 0, pending: null, seq: 0, topPid: null };
+  const CATS_TTL = 5 * 60 * 1000;
+  const catTreeOn = () => cats.list.length > 0;
+  function setCategories(list) {
+    const raw = (Array.isArray(list) ? list : []).filter(c => c && c.id != null && String(c.name || "").trim());
+    const top = raw.find(c => !Number(c.parent_id));
+    if (top) cats.topPid = top.parent_id === undefined ? null : top.parent_id;
+    cats.list = raw.map(c => ({ ...c, id: Number(c.id), name: String(c.name).trim(), parent_id: Number(c.parent_id) || null, count: Number(c.count) || 0,
+                                ...(c.count_all != null ? { count_all: Number(c.count_all) || 0 } : {}) }));
+    cats.byId = new Map(cats.list.map(c => [c.id, c]));
+    cats.tops = cats.list.filter(c => !c.parent_id);
+    cats.kids = new Map(cats.tops.map(t => [t.id, []]));
+    for (const c of cats.list) if (c.parent_id && cats.kids.has(c.parent_id)) cats.kids.get(c.parent_id).push(c);
+    cats.loaded = true; cats.at = Date.now();
+  }
+  /** The list, cached for 5 minutes (force: after an admin change). Never throws; a 404 means "no categories here". */
+  function loadCategories(force) {
+    if (!account) return Promise.resolve(cats);
+    if (!force && cats.loaded && Date.now() - cats.at < CATS_TTL) return Promise.resolve(cats);
+    if (cats.pending && !force) return cats.pending;
+    const seq = ++cats.seq;
+    const p = (async () => {
+      try {
+        const r = await api("categories");
+        if (seq === cats.seq) { setCategories(r && r.categories); cats.supported = true; }
+      } catch (err) {
+        if (seq === cats.seq && err instanceof ApiFail && err.status === 404) { setCategories([]); cats.supported = false; }
+        else if (seq === cats.seq) console.warn("Categories failed:", err);
+      } finally { if (cats.pending === p) cats.pending = null; }
+      if (seq === cats.seq) onCategoriesChanged();
+      return cats;
+    })();
+    cats.pending = p;
+    return p;
+  }
+  /** Everything that draws categories redraws itself (catalog navigator, book page, admin tree/filters/details). */
+  function onCategoriesChanged() {
+    if (!$("viewCatalog").hidden) renderCatalogFilters();
+    if (!$("viewBook").hidden && catalogSeen.has(detailId)) renderBookDetail();
+    if (!$("viewAdmin").hidden) admCatsChanged();
+  }
+  const catName = id => (cats.byId.get(Number(id)) || {}).name || "";
+  const bookCats = b => (b && Array.isArray(b.categories) ? b.categories.filter(c => c && c.id != null).map(c => ({ ...c, id: Number(c.id), parent_id: Number(c.parent_id) || null })) : []);
+  /** «ادبیات › شعر» for a subcategory, «ادبیات» for a top-level one (object from a book, or an id from the list). */
+  function catPathOf(c) {
+    if (c == null || c === "") return "";
+    if (typeof c !== "object") c = cats.byId.get(Number(c)) || { id: Number(c), name: "" };
+    const parent = c.parent_id ? (c.parent_name || catName(c.parent_id)) : "";
+    return parent ? `${parent} › ${c.name}` : String(c.name || "");
+  }
+  const catObj = id => { const c = cats.byId.get(Number(id)); return c ? { id: c.id, name: c.name, parent_id: c.parent_id, parent_name: c.parent_id ? catName(c.parent_id) : null } : null; };
+  const bookInCat = (b, id) => { id = Number(id); return bookCats(b).some(c => c.id === id || c.parent_id === id); };
+  const catCount = c => (c.count_all != null && isAdmin() ? c.count_all : c.count);
+
+  /** Multi-select (or single) category picker: chips with ×, a search box, options grouped by parent, max entries. */
+  function makeCatPicker(root, { max = 10, single = false, label = "دسته‌ها" } = {}) {
+    root.classList.add("cat-picker");
+    root.innerHTML = `<div class="cp-chips"></div><input type="search" class="admin-input cp-search" placeholder="جستجوی دسته…" aria-label="جستجوی ${esc(label)}" autocomplete="off" enterkeyhint="done">`
+      + `<p class="cp-note small" aria-live="polite"></p><div class="cp-list" role="listbox" aria-label="${esc(label)}"${single ? "" : ' aria-multiselectable="true"'}></div>`;
+    const chips = root.querySelector(".cp-chips"), search = root.querySelector(".cp-search"), note = root.querySelector(".cp-note"), list = root.querySelector(".cp-list");
+    const st = { sel: [], q: "", off: false };
+    function render() {
+      const focused = document.activeElement && root.contains(document.activeElement) ? document.activeElement.dataset.cp : null;
+      chips.innerHTML = st.sel.map(id => `<span class="cp-chip" dir="auto">${esc(catPathOf(id))}<button type="button" data-cp-del="${id}" aria-label="برداشتن «${esc(catPathOf(id))}»"${st.off ? " disabled" : ""}>×</button></span>`).join("")
+        || `<span class="cp-none muted small">${single ? "هنوز دسته‌ای انتخاب نشده" : "بدون دسته"}</span>`;
+      const q = libFold(st.q).key, hit = c => !q || libFold(c.name).key.includes(q);
+      const full = !single && st.sel.length >= max;
+      const opt = (c, sub) => {
+        const on = st.sel.includes(c.id);
+        return `<button type="button" role="option" class="cp-opt ${sub ? "cp-sub" : "cp-top"}" data-cp="${c.id}" aria-selected="${on}"${(!on && full) || st.off ? " disabled" : ""}>`
+          + `<span class="cp-check" aria-hidden="true"></span><span class="cp-name" dir="auto">${esc(c.name)}</span></button>`;
+      };
+      let html = "";
+      for (const t of cats.tops) {
+        const kids = (cats.kids.get(t.id) || []).filter(k => hit(k) || hit(t));
+        if (!hit(t) && !kids.length) continue;
+        html += `<div class="cp-group" role="group" aria-label="${esc(t.name)}">${opt(t, false)}${kids.map(k => opt(k, true)).join("")}</div>`;
+      }
+      list.innerHTML = html || `<p class="cp-empty muted small">${cats.list.length ? "دسته‌ای با این نام نیست." : "هنوز دسته‌ای تعریف نشده است."}</p>`;
+      note.textContent = full ? `حداکثر ${faNum(max)} دسته؛ برای افزودن، یکی را بردار.` : "";
+      if (focused) { const f = list.querySelector(`[data-cp="${focused}"]`); if (f && !f.disabled) f.focus({ preventScroll: true }); }
+    }
+    function toggle(id) {
+      if (st.off) return;
+      if (single) st.sel = [id];
+      else if (st.sel.includes(id)) st.sel = st.sel.filter(x => x !== id);
+      else if (st.sel.length < max) st.sel = [...st.sel, id];
+      render();
+    }
+    list.addEventListener("click", e => { const b = e.target.closest("[data-cp]"); if (b && !b.disabled) toggle(Number(b.dataset.cp)); });
+    chips.addEventListener("click", e => {
+      const b = e.target.closest("[data-cp-del]");
+      if (!b || st.off) return;
+      st.sel = st.sel.filter(x => x !== Number(b.dataset.cpDel)); render(); search.focus({ preventScroll: true });
+    });
+    search.addEventListener("input", () => { st.q = search.value; render(); });
+    search.addEventListener("keydown", e => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const first = list.querySelector('[data-cp][aria-selected="false"]:not([disabled])');
+      if (first) { toggle(Number(first.dataset.cp)); search.select(); }
+    });
+    render();
+    return {
+      get: () => [...st.sel],
+      set(ids) {
+        const seen = new Set();
+        st.sel = (ids || []).map(Number).filter(id => cats.byId.has(id) && !seen.has(id) && seen.add(id)).slice(0, single ? 1 : max);
+        st.q = ""; search.value = ""; render();
+      },
+      disable(on) { st.off = !!on; search.disabled = !!on; render(); },
+      render, focus: () => search.focus(),
+    };
   }
   let detailId = null;
   let previewCache = null; // { id, blob }: the last catalog file fetched for online reading, reused when it is added
@@ -3458,14 +3581,14 @@
   const catalogSearchText = () => $("catalogSearch").value.trim();
   function catalogQueryKey() {
     const f = catalogFilter;
-    return JSON.stringify([catalogSearchText(), f.author, f.category, f.format, f.sort]);
+    return JSON.stringify([catalogSearchText(), f.author, f.category, f.cat, f.format, f.sort]);
   }
   function catalogQuery(page, per = CATALOG_PER, params = null) {
     const f = catalogFilter;
-    const p = params || { q: catalogSearchText(), category: f.category, author: f.author, format: f.format, sort: f.sort === "new" ? "" : f.sort };
+    const p = params || { q: catalogSearchText(), category: f.category, cat: f.cat, author: f.author, format: f.format, sort: f.sort === "new" ? "" : f.sort };
     return `&page=${page}&per=${per}` + Object.entries(p).filter(([, v]) => v).map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join("");
   }
-  const catalogFiltered = () => !!(catalogSearchText() || catalogFilter.author || catalogFilter.category || catalogFilter.format);
+  const catalogFiltered = () => !!(catalogSearchText() || catalogFilter.author || catalogFilter.category || catalogFilter.cat || catalogFilter.format);
   /** (Re)load the first page for the current search and filters (or the whole list from a server without paging). */
   async function loadCatalog() {
     const seq = ++catalogState.seq, key = catalogQueryKey();
@@ -3561,6 +3684,7 @@
   /** Show the catalog view: from memory when the same list was loaded recently (back from a book page), else load. */
   function showCatalog() {
     const st = catalogState;
+    loadCategories();
     const fresh = catalogLoaded && Date.now() - st.at < CATALOG_TTL && (st.mode === "full" || st.key === catalogQueryKey());
     renderCatalog();
     if (!fresh) { loadCatalog(); return; }
@@ -3581,25 +3705,19 @@
     const cats = new Set([...catalogCategories(), ...(extra || [])].filter(Boolean));
     $("categoryList").innerHTML = [...cats].map(c => `<option value="${esc(c)}"></option>`).join("");
   }
+  // v8.10: the flat category chips gave way to the category navigator (renderCatNav); the author chip and the old
+  // free-text category (from a book page) stay as removable chips.
   function renderCatalogFilters() {
-    const cats = catalogCategories();
-    const counts = new Map(catalogState.mode === "paged" ? catalogState.facets.map(c => [String((c && c.name) || "").trim(), Number(c && c.count)]) : []);
     const chips = [];
     if (catalogFilter.author) {
       chips.push(`<button type="button" class="filter-chip-active" data-clear-author aria-label="برداشتن فیلتر نویسنده ${esc(catalogFilter.author)}">نویسنده: ${esc(catalogFilter.author)} <span aria-hidden="true">✕</span></button>`);
     }
-    if (cats.length || catalogFilter.category) {
-      const list = cats.includes(catalogFilter.category) || !catalogFilter.category ? cats : [...cats, catalogFilter.category];
-      chips.push(`<button type="button" data-cat-filter="" aria-pressed="${!catalogFilter.category}">همهٔ دسته‌ها</button>`);
-      // The count is drawn by CSS (data-count), so the chip's text stays the category name.
-      chips.push(...list.map(c => {
-        const n = counts.get(c);
-        const cnt = Number.isFinite(n) && n > 0 ? ` data-count="${n.toLocaleString("fa-IR")}" aria-label="${esc(c)} (${n.toLocaleString("fa-IR")} کتاب)"` : "";
-        return `<button type="button" data-cat-filter="${esc(c)}" aria-pressed="${c === catalogFilter.category}"${cnt}>${esc(c)}</button>`;
-      }));
+    if (catalogFilter.category) {
+      chips.push(`<button type="button" class="filter-chip-active" data-clear-category aria-label="برداشتن فیلتر دستهٔ ${esc(catalogFilter.category)}">دسته: ${esc(catalogFilter.category)} <span aria-hidden="true">✕</span></button>`);
     }
     $("catalogFilters").innerHTML = chips.join("");
     $("catalogFilters").hidden = !chips.length;
+    renderCatNav();
   }
   /** Old servers (whole list): filter and sort here. Paged servers already did it. */
   function visibleCatalogBooks() {
@@ -3608,6 +3726,7 @@
     const books = catalogBooks.filter(b => !q || `${b.title} ${b.author} ${b.description || ""} ${b.submitter || ""} ${b.category || ""} ${b.publisher || ""}`.toLocaleLowerCase().includes(q))
       .filter(b => !f.author || authorOf(b) === f.author)
       .filter(b => !f.category || catOf(b) === f.category)
+      .filter(b => !f.cat || bookInCat(b, f.cat))
       .filter(b => !f.format || (b.format === "pdf" ? "pdf" : "epub") === f.format);
     if (f.sort === "title") books.sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""), "fa"));
     if (f.sort === "author") books.sort((a, b) => authorOf(a).localeCompare(authorOf(b), "fa") || String(a.title || "").localeCompare(String(b.title || ""), "fa"));
@@ -3650,8 +3769,7 @@
   });
   $("catalogFilters").addEventListener("click", e => {
     if (e.target.closest("[data-clear-author]")) { catalogFilter.author = ""; applyCatalogFilters(); return; }
-    const c = e.target.closest("[data-cat-filter]");
-    if (c) { catalogFilter.category = c.dataset.catFilter; applyCatalogFilters(); }
+    if (e.target.closest("[data-clear-category]")) { catalogFilter.category = ""; applyCatalogFilters(); }
   });
   $("catalogFormat").addEventListener("click", e => {
     const t = e.target.closest("[data-format]");
@@ -3668,7 +3786,155 @@
     if (card) card.outerHTML = '<span class="book-badge">در کتابخانهٔ تو</span>';
   }
 
-  // ---- Navigation between the catalog and a book's page (deep-linkable: #catalog, #catalog/book/ID) ----
+  // ---- v8.10 category navigator: a list of top categories with a subcategory panel (≥ 900 px), a drill-down sheet on
+  // smaller screens, and a breadcrumb above the grid. The choice lives in the hash (#catalog?cat=ID): back, refresh and
+  // shared links keep it. ----
+  const catalogHash = () => `#catalog${catalogFilter.cat ? `?cat=${catalogFilter.cat}` : ""}`;
+  function catFromHash() {
+    const m = /^#catalog(?:\?(.*))?$/.exec(location.hash);
+    const v = m ? new URLSearchParams(m[1] || "").get("cat") || "" : "";
+    return /^\d{1,9}$/.test(v) ? String(Number(v)) : "";
+  }
+  let catNavOpenId = 0, catNavTimer = 0, catSheetLevel = 0;
+  const finePointer = () => !!(window.matchMedia && matchMedia("(hover: hover) and (pointer: fine)").matches);
+  function renderCatNav() {
+    const on = catTreeOn(), sel = catalogFilter.cat ? Number(catalogFilter.cat) : 0;
+    const cur = sel ? cats.byId.get(sel) : null, curTop = cur ? cur.parent_id || cur.id : 0;
+    $("catalogLayout").classList.toggle("has-cat-nav", on);
+    $("catNav").hidden = !on;
+    $("catSheetOpen").hidden = !on;
+    $("catSheetOpenLabel").textContent = cur ? `دسته: ${cur.name}` : "دسته‌ها";
+    $("catSheetOpen").classList.toggle("active", !!cur);
+    if (on) {
+      $("catNavList").innerHTML = `<li><button type="button" class="cat-nav-item cat-nav-all" data-cat-pick=""${sel ? "" : ' aria-current="true"'}><span class="cat-nav-name">همهٔ کتاب‌ها</span></button></li>`
+        + cats.tops.map(t => {
+          const kids = (cats.kids.get(t.id) || []).length;
+          const attrs = kids ? `data-cat-open="${t.id}" aria-haspopup="true" aria-expanded="false" aria-controls="catNavPanel"` : `data-cat-pick="${t.id}"`;
+          return `<li data-cat-top="${t.id}"><button type="button" class="cat-nav-item" ${attrs}${curTop === t.id ? ' aria-current="true"' : ""}>`
+            + `<span class="cat-nav-name" dir="auto">${esc(t.name)}</span><span class="cat-count">${faNum(t.count)}</span>`
+            + `${kids ? '<span class="cat-chev" aria-hidden="true">›</span>' : ""}</button></li>`;
+        }).join("");
+      if (catNavOpenId && cats.kids.has(catNavOpenId)) openCatPanel(catNavOpenId); else closeCatPanel();
+    } else closeCatPanel();
+    const crumbs = $("catCrumbs");
+    if (sel) {
+      const top = cur && cur.parent_id ? cats.byId.get(cur.parent_id) : null;
+      const sep = '<span class="crumb-sep" aria-hidden="true">›</span>';
+      crumbs.innerHTML = `<button type="button" class="crumb" data-cat-pick="">کتابخانهٔ عمومی</button>${sep}`
+        + (top ? `<button type="button" class="crumb" data-cat-pick="${top.id}" dir="auto">${esc(top.name)}</button>${sep}` : "")
+        + `<span class="crumb-current" aria-current="page" dir="auto">${esc(cur ? cur.name : cats.loaded ? "دستهٔ نامشخص" : "…")}</span>`
+        + `<button type="button" class="cat-clear" data-cat-pick="" aria-label="برداشتن فیلتر دسته"><span aria-hidden="true">✕</span> همهٔ دسته‌ها</button>`;
+    } else crumbs.innerHTML = "";
+    crumbs.hidden = !sel;
+  }
+  function openCatPanel(id, focus) {
+    const t = cats.byId.get(Number(id));
+    const kids = t ? cats.kids.get(t.id) || [] : [];
+    if (!t || !kids.length) { closeCatPanel(); return; }
+    clearTimeout(catNavTimer);
+    catNavOpenId = t.id;
+    const sel = catalogFilter.cat;
+    const p = $("catNavPanel");
+    p.innerHTML = `<button type="button" class="cat-panel-all" data-cat-pick="${t.id}"${sel === String(t.id) ? ' aria-current="true"' : ""}>همهٔ کتاب‌های ${esc(t.name)} <span aria-hidden="true">›</span></button>`
+      + `<ul class="cat-panel-list" aria-label="زیردسته‌های ${esc(t.name)}">${kids.map(k => `<li><button type="button" class="cat-panel-item" data-cat-pick="${k.id}"${sel === String(k.id) ? ' aria-current="true"' : ""}>`
+      + `<span dir="auto">${esc(k.name)}</span><span class="cat-count">${faNum(k.count)}</span></button></li>`).join("")}</ul>`;
+    p.hidden = false;
+    $("catNavList").querySelectorAll("[data-cat-open]").forEach(b => {
+      const open = Number(b.dataset.catOpen) === t.id;
+      b.setAttribute("aria-expanded", String(open)); b.classList.toggle("open", open);
+    });
+    if (focus) p.querySelector("button").focus({ preventScroll: true });
+  }
+  function closeCatPanel() {
+    clearTimeout(catNavTimer);
+    catNavOpenId = 0;
+    $("catNavPanel").hidden = true;
+    $("catNavList").querySelectorAll("[data-cat-open]").forEach(b => { b.setAttribute("aria-expanded", "false"); b.classList.remove("open"); });
+  }
+  /** Filter the catalog by a category ("" = all). A new history entry, so back returns to the previous choice. */
+  function chooseCatalogCat(id) {
+    const v = id ? String(Number(id)) : "";
+    closeCatPanel();
+    if ($("catSheet").open) $("catSheet").close();
+    if (v === catalogFilter.cat && !catalogFilter.category) return;
+    catalogFilter.cat = v; catalogFilter.category = "";
+    setHash(catalogHash(), true, { borg: "catalog" });
+    applyCatalogFilters();
+    const top = $("viewCatalog").getBoundingClientRect().top;
+    if (top < 0) window.scrollBy({ top: top - 10, behavior: "auto" });
+  }
+  $("viewCatalog").addEventListener("click", e => {
+    const pick = e.target.closest("[data-cat-pick]");
+    if (pick) { chooseCatalogCat(pick.dataset.catPick); return; }
+    const open = e.target.closest("[data-cat-open]");
+    if (open) {
+      const id = Number(open.dataset.catOpen);
+      if (catNavOpenId === id && !finePointer()) closeCatPanel();
+      else openCatPanel(id, e.detail === 0);
+    }
+  });
+  $("catNavList").addEventListener("mouseover", e => {
+    if (!finePointer()) return;
+    const li = e.target.closest("[data-cat-top]");
+    clearTimeout(catNavTimer);
+    if (!li) return;
+    if (li.querySelector("[data-cat-open]")) openCatPanel(li.dataset.catTop); else closeCatPanel();
+  });
+  $("catNav").addEventListener("mouseenter", () => clearTimeout(catNavTimer));
+  $("catNav").addEventListener("mouseleave", () => {
+    if (!finePointer() || !catNavOpenId || $("catNav").contains(document.activeElement)) return;
+    catNavTimer = setTimeout(closeCatPanel, 250);
+  });
+  $("catNav").addEventListener("focusout", e => { if (catNavOpenId && !$("catNav").contains(e.relatedTarget)) catNavTimer = setTimeout(closeCatPanel, 250); });
+  document.addEventListener("click", e => { if (catNavOpenId && !$("catNav").contains(e.target)) closeCatPanel(); });
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape" || !catNavOpenId) return;
+    const id = catNavOpenId;
+    closeCatPanel();
+    const b = $("catNavList").querySelector(`[data-cat-open="${id}"]`);
+    if (b) b.focus({ preventScroll: true });
+  });
+  // Smaller screens: «دسته‌ها» opens a sheet with a drill-down (top level → its subcategories, back, «همه» at each level).
+  function renderCatSheet() {
+    const t = catSheetLevel ? cats.byId.get(catSheetLevel) : null, sel = catalogFilter.cat;
+    $("catSheetTitle").textContent = t ? t.name : "دسته‌ها";
+    $("catSheetBack").hidden = !t;
+    const row = (attr, id, label, count, cls, drill) => `<li><button type="button" class="cat-sheet-item${cls ? " " + cls : ""}" ${attr}="${id}"`
+      + `${!drill && sel === String(id) ? ' aria-current="true"' : ""}><span class="cat-nav-name" dir="auto">${esc(label)}</span>`
+      + `${count != null ? `<span class="cat-count">${faNum(count)}</span>` : ""}${drill ? '<span class="cat-chev" aria-hidden="true">›</span>' : ""}</button></li>`;
+    $("catSheetList").innerHTML = t
+      ? row("data-cat-pick", t.id, `همهٔ کتاب‌های ${t.name}`, t.count, "cat-sheet-all") + (cats.kids.get(t.id) || []).map(k => row("data-cat-pick", k.id, k.name, k.count)).join("")
+      : row("data-cat-pick", "", "همهٔ کتاب‌ها", null, "cat-sheet-all") + cats.tops.map(x => {
+        const drill = (cats.kids.get(x.id) || []).length > 0;
+        return row(drill ? "data-cat-drill" : "data-cat-pick", x.id, x.name, x.count, "", drill);
+      }).join("");
+  }
+  function openCatSheet() {
+    const cur = catalogFilter.cat ? cats.byId.get(Number(catalogFilter.cat)) : null;
+    catSheetLevel = cur ? cur.parent_id || ((cats.kids.get(cur.id) || []).length ? cur.id : 0) : 0;
+    renderCatSheet();
+    $("catSheet").showModal();
+    const f = $("catSheetList").querySelector('[aria-current="true"]') || $("catSheetList").querySelector("button");
+    if (f) f.focus({ preventScroll: true });
+  }
+  $("catSheetOpen").addEventListener("click", openCatSheet);
+  $("catSheetClose").addEventListener("click", () => $("catSheet").close());
+  $("catSheetBack").addEventListener("click", () => {
+    const from = catSheetLevel;
+    catSheetLevel = 0; renderCatSheet();
+    const b = $("catSheetList").querySelector(`[data-cat-drill="${from}"]`) || $("catSheetList").querySelector("button");
+    if (b) b.focus({ preventScroll: true });
+  });
+  $("catSheetList").addEventListener("click", e => {
+    const d = e.target.closest("[data-cat-drill]");
+    if (d) { catSheetLevel = Number(d.dataset.catDrill); renderCatSheet(); const f = $("catSheetList").querySelector("button"); if (f) f.focus({ preventScroll: true }); return; }
+    const p = e.target.closest("[data-cat-pick]");
+    if (p) chooseCatalogCat(p.dataset.catPick);
+  });
+  $("catSheet").addEventListener("click", e => { if (e.target === $("catSheet")) $("catSheet").close(); }); // backdrop
+  matchMedia("(min-width: 900px)").addEventListener("change", e => { if (e.matches && $("catSheet").open) $("catSheet").close(); else if (!e.matches) closeCatPanel(); });
+
+  // ---- Navigation between the catalog and a book's page (deep-linkable: #catalog, #catalog?cat=ID, #catalog/book/ID) ----
   function setHash(hash, push, state) {
     const url = hash ? hash : location.pathname + location.search;
     try { (push ? history.pushState : history.replaceState).call(history, state || null, "", url); } catch (_) {}
@@ -3681,12 +3947,13 @@
     window.scrollTo({ top: Math.max(0, $("app").querySelector(".library-section").offsetTop - 10), behavior: "auto" });
   }
   function goToCatalog(push) {
-    setHash("#catalog", push, { borg: "catalog" });
+    setHash(catalogHash(), push, { borg: "catalog" });
     showView("catalog");
   }
   function filterCatalogBy(kind, value) {
     catalogFilter.author = kind === "author" ? value : "";
     catalogFilter.category = kind === "category" ? value : "";
+    catalogFilter.cat = kind === "cat" ? String(value) : "";
     $("catalogSearch").value = "";
     goToCatalog(true);
   }
@@ -3695,7 +3962,11 @@
     if (readerOpen() && currentBook && currentBook.preview) closeReader();
     const m = /^#catalog\/book\/(\d+)/.exec(location.hash);
     if (m) { detailId = Number(m[1]); showView("book"); }
-    else if (location.hash.startsWith("#catalog")) showView("catalog");
+    else if (location.hash.startsWith("#catalog")) {
+      const c = catFromHash();
+      if (c !== catalogFilter.cat) { catalogFilter.cat = c; if (c) catalogFilter.category = ""; }
+      showView("catalog");
+    }
     else if (location.hash.startsWith("#admin")) { if (isAdmin()) showView("admin"); }
     else if (!$("viewAdmin").hidden) showView("mine");
     else if (!$("viewBook").hidden || !$("viewCatalog").hidden) showView("mine");
@@ -3710,25 +3981,40 @@
   $("detailCrumbs").addEventListener("click", e => {
     const t = e.target.closest("[data-crumb]");
     if (!t) return;
-    if (t.dataset.crumb === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; goToCatalog(true); }
+    if (t.dataset.crumb === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; catalogFilter.cat = ""; goToCatalog(true); }
+    else if (t.dataset.crumb === "cat") filterCatalogBy("cat", t.dataset.crumbCat);
     else filterCatalogBy("category", t.dataset.crumbCat || "");
   });
   $("detailAuthor").addEventListener("click", () => { const b = catalogSeen.get(detailId); if (b && authorOf(b)) filterCatalogBy("author", authorOf(b)); });
-  $("detailMeta").addEventListener("click", e => { const t = e.target.closest("[data-meta-cat]"); if (t) filterCatalogBy("category", t.dataset.metaCat); });
+  $("detailMeta").addEventListener("click", e => {
+    const c = e.target.closest("[data-meta-catid]");
+    if (c) { filterCatalogBy("cat", c.dataset.metaCatid); return; }
+    const t = e.target.closest("[data-meta-cat]"); if (t) filterCatalogBy("category", t.dataset.metaCat);
+  });
 
   // ---- Book page ----
-  function relatedBooks(b, list) {
-    const others = list.filter(x => x.id !== b.id);
-    const sameAuthor = authorOf(b) ? others.filter(x => authorOf(x) === authorOf(b)) : [];
-    const sameCat = catOf(b) ? others.filter(x => catOf(x) === catOf(b) && !sameAuthor.includes(x)) : [];
-    return [...sameAuthor, ...sameCat].slice(0, 6);
+  /** What «کتاب‌های مشابه» looks for, in order: the same subcategory (v8.10), the same author, the same top category,
+   *  then the old free-text category. */
+  function relatedSteps(b) {
+    const bc = bookCats(b);
+    const subs = bc.filter(c => c.parent_id).map(c => c.id).slice(0, 2);
+    const tops = [...new Set(bc.map(c => c.parent_id || c.id))].slice(0, 1);
+    return [...subs.map(id => ["cat", id]), ["author", authorOf(b)], ...tops.map(id => ["cat", id]), ["category", catOf(b)]].filter(([, v]) => v);
   }
-  /** «کتاب‌های مشابه» without the whole list: one small page by the same author, then one by the same category. */
+  function relatedBooks(b, list) {
+    const out = [], ids = new Set([b.id]);
+    for (const [k, v] of relatedSteps(b)) {
+      const match = k === "cat" ? x => bookInCat(x, v) : k === "author" ? x => authorOf(x) === v : x => catOf(x) === v;
+      for (const x of list) if (!ids.has(x.id) && match(x)) { ids.add(x.id); out.push(x); }
+    }
+    return out.slice(0, 6);
+  }
+  /** «کتاب‌های مشابه» without the whole list: one small page per step of relatedSteps (subcategory, author, …). */
   async function relatedFor(b) {
     if (catalogState.mode === "full" && catalogFull) return relatedBooks(b, catalogFull);
     if (relatedCache.has(b.id)) return relatedCache.get(b.id);
     const out = [], ids = new Set([b.id]);
-    for (const [k, v] of [["author", authorOf(b)], ["category", catOf(b)]]) {
+    for (const [k, v] of relatedSteps(b)) {
       if (!v || out.length >= 6) continue;
       const r = await api("catalog", { query: catalogQuery(1, 6, { [k]: v }) });
       if (typeof r.total !== "number") { // server without paging: this was the whole list
@@ -3772,9 +4058,13 @@
       if (!detailChecked.has(detailId)) fetchCatalogBook(detailId);
       return;
     }
-    const cat = catOf(b);
-    $("detailCrumbs").innerHTML = `<button type="button" class="crumb" data-crumb="catalog">کتابخانهٔ عمومی</button><span class="crumb-sep" aria-hidden="true">/</span>`
-      + (cat ? `<button type="button" class="crumb" data-crumb="category" data-crumb-cat="${esc(cat)}">${esc(cat)}</button><span class="crumb-sep" aria-hidden="true">/</span>` : "")
+    const cat = catOf(b), bc = bookCats(b), first = bc[0];
+    const sep = '<span class="crumb-sep" aria-hidden="true">/</span>';
+    const firstParent = first && first.parent_id ? first.parent_name || catName(first.parent_id) : "";
+    $("detailCrumbs").innerHTML = `<button type="button" class="crumb" data-crumb="catalog">کتابخانهٔ عمومی</button>${sep}`
+      + (first ? (firstParent ? `<button type="button" class="crumb" data-crumb="cat" data-crumb-cat="${first.parent_id}" dir="auto">${esc(firstParent)}</button>${sep}` : "")
+        + `<button type="button" class="crumb" data-crumb="cat" data-crumb-cat="${first.id}" dir="auto">${esc(first.name)}</button>${sep}`
+      : cat ? `<button type="button" class="crumb" data-crumb="category" data-crumb-cat="${esc(cat)}">${esc(cat)}</button>${sep}` : "")
       + `<span class="crumb-current" aria-current="page">${esc(b.title)}</span>`;
     const [bg, fg] = paletteFor(b.title || String(b.id));
     const cover = $("detailCover");
@@ -3792,7 +4082,8 @@
     $("detailMore").textContent = "بیشتر بخوانید";
     $("detailMore").setAttribute("aria-expanded", "false");
     const rows = [
-      ["دسته‌بندی", cat ? `<button type="button" class="link-button" data-meta-cat="${esc(cat)}">${esc(cat)}</button>` : ""],
+      bc.length ? ["دسته‌ها", `<span class="detail-cats">${bc.map(c => `<button type="button" class="link-button" data-meta-catid="${c.id}" dir="auto">${esc(catPathOf(c))}</button>`).join('<span class="detail-cat-sep">، </span>')}</span>`]
+        : ["دسته‌بندی", cat ? `<button type="button" class="link-button" data-meta-cat="${esc(cat)}">${esc(cat)}</button>` : ""],
       ["زبان", esc(langName(b.language))],
       ["ناشر", esc(String(b.publisher || "").trim())],
       ["تاریخ انتشار", esc(formatPublished(b.published))],
@@ -3956,7 +4247,9 @@
   $("catalogGrid").addEventListener("click", e => {
     if (e.target.closest("[data-catalog-reset]")) {
       $("catalogSearch").value = "";
-      Object.assign(catalogFilter, { author: "", category: "", format: "" });
+      const hadCat = !!catalogFilter.cat;
+      Object.assign(catalogFilter, { author: "", category: "", cat: "", format: "" });
+      if (hadCat) setHash(catalogHash(), true, { borg: "catalog" });
       applyCatalogFilters(); return;
     }
     const btn = e.target.closest("[data-catalog-add]");
@@ -3972,6 +4265,8 @@
   async function shareBook(localId) {
     const b = await getBook(localId);
     if (!b || !b.serverId) { showToast("اول باید همگام‌سازی کامل شود."); return; }
+    await loadCategories();
+    if (catTreeOn()) { openSubmitDialog(b); return; }
     const description = (prompt("یک توضیح کوتاه برای این کتاب (اختیاری):", "") || "").slice(0, 2000);
     const category = (prompt("دسته‌بندی (اختیاری) — مثلاً رمان، شعر، تاریخ:", "") || "").replace(/\s+/g, " ").trim().slice(0, 80);
     try {
@@ -3982,15 +4277,45 @@
     } catch (err) { showToast(apiMessage(err)); }
   }
 
+  // v8.10: with a category list, the suggestion is a small dialog: description + category picker (max 10).
+  let submitBookId = null;
+  const submitPicker = makeCatPicker($("submitCats"), { label: "دسته‌های کتاب" });
+  function openSubmitDialog(b) {
+    submitBookId = b.id;
+    $("submitBook").textContent = `«${b.title}» — ${b.author || "نویسنده نامشخص"}`;
+    $("submitForm").elements.description.value = "";
+    submitPicker.set([]);
+    $("submitOk").disabled = false;
+    $("submitDialog").showModal();
+    $("submitForm").elements.description.focus();
+  }
+  $("submitClose").addEventListener("click", () => $("submitDialog").close());
+  $("submitForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const b = submitBookId && await getBook(submitBookId);
+    if (!b || !b.serverId) { $("submitDialog").close(); return; }
+    const description = $("submitForm").elements.description.value.replace(/[ \t]+/g, " ").trim().slice(0, 2000);
+    $("submitOk").disabled = true;
+    try {
+      const r = await api("catalog-submit", { method: "POST", body: { book_id: b.serverId, description, categories: submitPicker.get() } });
+      await put("books", { ...b, catalogStatus: r.status });
+      $("submitDialog").close();
+      showToast(r.status === "approved" ? "به کتابخانهٔ عمومی اضافه شد." : "برای تأیید مدیر ارسال شد.");
+      renderLibrary();
+    } catch (err) { showToast(apiMessage(err)); }
+    finally { $("submitOk").disabled = false; }
+  });
+
   // ---------- Admin (v8.9: sub-tabs, paged books table, bulk actions, review queue) ----------
   // Tabs deep-link as #admin/<tab>; the books tab keeps its filters in the hash query (#admin/books?status=pending&page=2).
   // Only the active tab's data is fetched; admin-stats (small) feeds the overview cards and the tab badges.
   const fmtDate = s => new Date(s * 1000).toLocaleDateString("fa-IR");
   const mb = n => (n / 1048576).toLocaleString("fa-IR", { maximumFractionDigits: 1 });
   const STATUS_FA = { approved: "عمومی", pending: "در انتظار", rejected: "ردشده", none: "بیرون از کتابخانهٔ عمومی" };
-  const ADMIN_TABS = ["overview", "queue", "books", "users", "invites", "api", "errors", "settings"];
+  const ADMIN_TABS = ["overview", "queue", "books", "cats", "users", "invites", "api", "errors", "settings"];
   const ADM_PER = 50;
-  const ADM_DEF = { q: "", status: "any", category: "", format: "", uploader: "", no_cover: false, sort: "date", dir: "desc", page: 1 };
+  // category = the old free-text category (exact, __none__); cat = a category id from the v8.10 list, or "none".
+  const ADM_DEF = { q: "", status: "any", category: "", cat: "", format: "", uploader: "", no_cover: false, sort: "date", dir: "desc", page: 1 };
   const ADM_EDIT_FIELDS = ["title", "author", "description", "category", "publisher", "published", "language"];
   const adm = { tab: "overview", f: { ...ADM_DEF }, data: null, books: [], sel: new Set(), all: false, last: -1, seq: 0, legacy: false, cats: null,
                 queue: { list: [], idx: 0, mode: "review", busy: false }, detail: null };
@@ -4002,6 +4327,7 @@
     if (f.q) p.set("q", f.q);
     if (f.status !== "any") p.set("status", f.status);
     if (f.category) p.set("category", f.category);
+    if (f.cat) p.set("cat", f.cat);
     if (f.format) p.set("format", f.format);
     if (f.uploader) p.set("uploader", f.uploader);
     if (f.no_cover) p.set("no_cover", "1");
@@ -4016,6 +4342,7 @@
     f.q = g("q").slice(0, 200);
     if (["approved", "pending", "rejected", "none"].includes(g("status"))) f.status = g("status");
     f.category = g("category").slice(0, 80);
+    if (/^(none|\d{1,9})$/.test(g("cat"))) f.cat = g("cat");
     if (["epub", "pdf"].includes(g("format"))) f.format = g("format");
     f.uploader = g("uploader").slice(0, 120);
     f.no_cover = g("no_cover") === "1";
@@ -4043,6 +4370,7 @@
   /** Called by showView("admin"): tab from the hash (refresh, back, deep link) or the last one used. */
   function openAdmin() {
     hideNewApiToken();
+    loadCategories(true);
     admReadHash();
     if (location.hash !== admHash()) setHash(admHash(), false);
     loadAdmin();
@@ -4072,6 +4400,7 @@
   function loadAdminTab(tab) {
     if (tab === "queue") return loadQueue();
     if (tab === "books") return loadAdminBooks();
+    if (tab === "cats") return loadCatAdmin();
     if (tab === "users") return loadUsers();
     if (tab === "invites") return loadInvites();
     if (tab === "api") return loadApiTokens();
@@ -4106,7 +4435,11 @@
   $("adminShortcuts").addEventListener("click", e => {
     const b = e.target.closest("[data-adm-go]");
     if (!b) return;
-    if (b.dataset.admFilter) { adm.f = admFromParams(new URLSearchParams(b.dataset.admFilter)); admClearSel(); }
+    if (b.dataset.admFilter) {
+      // «کتاب‌های بدون دسته»: with the v8.10 list that means "no category from the list" (cat=none)
+      const filter = b.dataset.admFilter === "category=__none__" && catTreeOn() ? "cat=none" : b.dataset.admFilter;
+      adm.f = admFromParams(new URLSearchParams(filter)); admClearSel();
+    }
     setAdminTab(b.dataset.admGo);
   });
 
@@ -4180,6 +4513,8 @@
   }
   async function loadAdminBooks() {
     const seq = ++adm.seq;
+    await loadCategories();
+    if (seq !== adm.seq) return;
     admSyncControls();
     if (!adm.data) $("admBooks").innerHTML = '<tr class="adm-empty"><td colspan="10">در حال بارگذاری…</td></tr>';
     $("admBooks").setAttribute("aria-busy", "true");
@@ -4210,10 +4545,7 @@
       const base = o.value === "any" ? "همهٔ وضعیت‌ها" : STATUS_FA[o.value];
       o.textContent = base + (o.value === "any" ? "" : n(st[o.value]));
     });
-    const cat = $("admFCategory");
-    cat.innerHTML = '<option value="">همهٔ دسته‌ها</option><option value="__none__">بدون دسته</option>'
-      + cats.map(c => `<option value="${esc(c.name)}">${esc(c.name)}${n(c.count)}</option>`).join("")
-      + (adm.f.category && adm.f.category !== "__none__" && !cats.some(c => c.name === adm.f.category) ? `<option value="${esc(adm.f.category)}">${esc(adm.f.category)}</option>` : "");
+    admRenderCatSelect(cats);
     const up = $("admFUploader");
     up.innerHTML = '<option value="">همهٔ بارگذارها</option><option value="api">API</option>'
       + ups.map(u => `<option value="${esc(String(u.id))}">${esc(u.name || String(u.id))}${n(u.count)}</option>`).join("")
@@ -4224,12 +4556,28 @@
     $("admCatList").innerHTML = adm.cats.map(c => `<option value="${esc(c)}"></option>`).join("");
     admSyncControls();
   }
-  const admActiveFilters = f => (f.status !== "any") + !!f.category + !!f.format + !!f.uploader + !!f.no_cover;
+  /** The category filter: the v8.10 tree (parents first, children indented; value = id or "none") when the list has
+   *  entries, else the old free-text categories from the facets (value = name or __none__). */
+  function admRenderCatSelect(facetCats) {
+    const sel = $("admFCategory"), n = v => v == null ? "" : ` (${faNum(v)})`;
+    if (catTreeOn()) {
+      sel.innerHTML = '<option value="">همهٔ دسته‌ها</option><option value="none">بدون دسته</option>'
+        + cats.tops.map(t => `<option value="${t.id}">${esc(t.name)}${n(catCount(t))}</option>`
+          + (cats.kids.get(t.id) || []).map(k => `<option value="${k.id}">\u00a0\u00a0\u00a0— ${esc(k.name)}${n(catCount(k))}</option>`).join("")).join("")
+        + (adm.f.cat && adm.f.cat !== "none" && !cats.byId.has(Number(adm.f.cat)) ? `<option value="${esc(adm.f.cat)}">دستهٔ ${faNum(adm.f.cat)}</option>` : "");
+      return;
+    }
+    const list = Array.isArray(facetCats) ? facetCats : (adm.cats || []).map(name => ({ name }));
+    sel.innerHTML = '<option value="">همهٔ دسته‌ها</option><option value="__none__">بدون دسته</option>'
+      + list.map(c => `<option value="${esc(c.name)}">${esc(c.name)}${n(c.count)}</option>`).join("")
+      + (adm.f.category && adm.f.category !== "__none__" && !list.some(c => c.name === adm.f.category) ? `<option value="${esc(adm.f.category)}">${esc(adm.f.category)}</option>` : "");
+  }
+  const admActiveFilters = f => (f.status !== "any") + !!(f.category || f.cat) + !!f.format + !!f.uploader + !!f.no_cover;
   function admSyncControls() {
     const f = adm.f;
     if (document.activeElement !== $("admBookSearch")) $("admBookSearch").value = f.q;
     $("admFStatus").value = f.status;
-    $("admFCategory").value = f.category;
+    $("admFCategory").value = catTreeOn() ? f.cat : f.category;
     $("admFFormat").value = f.format;
     $("admFUploader").value = f.uploader;
     $("admFNoCover").checked = f.no_cover;
@@ -4240,7 +4588,8 @@
     $("admFReset").disabled = !n;
   }
   function admRowHtml(b, i) {
-    const st = admStatus(b), title = String(b.title || "بدون عنوان"), author = String(b.author || "").trim(), cat = catOf(b);
+    const st = admStatus(b), title = String(b.title || "بدون عنوان"), author = String(b.author || "").trim(), bc = bookCats(b);
+    const cat = bc.length ? bc.map(c => c.name).join("، ") : catOf(b);
     const [bg, fg] = paletteFor(title || String(b.id));
     const thumb = b.has_cover ? `<img alt="" loading="lazy" decoding="async" src="${API}?r=book-cover&id=${b.id}">` : `<span aria-hidden="true">${esc([...title][0] || "؟")}</span>`;
     const fmt = b.format === "pdf" ? "PDF" : "EPUB";
@@ -4252,7 +4601,7 @@
       <td class="adm-c-title"><b dir="auto">${esc(title)}</b><span class="adm-author" dir="auto">${esc(author || "نویسنده نامشخص")}</span>
         <span class="adm-m"><span class="adm-chip fmt">${fmt}</span><span class="adm-st st-${st}">${STATUS_FA[st]}</span>${cat ? `<span class="adm-chip cat" dir="auto">${esc(cat)}</span>` : ""}${b.source === "api" ? '<span class="adm-chip api">API</span>' : ""}<span>${b.created_at ? fmtDate(b.created_at) : ""}</span><span>${admSize(b.size)}</span></span></td>
       <td class="adm-c-fmt"><span class="adm-chip fmt">${fmt}</span></td>
-      <td class="adm-c-cat" dir="auto">${cat ? esc(cat) : '<span class="muted">—</span>'}</td>
+      <td class="adm-c-cat" dir="auto"${bc.length ? ` title="${esc(bc.map(catPathOf).join("، "))}"` : ""}>${cat ? esc(cat) : '<span class="muted">—</span>'}</td>
       <td class="adm-c-st"><span class="adm-st st-${st}">${STATUS_FA[st]}</span></td>
       <td class="adm-c-up" dir="auto">${up}</td>
       <td class="adm-c-date">${b.created_at ? fmtDate(b.created_at) : "—"}</td>
@@ -4298,6 +4647,9 @@
   function admRenderBulk() {
     const n = adm.tab === "books" ? admSelCount() : 0;
     $("admBulkBar").hidden = !n;
+    const tree = catTreeOn(); // v8.10: add/remove one category of the list; the old free-text actions only without a list
+    $("admBulkBar").querySelectorAll('[data-bulk="set_category"],[data-bulk="clear_category"]').forEach(x => { x.hidden = tree; });
+    $("admBulkBar").querySelectorAll('[data-bulk="add_category"],[data-bulk="remove_category"]').forEach(x => { x.hidden = !tree; });
     $("admBulkCount").textContent = adm.all ? `همهٔ ${faNum(n)} نتیجه انتخاب شد` : `${faNum(n)} کتاب انتخاب شد`;
   }
   function admToggle(idx, on, range) {
@@ -4347,7 +4699,7 @@
     loadAdminBooks();
   }
   function admResetFilters(withSearch) {
-    admSetFilter({ status: "any", category: "", format: "", uploader: "", no_cover: false, ...(withSearch ? { q: "" } : {}) });
+    admSetFilter({ status: "any", category: "", cat: "", format: "", uploader: "", no_cover: false, ...(withSearch ? { q: "" } : {}) });
     if (withSearch) $("admBookSearch").value = "";
   }
   let admSearchTimer = 0;
@@ -4359,7 +4711,7 @@
     }, 300);
   });
   $("admFStatus").addEventListener("change", e => admSetFilter({ status: e.target.value }));
-  $("admFCategory").addEventListener("change", e => admSetFilter({ category: e.target.value }));
+  $("admFCategory").addEventListener("change", e => admSetFilter(catTreeOn() ? { cat: e.target.value, category: "" } : { category: e.target.value, cat: "" }));
   $("admFFormat").addEventListener("change", e => admSetFilter({ format: e.target.value }));
   $("admFUploader").addEventListener("change", e => admSetFilter({ uploader: e.target.value }));
   $("admFNoCover").addEventListener("change", e => admSetFilter({ no_cover: e.target.checked }));
@@ -4403,7 +4755,7 @@
   matchMedia("(max-width: 700px)").addEventListener("change", e => { if (!e.matches) closeAdmFilters(false); });
 
   // Bulk actions: ids of the selected rows, or the current filter for «همهٔ N نتیجه».
-  const BULK_FA = { approve: "تأیید", reject: "رد", set_category: "تعیین دسته", clear_category: "حذف دسته",
+  const BULK_FA = { approve: "تأیید", reject: "رد", set_category: "تعیین دسته", clear_category: "حذف دسته", add_category: "افزودن دسته", remove_category: "برداشتن دسته",
                     add_catalog: "افزودن به کتابخانهٔ عمومی", remove_catalog: "برداشتن از کتابخانهٔ عمومی", delete: "حذف" };
   function admBulkMessage(r) {
     const a = Number(r && r.affected) || 0, s = Number(r && r.skipped) || 0;
@@ -4426,7 +4778,14 @@
       if (c == null) return;
       body.category = c;
     }
+    if (action === "add_category" || action === "remove_category") {
+      const add = action === "add_category";
+      const id = await askCategories({ single: true, title: add ? `افزودن یک دسته به ${cnt} کتاب` : `برداشتن یک دسته از ${cnt} کتاب`, ok: add ? "افزودن دسته" : "برداشتن دسته" });
+      if (id == null) return;
+      body.category_id = id;
+    }
     const ask = {
+      remove_category: `دستهٔ «${catPathOf(body.category_id)}» از ${cnt} کتاب برداشته شود؟`,
       delete: `${cnt} کتاب برای همه حذف شود؟ فایل، محل مطالعه و یادداشت‌های همهٔ کاربران پاک می‌شود و این کار برگشت‌پذیر نیست.`,
       remove_catalog: `${cnt} کتاب از کتابخانهٔ عمومی برداشته شود؟ (از کتابخانهٔ شخصی کسانی که اضافه‌اش کرده‌اند حذف نمی‌شود)`,
       reject: `${cnt} کتاب رد شود؟`,
@@ -4487,14 +4846,15 @@
   function admRenderDetail() {
     const b = adm.detail;
     if (!b) return;
-    const st = admStatus(b), title = String(b.title || "بدون عنوان"), cat = catOf(b);
+    const st = admStatus(b), title = String(b.title || "بدون عنوان"), cat = catOf(b), bc = bookCats(b);
     const [bg, fg] = paletteFor(title || String(b.id));
     const cover = $("admDetailCover");
     cover.style.background = bg; cover.style.color = fg;
     cover.innerHTML = b.has_cover ? `<img alt="" src="${API}?r=book-cover&id=${b.id}">` : `<div class="cover-name">${esc(title)}</div>`;
     $("admDetailTitle").textContent = title;
     $("admDetailChips").innerHTML = `<span class="adm-chip fmt">${b.format === "pdf" ? "PDF" : "EPUB"}</span><span class="adm-st st-${st}">${STATUS_FA[st]}</span>`
-      + (b.source === "api" ? '<span class="adm-chip api">API</span>' : "") + (cat ? `<span class="adm-chip cat" dir="auto">${esc(cat)}</span>` : "");
+      + (b.source === "api" ? '<span class="adm-chip api">API</span>' : "")
+      + (bc.length ? bc.map(c => `<span class="adm-chip cat" dir="auto">${esc(catPathOf(c))}</span>`).join("") : cat ? `<span class="adm-chip cat" dir="auto">${esc(cat)}</span>` : "");
     const info = [
       ["بارگذار", b.source === "api" ? "API" : String(b.uploader_name || b.uploader || "")],
       ["پیشنهاددهنده", String(b.submitter || "")],
@@ -4513,6 +4873,16 @@
     const f = $("admDetailForm"), inCatalog = st !== "none";
     for (const k of ADM_EDIT_FIELDS) f.elements[k].value = b[k] == null ? "" : String(b[k]);
     f.elements.category.disabled = !inCatalog; f.elements.description.disabled = !inCatalog;
+    // v8.10: with a category list the free-text field gives way to the picker (several categories, sent as ids)
+    const tree = catTreeOn();
+    $("admDetailCatLabel").hidden = tree;
+    $("admDetailCatsWrap").hidden = !tree;
+    if (tree) {
+      admDetailPicker.set(bc.map(c => c.id));
+      admDetailPicker.disable(!inCatalog);
+      $("admDetailLegacyCat").hidden = !cat;
+      $("admDetailLegacyCat").textContent = cat ? `دستهٔ قدیمی (متنی): ${cat}` : "";
+    }
     $("admDetailCatalogNote").hidden = inCatalog;
     $("admDetailDownload").href = `${API}?r=book-file&id=${b.id}`;
   }
@@ -4546,13 +4916,16 @@
     const v = k => f.elements[k].value.replace(k === "description" ? /[ \t]+/g : /\s+/g, " ").trim();
     if (!v("title")) { f.elements.title.focus(); return; }
     const inCatalog = admStatus(b) !== "none";
-    const fields = inCatalog ? ADM_EDIT_FIELDS : ["title", "author", "publisher", "published", "language"];
+    const tree = catTreeOn() && !$("admDetailCatsWrap").hidden;
+    const fields = inCatalog ? ADM_EDIT_FIELDS.filter(k => !(tree && k === "category")) : ["title", "author", "publisher", "published", "language"];
     const body = { book_id: b.id };
     for (const k of fields) body[k] = v(k);
+    if (inCatalog && tree) body.categories = admDetailPicker.get();
     $("admDetailSave").disabled = true;
     try {
       await api(inCatalog ? "catalog-update" : "book-meta", { method: "POST", body });
       for (const k of fields) b[k] = body[k];
+      if (body.categories) b.categories = body.categories.map(catObj).filter(Boolean);
       showToast("ذخیره شد.");
       $("admDetail").close();
       if (adm.tab === "books") admRenderBooks(); else if (adm.tab === "queue") renderQueue();
@@ -4617,7 +4990,9 @@
         <button class="secondary-button" type="button" data-review="${b.id}" data-approve="0">رد</button></span></div>`).join("")
       : '<p class="muted">موردی در انتظار نیست.</p>';
     if (!n) { $("admReview").innerHTML = '<div class="adm-rv-empty"><p>موردی در انتظار نیست. 🎉</p></div>'; return; }
-    const b = q.list[q.idx], title = String(b.title || "بدون عنوان"), cat = catOf(b);
+    const b = q.list[q.idx], title = String(b.title || "بدون عنوان"), cat = catOf(b), bc = bookCats(b);
+    const catChips = bc.length ? bc.map(c => `<span class="adm-chip cat" dir="auto">${esc(catPathOf(c))}</span>`).join("")
+      : cat ? `<span class="adm-chip cat" dir="auto">${esc(cat)}</span>` : '<span class="adm-chip">بدون دسته</span>';
     const [bg, fg] = paletteFor(title || String(b.id));
     const rows = [
       ["پیشنهاددهنده", esc(String(b.submitter || "").trim())],
@@ -4633,7 +5008,7 @@
         <p class="adm-rv-pos muted small">کتاب ${faNum(q.idx + 1)} از ${faNum(n)}</p>
         <h3 class="adm-rv-title" dir="auto">${esc(title)}</h3>
         <p class="adm-rv-author" dir="auto">${esc(b.author || "نویسنده نامشخص")}</p>
-        <p class="adm-detail-chips"><span class="adm-chip fmt">${b.format === "pdf" ? "PDF" : "EPUB"}</span>${cat ? `<span class="adm-chip cat" dir="auto">${esc(cat)}</span>` : '<span class="adm-chip">بدون دسته</span>'}</p>
+        <p class="adm-detail-chips"><span class="adm-chip fmt">${b.format === "pdf" ? "PDF" : "EPUB"}</span>${catChips}</p>
         ${rows.length ? `<table class="meta-table adm-rv-meta">${rows.map(([k, v]) => `<tr><th scope="row">${k}</th><td dir="auto">${v}</td></tr>`).join("")}</table>` : ""}
         ${b.description ? `<p class="adm-rv-desc" dir="auto">${esc(b.description)}</p>` : '<p class="muted small">بدون توضیح.</p>'}
         <div class="adm-rv-actions">
@@ -4663,6 +5038,13 @@
         showToast(act === "approve" ? `«${b.title}» تأیید شد.` : `«${b.title}» رد شد.`);
         renderQueue();
         loadAdminStats();
+      } else if (act === "category" && (await loadCategories(), catTreeOn())) {
+        const ids = await askCategories({ title: `دسته‌های «${b.title}»`, ids: bookCats(b).map(c => c.id) });
+        if (ids == null) return;
+        await api("catalog-update", { method: "POST", body: { book_id: b.id, categories: ids } });
+        b.categories = ids.map(catObj).filter(Boolean); catalogLoaded = false;
+        showToast("دسته‌ها ثبت شد.");
+        renderQueue();
       } else if (act === "category") {
         const c = await askCategory(`دسته برای «${b.title}»`, catOf(b));
         if (c == null) return;
@@ -4693,6 +5075,197 @@
     queueAct(act, act === "preview" ? null : document.querySelector(`#admReview [data-rv="${act}"]`));
   });
   $("pendingList").addEventListener("click", e => { const o = e.target.closest("[data-pending-open]"); if (o) admOpenDetail(Number(o.dataset.pendingOpen)); });
+
+  // ---- v8.10 «دسته‌ها» tab: two-level tree with counts; add, rename inline, move a subcategory, reorder, delete ----
+  const CAT_ERRORS = {
+    duplicate: "دسته‌ای با همین نام همین‌جا هست؛ نام دیگری بنویس.",
+    too_deep: "فقط دو سطح ممکن است: دسته و زیردسته. زیردسته نمی‌تواند زیردستهٔ دیگری داشته باشد.",
+    has_children: "این دسته زیردسته دارد. اول زیردسته‌هایش را حذف کن یا به دستهٔ دیگری منتقل کن.",
+    has_children_move: "دسته‌ای که زیردسته دارد نمی‌تواند زیردستهٔ دستهٔ دیگری شود.",
+    missing_name: "نام دسته را بنویس.", empty_name: "نام دسته را بنویس.", too_long_name: "نام دسته حداکثر ۸۰ نویسه است.",
+    not_found: "این دسته دیگر وجود ندارد؛ فهرست تازه شد.", bad_parent: "دستهٔ والد پیدا نشد.", bad_move_to: "دستهٔ مقصد معتبر نیست.",
+  };
+  function catErrorMessage(err, where) {
+    if (!(err instanceof ApiFail)) return apiMessage(err);
+    if (err.status === 404 && err.code !== "not_found") return "مدیریت دسته‌ها هنوز روی سرور فعال نیست.";
+    if (err.code === "has_children" && where === "save") return CAT_ERRORS.has_children_move;
+    return CAT_ERRORS[err.code] || (err.status === 409 ? CAT_ERRORS.duplicate : apiMessage(err));
+  }
+  const catAdm = { edit: 0, addSub: 0, busy: false };
+  async function loadCatAdmin() {
+    await loadCategories();
+    renderCatTree();
+  }
+  function catRowHtml(c, i, n) {
+    const name = esc(c.name), editing = catAdm.edit === c.id;
+    const moveTo = c.parent_id ? cats.tops.filter(t => t.id !== c.parent_id) : [];
+    return `<div class="cat-row">`
+      + (editing ? `<form class="cat-rename" data-cat-rename="${c.id}" novalidate><input class="admin-input" value="${name}" maxlength="80" aria-label="نام تازهٔ «${name}»" dir="auto" autocomplete="off">`
+          + `<button class="secondary-button" type="submit">ذخیره</button><button class="text-button" type="button" data-cat-act="cancel">انصراف</button></form>`
+        : `<span class="cat-row-name" dir="auto">${name}</span>`)
+      + `<span class="adm-chip cat-row-count" title="کتاب‌های این دسته${c.parent_id ? "" : " و زیردسته‌هایش"}">${faNum(catCount(c))} کتاب</span>`
+      + `<span class="cat-row-acts">`
+      + `<button class="icon-button cat-mv" type="button" data-cat-act="up" aria-label="بالاتر بردن «${name}»" title="بالاتر"${i ? "" : " disabled"}>↑</button>`
+      + `<button class="icon-button cat-mv" type="button" data-cat-act="down" aria-label="پایین‌تر بردن «${name}»" title="پایین‌تر"${i < n - 1 ? "" : " disabled"}>↓</button>`
+      + (editing ? "" : `<button class="secondary-button" type="button" data-cat-act="rename">تغییر نام</button>`)
+      + (moveTo.length ? `<select class="admin-input cat-move" data-cat-move aria-label="انتقال «${name}» به دستهٔ دیگر"><option value="">انتقال به…</option>${moveTo.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select>` : "")
+      + `<button class="secondary-button adm-danger" type="button" data-cat-act="delete">حذف</button></span></div>`;
+  }
+  function renderCatTree() {
+    const tree = $("catTree");
+    $("catAdmTotal").textContent = faNum(cats.list.length);
+    if (!cats.supported) { tree.innerHTML = '<li class="muted">مدیریت دسته‌ها هنوز روی سرور فعال نیست.</li>'; $("catAddTop").hidden = true; return; }
+    $("catAddTop").hidden = false;
+    tree.innerHTML = cats.tops.map((t, i) => {
+      const kids = cats.kids.get(t.id) || [];
+      const addSub = catAdm.addSub === t.id
+        ? `<form class="admin-row cat-add-sub" data-cat-addsub="${t.id}" novalidate><input class="admin-input" maxlength="80" placeholder="نام زیردسته" aria-label="نام زیردستهٔ تازه برای «${esc(t.name)}»" dir="auto" autocomplete="off"><button class="secondary-button" type="submit">افزودن</button><button class="text-button" type="button" data-cat-act="cancel">انصراف</button></form>`
+        : `<button class="text-button cat-add-sub-open" type="button" data-cat-act="addsub">+ زیردسته برای «${esc(t.name)}»</button>`;
+      return `<li class="cat-node cat-top" data-cat-id="${t.id}">${catRowHtml(t, i, cats.tops.length)}`
+        + `<ul class="cat-kids">${kids.map((k, j) => `<li class="cat-node cat-kid" data-cat-id="${k.id}">${catRowHtml(k, j, kids.length)}</li>`).join("")}`
+        + `<li class="cat-addsub-row" data-cat-id="${t.id}">${addSub}</li></ul></li>`;
+    }).join("") || '<li class="muted cat-empty">هنوز دسته‌ای نساخته‌ای. با فرم بالا اولین دستهٔ اصلی را بساز.</li>';
+    const focus = tree.querySelector(".cat-rename input, .cat-add-sub input");
+    if (focus) { focus.focus({ preventScroll: true }); if (focus.closest(".cat-rename")) focus.select(); }
+  }
+  /** Run one category change; on success reload the list (tree, filters, catalog) and say so. */
+  async function catChange(route, body, ok, where = "save") {
+    if (catAdm.busy) return null;
+    catAdm.busy = true; $("catAdmError").textContent = "";
+    try {
+      const r = await api(route, { method: "POST", body });
+      catAdm.edit = 0; catAdm.addSub = 0;
+      catalogLoaded = false; catalogState.at = 0; relatedCache.clear();
+      await loadCategories(true);
+      renderCatTree();
+      if (ok) showToast(typeof ok === "function" ? ok(r) : ok);
+      return r || {};
+    } catch (err) {
+      const m = catErrorMessage(err, where);
+      $("catAdmError").textContent = m; showToast(m);
+      if (err instanceof ApiFail && err.code === "not_found") { await loadCategories(true); renderCatTree(); }
+      return null;
+    } finally { catAdm.busy = false; }
+  }
+  const cleanCatName = v => String(v || "").replace(/\s+/g, " ").trim().slice(0, 80);
+  const topParent = () => (cats.topPid === undefined ? null : cats.topPid); // what this server uses for "no parent"
+  $("catAddTop").addEventListener("submit", async e => {
+    e.preventDefault();
+    const name = cleanCatName($("catAddTopName").value);
+    if (!name) { $("catAdmError").textContent = CAT_ERRORS.missing_name; $("catAddTopName").focus(); return; }
+    if (await catChange("category-save", { name, parent_id: topParent() }, `دستهٔ «${name}» ساخته شد.`)) { $("catAddTopName").value = ""; $("catAddTopName").focus(); }
+  });
+  $("catTree").addEventListener("submit", async e => {
+    e.preventDefault();
+    const f = e.target, input = f.querySelector("input"), name = cleanCatName(input && input.value);
+    if (!name) { $("catAdmError").textContent = CAT_ERRORS.missing_name; if (input) input.focus(); return; }
+    if (f.dataset.catRename) {
+      const c = cats.byId.get(Number(f.dataset.catRename));
+      if (!c) return;
+      if (name === c.name) { catAdm.edit = 0; renderCatTree(); return; }
+      await catChange("category-save", { id: c.id, name, parent_id: c.parent_id || topParent() }, `نام دسته «${name}» شد.`);
+    } else if (f.dataset.catAddsub) {
+      await catChange("category-save", { name, parent_id: Number(f.dataset.catAddsub) }, `زیردستهٔ «${name}» ساخته شد.`);
+    }
+  });
+  $("catTree").addEventListener("keydown", e => {
+    if (e.key === "Escape" && e.target.closest(".cat-rename, .cat-add-sub")) { e.preventDefault(); catAdm.edit = 0; catAdm.addSub = 0; renderCatTree(); }
+  });
+  $("catTree").addEventListener("change", async e => {
+    const sel = e.target.closest("[data-cat-move]");
+    if (!sel || !sel.value) return;
+    const c = cats.byId.get(Number(sel.closest("[data-cat-id]").dataset.catId)), to = cats.byId.get(Number(sel.value));
+    if (!c || !to) return;
+    if (!await catChange("category-save", { id: c.id, name: c.name, parent_id: to.id }, `«${c.name}» به «${to.name}» منتقل شد.`)) sel.value = "";
+  });
+  $("catTree").addEventListener("click", async e => {
+    const btn = e.target.closest("[data-cat-act]");
+    if (!btn || btn.disabled) return;
+    const act = btn.dataset.catAct, li = btn.closest("[data-cat-id]"), c = li ? cats.byId.get(Number(li.dataset.catId)) : null;
+    if (act === "cancel") { catAdm.edit = 0; catAdm.addSub = 0; renderCatTree(); return; }
+    if (!c) return;
+    if (act === "rename") { catAdm.edit = c.id; catAdm.addSub = 0; renderCatTree(); return; }
+    if (act === "addsub") { catAdm.addSub = c.id; catAdm.edit = 0; renderCatTree(); return; }
+    if (act === "up" || act === "down") {
+      const sibs = (c.parent_id ? cats.kids.get(c.parent_id) : cats.tops).map(x => x.id);
+      const i = sibs.indexOf(c.id), j = act === "up" ? i - 1 : i + 1;
+      if (i < 0 || j < 0 || j >= sibs.length) return;
+      [sibs[i], sibs[j]] = [sibs[j], sibs[i]];
+      const r = await catChange("category-order", { parent_id: c.parent_id || topParent(), ids: sibs }, null, "order");
+      if (r) { const b = $("catTree").querySelector(`[data-cat-id="${c.id}"] [data-cat-act="${act}"]`); (b && !b.disabled ? b : $("catTree").querySelector(`[data-cat-id="${c.id}"] .cat-mv:not([disabled])`))?.focus({ preventScroll: true }); }
+      return;
+    }
+    if (act === "delete") openCatDelete(c);
+  });
+  // Delete: move the books to another category, or just unlink them. has_children from the server is explained.
+  let catDelId = 0;
+  function openCatDelete(c) {
+    catDelId = c.id;
+    const kids = (cats.kids.get(c.id) || []).length, n = catCount(c);
+    $("catDelTitle").textContent = `حذف «${c.name}»`;
+    $("catDelInfo").textContent = `${n ? `${faNum(n)} کتاب در این دسته است.` : "کتابی در این دسته نیست."}${kids ? ` این دسته ${faNum(kids)} زیردسته دارد.` : ""} با کتاب‌هایش چه شود؟`;
+    const opts = cats.list.filter(x => x.id !== c.id && x.parent_id !== c.id);
+    $("catDelMoveTo").innerHTML = '<option value="">انتخاب دستهٔ مقصد…</option>' + opts.map(x => `<option value="${x.id}">${esc(catPathOf(x))}</option>`).join("");
+    $("catDelForm").elements.mode.value = "unlink";
+    $("catDelMoveTo").disabled = !opts.length;
+    $("catDelError").textContent = "";
+    $("catDelDialog").showModal();
+  }
+  $("catDelMoveTo").addEventListener("change", () => { if ($("catDelMoveTo").value) $("catDelForm").elements.mode.value = "move"; });
+  $("catDelClose").addEventListener("click", () => $("catDelDialog").close());
+  $("catDelForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const c = cats.byId.get(catDelId);
+    if (!c) { $("catDelDialog").close(); return; }
+    const move = $("catDelForm").elements.mode.value === "move", to = Number($("catDelMoveTo").value);
+    if (move && !to) { $("catDelError").textContent = "دستهٔ مقصد را انتخاب کن."; $("catDelMoveTo").focus(); return; }
+    $("catDelOk").disabled = true; $("catDelError").textContent = "";
+    try {
+      const r = await api("category-delete", { method: "POST", body: move ? { id: c.id, move_to: to } : { id: c.id } });
+      $("catDelDialog").close();
+      const moved = Number(r && r.moved) || 0, unlinked = Number(r && r.unlinked) || 0;
+      showToast(`دستهٔ «${c.name}» حذف شد` + (moved ? ` · ${faNum(moved)} کتاب به «${catPathOf(to)}» منتقل شد` : "") + (unlinked ? ` · از ${faNum(unlinked)} کتاب برداشته شد` : "") + ".");
+      catalogLoaded = false; catalogState.at = 0; relatedCache.clear();
+      if (catalogFilter.cat === String(c.id)) catalogFilter.cat = "";
+      await loadCategories(true);
+      renderCatTree();
+    } catch (err) {
+      $("catDelError").textContent = catErrorMessage(err, "delete");
+    } finally { $("catDelOk").disabled = false; }
+  });
+  /** Admin views that show categories, after the list changed (or arrived). */
+  function admCatsChanged() {
+    if (adm.tab === "cats") renderCatTree();
+    if (adm.tab === "books") { admRenderCatSelect(adm.data && adm.data.facets ? adm.data.facets.categories : null); admSyncControls(); admRenderBulk(); }
+    if (adm.detail && $("admDetail").open) admRenderDetail();
+  }
+
+  // Pick categories in a dialog: several (review queue «C») or one (bulk «افزودن/برداشتن دسته…»).
+  let catPickResolve = null, catPickSingle = false, catPicker = null;
+  async function askCategories({ title, ids = [], single = false, ok = "ثبت" }) {
+    await loadCategories();
+    catPickSingle = single;
+    catPicker = makeCatPicker($("catPickBox"), { single, label: title });
+    catPicker.set(ids);
+    $("catPickTitle").textContent = title;
+    $("catPickOk").textContent = ok;
+    return new Promise(res => {
+      catPickResolve = res;
+      $("catPickDialog").showModal();
+      catPicker.focus();
+    });
+  }
+  $("catPickForm").addEventListener("submit", e => {
+    e.preventDefault();
+    const ids = catPicker ? catPicker.get() : [];
+    if (catPickSingle && !ids.length) { catPicker.focus(); return; }
+    const r = catPickResolve; catPickResolve = null;
+    $("catPickDialog").close();
+    if (r) r(catPickSingle ? ids[0] : ids);
+  });
+  $("catPickClose").addEventListener("click", () => $("catPickDialog").close());
+  $("catPickDialog").addEventListener("close", () => { if (catPickResolve) { const r = catPickResolve; catPickResolve = null; r(null); } });
+  const admDetailPicker = makeCatPicker($("admDetailCats"), { label: "دسته‌های کتاب" });
 
   // v8.4: client error reports, grouped by fingerprint (newest first), filter by app version.
   let errPage = 1;
