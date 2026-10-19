@@ -1792,6 +1792,167 @@ async def run(url):
         check("v8.6.5: «خودکار» goes back to the detected direction", await DR.evaluate(BDIR) == "rtl" and await DR.evaluate(PRESSED) == ["auto"])
         check("v8.6.5 book direction: no JS errors", len(errsDir) == 0, str(errsDir[:3]))
         await ctxDir.close()
+        # 27. v8.7 API keys (admin panel) and cleanup rules mirrored to the server for the admin.
+        # The new endpoints are mocked with routes (their server side is covered by api_test.py); login is real.
+        import json as _json27, time as _time27
+        ext27, errs27 = [], []
+        ctx27, K = await new_ctx(b, url, ext27, errs27)
+        K.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
+        now27 = int(_time27.time())
+        TOKEN27 = "borg_e2e_token_27_once"
+        m27 = {"calls": [], "rules": [{"id": "srv1", "type": "phrase", "text": "کانال سرور ما"}, {"id": "srv2", "type": "telegram"}],
+               "tokens": [{"id": 3, "name": "ربات قدیمی", "created_at": now27 - 3 * 86400, "last_used_at": now27 - 3600, "uses": 12, "revoked": False, "require_review": True},
+                          {"id": 2, "name": "کلید کنار گذاشته", "created_at": now27 - 9 * 86400, "last_used_at": 0, "uses": 0, "revoked": True, "require_review": False}]}
+        async def api27(route):
+            req = route.request
+            r = req.url.split("r=", 1)[1].split("&", 1)[0]
+            body = None
+            if req.method == "POST":
+                try: body = _json27.loads(req.post_data or "null")
+                except Exception: body = None
+            m27["calls"].append({"m": req.method, "r": r, "body": body, "csrf": req.headers.get("x-csrf-token")})
+            data = {"ok": True}
+            if r == "api-tokens": data = {"tokens": m27["tokens"]}
+            elif r == "api-token-create":
+                m27["tokens"].insert(0, {"id": 7, "name": body["name"], "created_at": now27, "last_used_at": 0, "uses": 0, "revoked": False, "require_review": bool(body.get("require_review"))})
+                data = {"id": 7, "token": TOKEN27}
+            elif r == "api-token-revoke":
+                for t in m27["tokens"]:
+                    if t["id"] == body.get("id"): t["revoked"] = True
+            elif r == "clean-rules":
+                if req.method == "GET": data = {"rules": m27["rules"]}
+                else: m27["rules"] = body["rules"]
+            await route.fulfill(status=200, content_type="application/json", body=_json27.dumps(data))
+        await ctx27.route(lambda u: "/api/?r=api-token" in u or "/api/?r=clean-rules" in u, api27)
+        RULES27 = "([k]) => JSON.parse(localStorage.getItem(k) || '[]')"
+        CKEY27 = "borg-clean-rules" + suffix
+        posts27 = lambda r: [c for c in m27["calls"] if c["m"] == "POST" and c["r"] == r]
+        async def admin_login27():
+            h = await (await K.request.get(url + "api/?r=health")).json()
+            if h.get("needs_setup"):
+                await auth(K, "setup", setup_key=SETUP_KEY, name="مدیر بُرگ", email="admin@example.com", password="password1")
+            else:
+                await auth(K, "login", email="admin@example.com", password="password1")
+            await wait_synced(K)
+        await K.goto(url); await K.wait_for_timeout(800)
+        await admin_login27()
+        try:
+            await poll(lambda: K.evaluate("([k]) => JSON.parse(localStorage.getItem(k) || '[]').length === 2", [CKEY27]), 8000)
+        except TimeoutError:
+            pass
+        lr = await K.evaluate(RULES27, [CKEY27])
+        check("v8.7 rules: admin with no local rules adopts the server's rules on login",
+              [(x["id"], x["type"], x.get("text")) for x in lr] == [("srv1", "phrase", "کانال سرور ما"), ("srv2", "telegram", None)]
+              and not posts27("clean-rules"), str(lr))
+        await K.click("#cleanOpen"); await K.wait_for_timeout(300)
+        check("v8.7 rules: the cleanup dialog lists the adopted rules and tells the admin they apply on the server",
+              await K.is_visible("#cleanServerNote") and "کتاب‌های ارسالی با API" in await K.inner_text("#cleanServerNote")
+              and "روی سرور ذخیره شد" in await K.inner_text("#cleanSyncState") and "کانال سرور ما" in await K.inner_text("#cleanRules"),
+              await K.inner_text("#cleanServerNote"))
+        await K.fill("#cleanPhrase", "متن تبلیغ آزمایشی"); await K.click("#cleanAdd")
+        try:
+            await poll(lambda: asyncio.sleep(0, len(posts27("clean-rules")) >= 1), 6000)
+        except TimeoutError:
+            pass
+        p1 = posts27("clean-rules")
+        lr = await K.evaluate(RULES27, [CKEY27])
+        exp = [{"id": "srv1", "type": "phrase", "text": "کانال سرور ما"}, {"id": "srv2", "type": "telegram"}, {"id": lr[-1]["id"], "type": "phrase", "text": "متن تبلیغ آزمایشی"}]
+        check("v8.7 rules: adding a rule as admin POSTs the full list once (debounced) with the CSRF header",
+              len(p1) == 1 and p1[0]["body"] == {"rules": exp} and bool(p1[0]["csrf"]), str(p1)[:400])
+        await K.click('#cleanRules [data-clean-del="srv2"]')
+        try:
+            await poll(lambda: asyncio.sleep(0, len(posts27("clean-rules")) >= 2), 6000)
+            await poll(lambda: _contains(K, "#cleanSyncState", "روی سرور ذخیره شد"), 4000)
+        except TimeoutError:
+            pass
+        p2 = posts27("clean-rules")
+        check("v8.7 rules: deleting a rule pushes the shorter list; the dialog shows it was saved",
+              len(p2) == 2 and [x["id"] for x in p2[1]["body"]["rules"]] == ["srv1", lr[-1]["id"]]
+              and "روی سرور ذخیره شد" in await K.inner_text("#cleanSyncState"), str(p2[-1:])[:300])
+        await K.click("#cleanClose")
+        # API keys in the admin panel
+        await K.click('[data-view="admin"]')
+        try:
+            await poll(lambda: _count_gt(K, "#apiTokenList .api-item", 1), 8000)
+        except TimeoutError:
+            pass
+        items = K.locator("#apiTokenList .api-item")
+        old, dead = items.nth(0), items.nth(1)
+        old_t, dead_t = await old.inner_text(), await dead.inner_text()
+        check("v8.7 keys: the admin sees «کلیدهای API» with the list (uses, last use, review flag, status)",
+              await K.is_visible("#apiBlock") and "کلیدهای API" in await K.inner_text("#apiBlock h3") and await items.count() == 2
+              and "ربات قدیمی" in old_t and "۱۲ بار" in old_t and "منتظر تأیید" in old_t and "فعال" in old_t and "هرگز" not in old_t
+              and await old.locator("[data-token-revoke]").is_visible(), old_t)
+        dead_op = await dead.evaluate("e => getComputedStyle(e).opacity")
+        check("v8.7 keys: a revoked key is greyed, says «لغوشده» and «هرگز», has no revoke button",
+              "لغوشده" in dead_t and "هرگز" in dead_t and float(dead_op) < 1 and await dead.locator("[data-token-revoke]").count() == 0, f"{dead_t} {dead_op}")
+        curl = await K.inner_text("#apiCurl")
+        check("v8.7 keys: usage guide and a curl example with this site's API URL",
+              "docs/api-books.md" in await K.inner_text("#apiBlock") and "Authorization: Bearer" in curl and url + "api/?r=api-book" in curl
+              and await K.is_visible("#apiCurl"), curl)
+        await K.click("#apiTokenCreate"); await K.wait_for_timeout(300)
+        check("v8.7 keys: a key needs a name (nothing is sent without one)",
+              bool((await K.inner_text("#apiTokenError")).strip()) and not posts27("api-token-create"))
+        await K.fill("#apiTokenName", "ربات تست"); await K.check("#apiTokenReview"); await K.click("#apiTokenCreate")
+        try:
+            await poll(lambda: K.is_visible("#apiTokenNew"), 6000)
+            await poll(lambda: _count_gt(K, "#apiTokenList .api-item", 2), 6000)
+        except TimeoutError:
+            pass
+        pc = posts27("api-token-create")
+        check("v8.7 keys: creating sends the name and review flag, then shows the key once with the warning",
+              len(pc) == 1 and pc[0]["body"] == {"name": "ربات تست", "require_review": True} and bool(pc[0]["csrf"])
+              and await K.input_value("#apiTokenValue") == TOKEN27 and await K.get_attribute("#apiTokenValue", "readonly") is not None
+              and "فقط همین یک بار" in await K.inner_text("#apiTokenNew") and await K.is_visible("#apiTokenCopy"), str(pc))
+        check("v8.7 keys: the new key appears in the list", "ربات تست" in await items.nth(0).inner_text() and await items.count() == 3)
+        try: await ctx27.grant_permissions(["clipboard-read", "clipboard-write"], origin=url.split("/borg")[0])
+        except Exception: pass
+        await K.click("#apiTokenCopy"); await K.wait_for_timeout(400)
+        sel = await K.evaluate("() => { const f = document.getElementById('apiTokenValue'); return document.activeElement === f && f.selectionStart === 0 && f.selectionEnd === f.value.length; }")
+        try: clip = await K.evaluate("() => navigator.clipboard.readText()")
+        except Exception: clip = None
+        check("v8.7 keys: «کپی» selects the whole key and copies it (or asks to copy when the clipboard is blocked)",
+              sel and ("کپی شد" in await K.inner_text("#toast") and clip in (TOKEN27, None) or "انتخاب شد" in await K.inner_text("#toast")), f"{sel} {clip!r} {await K.inner_text('#toast')}")
+        await K.click('[data-view="mine"]'); await K.wait_for_timeout(200); await K.click('[data-view="admin"]'); await K.wait_for_timeout(600)
+        check("v8.7 keys: the key is not shown again after leaving the admin view",
+              not await K.is_visible("#apiTokenNew") and await K.input_value("#apiTokenValue") == "")
+        try: await poll(lambda: _count_gt(K, "#apiTokenList .api-item", 2), 6000)
+        except TimeoutError: pass
+        await K.locator('#apiTokenList [data-token-revoke="7"]').click()
+        try: await poll(lambda: K.locator('#apiTokenList .api-item.revoked[data-token="7"]').count(), 6000)
+        except TimeoutError: pass
+        pr = posts27("api-token-revoke")
+        check("v8.7 keys: «لغو» (after confirmation) calls api-token-revoke and the key turns revoked",
+              len(pr) == 1 and pr[0]["body"] == {"id": 7} and await K.locator('#apiTokenList .api-item.revoked[data-token="7"]').count() == 1, str(pr))
+        # Phone width: the section fits without horizontal scrolling
+        await K.set_viewport_size({"width": 390, "height": 844}); await K.wait_for_timeout(400)
+        await K.locator("#apiBlock").scroll_into_view_if_needed()
+        geo = await K.evaluate("""() => { const r = e => document.querySelector(e).getBoundingClientRect();
+            const all = ['#apiBlock', '#apiTokenName', '#apiTokenCreate', '#apiCurl', '#apiTokenList'].map(r);
+            return { ok: all.every(b => b.left >= -1 && b.right <= innerWidth + 1 && b.width > 0), sw: document.documentElement.scrollWidth,
+                     btn: r('#apiTokenCreate').height, inp: r('#apiTokenName').height }; }""")
+        check("v8.7 keys mobile 390px: section, form, list and curl fit, touch-sized controls, no horizontal scroll",
+              geo["ok"] and geo["sw"] <= 390 and geo["btn"] >= 40 and geo["inp"] >= 40, str(geo))
+        await K.set_viewport_size({"width": 1280, "height": 800})
+        # Logged out: rules stay local only; logging in again with a different server list pushes the local one (local wins)
+        await K.click("#accountButton"); await K.wait_for_timeout(400); await K.click("#logoutButton"); await K.wait_for_timeout(600)
+        n_before = len(posts27("clean-rules"))
+        await K.click("#cleanOpen"); await K.wait_for_timeout(200)
+        await K.fill("#cleanPhrase", "فقط روی این دستگاه"); await K.click("#cleanAdd"); await K.wait_for_timeout(1800)
+        check("v8.7 rules: without an admin session nothing is sent and the server note is hidden",
+              len(posts27("clean-rules")) == n_before and not await K.is_visible("#cleanServerNote"))
+        await K.click("#cleanClose")
+        m27["rules"] = [{"id": "other", "type": "phrase", "text": "قانون دستگاه دیگر"}]
+        await admin_login27()
+        try: await poll(lambda: asyncio.sleep(0, len(posts27("clean-rules")) > n_before), 6000)
+        except TimeoutError: pass
+        lr = await K.evaluate(RULES27, [CKEY27])
+        pl = posts27("clean-rules")
+        check("v8.7 rules: when both lists exist and differ, the local list wins and is pushed",
+              len(pl) == n_before + 1 and [x["id"] for x in pl[-1]["body"]["rules"]] == [x["id"] for x in lr]
+              and "other" not in [x["id"] for x in lr] and any(x.get("text") == "فقط روی این دستگاه" for x in lr), str(pl[-1:])[:300])
+        check("v8.7 API keys: no JS errors, no external requests", len(errs27) == 0 and len(ext27) == 0, str(errs27[:3] + ext27[:3]))
+        await ctx27.close()
         await b.close()
 
 def main():

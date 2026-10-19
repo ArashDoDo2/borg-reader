@@ -145,6 +145,21 @@
           <p id="inviteResult" class="invite-result" aria-live="polite"></p>
           <div id="inviteList" class="admin-list"></div></div>
         <div class="admin-block"><h3>کاربران</h3><div id="userList" class="admin-list"></div></div>
+        <div id="apiBlock" class="admin-block api-block"><h3>کلیدهای API</h3>
+          <p class="muted small api-intro">برنامه‌های دیگر با این کلید می‌توانند کتاب را مستقیم به کتابخانهٔ عمومی بفرستند؛ قانون‌های پاک‌سازی متن روی آن‌ها اعمال می‌شود.</p>
+          <form id="apiTokenForm" class="admin-row api-form" novalidate>
+            <input id="apiTokenName" class="admin-input" placeholder="نام کلید، مثلاً: ربات تلگرام" maxlength="80" aria-label="نام کلید" autocomplete="off">
+            <label class="admin-toggle api-review"><input id="apiTokenReview" type="checkbox"> کتاب‌ها منتظر تأیید بمانند</label>
+            <button id="apiTokenCreate" class="secondary-button" type="submit">ساخت کلید</button>
+          </form>
+          <p id="apiTokenError" class="form-error" role="alert"></p>
+          <div id="apiTokenNew" class="api-new" hidden>
+            <p class="api-warn" role="status">این کلید فقط همین یک بار نمایش داده می‌شود</p>
+            <div class="admin-row"><input id="apiTokenValue" class="admin-input api-token-value" readonly dir="ltr" aria-label="کلید جدید" autocomplete="off" spellcheck="false"><button id="apiTokenCopy" class="secondary-button" type="button">کپی</button></div>
+          </div>
+          <div id="apiTokenList" class="admin-list api-list"></div>
+          <p class="muted small api-guide">راهنما: <code dir="ltr">docs/api-books.md</code> در مخزن. نمونه:</p>
+          <pre id="apiCurl" class="api-curl" dir="ltr"></pre></div>
         <div id="errorsBlock" class="admin-block"><h3>خطاهای کاربران <span id="errorsCount" class="status-chip"></span></h3>
           <div class="admin-row errors-tools"><select id="errorsVersion" class="admin-input" aria-label="نسخه"><option value="">همهٔ نسخه‌ها</option></select>
             <button id="errorsRefresh" class="secondary-button" type="button">تازه‌سازی</button>
@@ -342,6 +357,7 @@
     <button id="cleanClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
     <h2 id="cleanTitle">پاک‌سازی متن</h2>
     <p class="muted small clean-intro">عبارت‌هایی که اینجا اضافه کنی از <b>خود فایل</b> همهٔ کتاب‌ها حذف می‌شوند (فقط همان عبارت، یا اگر «کل خط» را انتخاب کنی، کل خط/پاراگرافی که آن را دارد؛ مناسب برای خط‌هایی که بخشی از آن ثابت و بقیه مثل لینک‌ها متغیر است). نسخهٔ اصلی نگه داشته نمی‌شود. کتاب‌هایی که از این به بعد اضافه کنی هم خودکار پاک‌سازی می‌شوند.</p>
+    <p id="cleanServerNote" class="muted small clean-server" hidden>قانون‌ها برای کتاب‌های ارسالی با API هم روی سرور اعمال می‌شوند <span id="cleanSyncState" class="status-chip" aria-live="polite"></span></p>
     <form id="cleanForm" class="admin-row clean-form" novalidate>
       <input id="cleanPhrase" class="admin-input" placeholder="عبارت دقیق، مثلاً: کانال ما در تلگرام" maxlength="200" aria-label="عبارت برای حذف" autocomplete="off">
       <select id="cleanMode" class="admin-input clean-mode" aria-label="چه چیزی حذف شود">
