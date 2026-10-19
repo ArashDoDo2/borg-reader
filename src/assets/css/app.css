@@ -777,3 +777,12 @@ body.dark .reader .icon-button:hover,body.dark .reader .secondary-button:hover{b
 .clean-form #cleanPhrase{flex:1 1 220px}
 .clean-form .clean-mode{flex:0 1 auto;width:auto;min-width:0}
 @media(max-width:700px){.clean-form #cleanPhrase{flex:1 1 100%}.clean-form .clean-mode{flex:1 1 auto;min-height:44px;font-size:16px}}
+
+/* v8.6.6: larger toolbar icons on phones (21px read as tiny on iPhone) */
+@media(max-width:700px){
+ .reader-toolbar .icon-button .ico{width:26px;height:26px;stroke-width:2.1}
+ .reader-toolbar>.close-reader .ico{width:26px;height:26px}
+ .reader-toolbar .settings-toggle{font-size:19px}
+ .reader-bottom #bookmarkButton .ico{width:26px;height:26px}
+ .topbar .icon-button .ico{width:24px;height:24px}
+}

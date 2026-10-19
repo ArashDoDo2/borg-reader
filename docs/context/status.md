@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-19, version **8.6.5** (live at https://parsun.com/borg/).
+Last updated: 2026-10-19, version **8.6.6** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -48,6 +48,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.6.3 | Mouse wheel / trackpad turns pages in paginated mode (summed deltas, one page per gesture, ctrl+wheel zoom untouched); setting «ورق زدن با چرخ موس» (pref `wheel`) |
 | 8.6.4 | Text cleanup rule type «کل خطِ شامل این متن» (`type: "line"`): removes the smallest block containing the fixed part even when the rest varies (URLs) or spans links; blocks longer than the part + 400 chars are kept and reported; share limit 10% for line rules |
 | 8.6.5 | «جهت این کتاب» in the «Aa» panel: per-book override auto/RTL/LTR (book record `dirOverride`, kept by every book write via STICKY_FIELDS, local to the device); changing it reopens at the same position |
+| 8.6.6 | Phone toolbar icons 21 → 26 px (owner: too small on iPhone), «Aa» 19 px, bookmark 26 px |
 
 ## Open items (not started unless the owner says so)
 0. Text cleanup shipped in 8.3.0. Limits: a phrase split across formatting tags is not matched; the
