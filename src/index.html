@@ -30,10 +30,10 @@
       <div class="hero-copy">
         <p class="eyebrow">گوشه‌ای برای آرام خواندن</p>
         <h1>کتاب‌هایت، همیشه همراهت</h1>
-        <p>فایل EPUB را اضافه کن، در کتاب‌خوان بازش کن و حتی بدون اینترنت ادامه بده.</p>
+        <p>فایل EPUB یا PDF را اضافه کن، در کتاب‌خوان بازش کن و حتی بدون اینترنت ادامه بده.</p>
         <label class="primary-button upload-button">
-          <span>＋ افزودن کتاب EPUB</span>
-          <input id="epubInput" type="file" accept=".epub,application/epub+zip" hidden>
+          <span>＋ افزودن کتاب EPUB یا PDF</span>
+          <input id="epubInput" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" hidden>
         </label>
         <p class="privacy-note">کتاب‌ها روی همین دستگاه ذخیره می‌شوند؛ با ورود به حساب، کتاب‌ها و محل مطالعه بین دستگاه‌هایت همگام می‌شوند.</p>
       </div>
@@ -61,7 +61,7 @@
             <option value="added">تازه‌ترین افزوده</option><option value="read">آخرین مطالعه</option><option value="title">عنوان</option>
           </select>
           <div id="librarySearchBox" class="search-box lib-search" role="search"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="جستجو در عنوان، نویسنده، ناشر…" autocomplete="off" aria-label="جستجو در کتابخانهٔ من" aria-keyshortcuts="/" enterkeyhint="search"><button id="librarySearchClear" class="lib-search-clear" type="button" aria-label="پاک کردن جستجو" title="پاک کردن جستجو (Esc)" hidden>×</button></div>
-          <label class="secondary-button import-button"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg><span>افزودن<span class="lbl-long"> EPUB</span></span><input id="epubInputSmall" type="file" accept=".epub,application/epub+zip" hidden></label>
+          <label class="secondary-button import-button"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg><span>افزودن<span class="lbl-long"> کتاب</span></span><input id="epubInputSmall" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" hidden></label>
           <button id="cleanOpen" class="secondary-button clean-open" type="button" aria-haspopup="dialog" title="حذف عبارت‌های ناخواسته (مثل لینک کانال) از متن همهٔ کتاب‌ها" aria-label="پاک‌سازی متن"><span>🧹 پاک‌سازی<span class="lbl-long"> متن</span></span></button>
         </div>
       </div>
@@ -83,8 +83,8 @@
       <div id="emptyState" class="empty-state">
         <div class="empty-icon">▤</div>
         <h3>کتابخانه‌ات هنوز خالی است</h3>
-        <p>یک فایل EPUB انتخاب کن تا اینجا ظاهر شود.</p>
-        <label class="secondary-button">انتخاب فایل EPUB<input id="emptyEpubInput" type="file" accept=".epub,application/epub+zip" hidden></label>
+        <p>یک فایل EPUB یا PDF انتخاب کن تا اینجا ظاهر شود.</p>
+        <label class="secondary-button">انتخاب فایل EPUB یا PDF<input id="emptyEpubInput" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" hidden></label>
       </div>
       </div>
       <div id="viewCatalog" class="view" hidden>
@@ -188,7 +188,7 @@
       </div>
       <div id="settingsPanel" class="settings-panel" role="dialog" aria-label="تنظیمات نمایش" hidden>
         <div class="sheet-head"><span class="sheet-grab" aria-hidden="true"></span><h2 class="sheet-title">تنظیمات نمایش</h2><button id="settingsClose" class="icon-button sheet-close" type="button" aria-label="بستن تنظیمات"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
-        <div class="setting-row"><label for="readerFont">فونت</label>
+        <div class="setting-row" data-epub-only><label for="readerFont">فونت</label>
           <select id="readerFont" class="reader-select">
             <option value="vazirmatn">وزیرمتن</option>
             <option value="shabnam">شبنم</option>
@@ -201,27 +201,33 @@
             <option value="sans-serif">Sans-serif</option>
           </select>
         </div>
-        <div class="setting-row"><span>اندازه</span>
+        <div class="setting-row" data-epub-only><span>اندازه</span>
           <div class="stepper"><button id="fontDown" class="icon-button" type="button" aria-label="کوچک کردن فونت">A−</button><output id="fontSizeLabel" aria-live="polite">۱۰۰٪</output><button id="fontUp" class="icon-button" type="button" aria-label="بزرگ کردن فونت">A+</button></div>
         </div>
-        <div class="setting-row"><label for="readerLineHeight">فاصلهٔ خطوط</label>
+        <div class="setting-row" data-epub-only><label for="readerLineHeight">فاصلهٔ خطوط</label>
           <select id="readerLineHeight" class="reader-select">
             <option value="1.6">کم</option><option value="1.9" selected>معمولی</option><option value="2.2">زیاد</option>
           </select>
         </div>
-        <div class="setting-row"><span>تراز متن</span>
+        <div class="setting-row" data-epub-only><span>تراز متن</span>
           <div class="segmented" role="group" aria-label="تراز متن"><button type="button" data-align="justify">دوطرفه</button><button type="button" data-align="right">راست‌چین</button></div>
+        </div>
+        <div class="setting-row" data-pdf-only><span>بزرگ‌نمایی</span>
+          <div class="stepper"><button id="pdfZoomOut" class="icon-button" type="button" aria-label="کوچک کردن صفحه">−</button><output id="pdfZoomLabel" aria-live="polite">۱۰۰٪</output><button id="pdfZoomIn" class="icon-button" type="button" aria-label="بزرگ کردن صفحه">+</button></div>
+        </div>
+        <div class="setting-row" data-pdf-only><span>جای‌گیری صفحه</span>
+          <div class="segmented" role="group" aria-label="جای‌گیری صفحهٔ PDF"><button type="button" data-pdffit="page">اندازهٔ صفحه</button><button type="button" data-pdffit="width">عرض صفحه</button></div>
         </div>
         <div class="setting-row"><span>رنگ صفحه</span>
           <div class="segmented" role="group" aria-label="رنگ صفحه"><button type="button" data-theme="light">روشن</button><button type="button" data-theme="sepia">کرم</button><button type="button" data-theme="dark">تیره</button><button type="button" data-theme="black">مشکی</button><button type="button" data-theme="auto">خودکار</button></div>
         </div>
-        <div class="setting-row"><span>حاشیه</span>
+        <div class="setting-row" data-epub-only><span>حاشیه</span>
           <div class="segmented" role="group" aria-label="حاشیه"><button type="button" data-margin="s">کم</button><button type="button" data-margin="m">معمولی</button><button type="button" data-margin="l">زیاد</button></div>
         </div>
-        <div class="setting-row"><span>فاصلهٔ پاراگراف</span>
+        <div class="setting-row" data-epub-only><span>فاصلهٔ پاراگراف</span>
           <div class="segmented" role="group" aria-label="فاصلهٔ پاراگراف"><button type="button" data-para="s">کم</button><button type="button" data-para="m">معمولی</button><button type="button" data-para="l">زیاد</button></div>
         </div>
-        <div class="setting-row"><span>نمایش</span>
+        <div class="setting-row" data-epub-only><span>نمایش</span>
           <div class="segmented" role="group" aria-label="نحوهٔ نمایش"><button type="button" data-flow="paginated">صفحه‌ای</button><button type="button" data-flow="scrolled">پیمایشی</button></div>
         </div>
         <div class="setting-row"><span>ستون‌ها</span>
@@ -230,7 +236,8 @@
         <div class="setting-row"><span>جهت این کتاب</span>
           <div class="segmented" role="group" aria-label="جهت خواندن این کتاب"><button type="button" data-bookdir="auto">خودکار</button><button type="button" data-bookdir="rtl">راست‌به‌چپ</button><button type="button" data-bookdir="ltr">چپ‌به‌راست</button></div>
         </div>
-        <label class="setting-check"><input id="prefDigits" type="checkbox"> اعداد متن به فارسی نمایش داده شوند</label>
+        <label class="setting-check" data-epub-only><input id="prefDigits" type="checkbox"> اعداد متن به فارسی نمایش داده شوند</label>
+        <label class="setting-check" data-pdf-only><input id="prefPdfInvert" type="checkbox"> در رنگ تیره و مشکی، رنگ صفحه‌های PDF وارونه شود</label>
         <label class="setting-check"><input id="prefTaps" type="checkbox"> ورق زدن با لمس لبه‌های صفحه</label>
         <label class="setting-check"><input id="prefWheel" type="checkbox"> ورق زدن با چرخ موس</label>
         <label class="setting-check"><input id="prefWake" type="checkbox"> صفحه هنگام خواندن خاموش نشود</label>

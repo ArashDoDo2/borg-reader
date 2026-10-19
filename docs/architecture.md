@@ -11,6 +11,7 @@ Since v7 an optional PHP API (`src/api/`) adds accounts, cloud library, progress
 ```
 index.html ──> assets/js/app.js ──> epub.js (+ JSZip) ──> book rendered in a sandboxed iframe
                      │                                        └─ reader-fonts.css injected (Vazirmatn)
+                     ├─> pdf.js (v8.8, import() on first PDF use) ──> PDF pages on canvases + text layer
                      ├─> IndexedDB  (books, progress, annotations, shelves)
                      ├─> localStorage (reader prefs, theme, reading stats, device id)
                      ├─> src/api/ (PHP, optional: accounts, sync, catalog)
@@ -24,6 +25,7 @@ index.html ──> assets/js/app.js ──> epub.js (+ JSZip) ──> book rende
 | `src/assets/js/app.js` | All app logic (single IIFE): import, metadata, library, shelves, reader, navigation, annotations, TTS, search, settings, account/sync, catalog, admin, SW registration. |
 | `src/assets/vendor/jszip.min.js` | JSZip 3.10.1. Must load **before** epub.js (epub.js needs it to open an EPUB from an ArrayBuffer). |
 | `src/assets/vendor/epub.min.js` | epub.js 0.3.93. Paginated rendition, `spread: auto`. Scripts inside EPUBs are not enabled. |
+| `src/assets/vendor/pdfjs/` | v8.8: pdf.js 4.10.38 **legacy** build, unmodified (`pdf.min.mjs`, `pdf.worker.min.mjs`, `cmaps/`, `standard_fonts/`, Apache-2.0 `LICENSE`). Loaded with `import()` only when a PDF is imported or opened; not in `APP_SHELL` (ADR 0009). |
 | `src/assets/fonts/` | Vazirmatn (UI + default book font), Shabnam, Parastoo, Noto Naskh Arabic, Amiri (OFL; license files alongside). |
 | `src/assets/css/reader-fonts.css` | `@font-face` for the book fonts + `.tts-hl`; injected into every book iframe via `rendition.hooks.content` (absolute URL). |
 | `src/api/` | PHP API (§9). |
@@ -41,6 +43,10 @@ continuity, ADR 0003; the unused staging path would use `ketabkhane-db-test`, AD
 | `annotations` | `uid` (index `bookId`) | `type` (bookmark/highlight/note), `cfi`, `quote`, `note`, `color`, timestamps, sync flags |
 | `shelves` | `uid` | `name`, `position`, `updatedAt`, `deleted` |
 
+v8.8 PDFs are records in the same store with optional `format: "pdf"` (absent = EPUB) and `pages` (page count); title
+and author come from the PDF info dictionary (`Title`/`Author`, else file name / «نویسنده نامشخص»), `cover` is page 1
+as a JPEG data URL. Their progress `cfi` is `pdf:<page>` (first visible page) with `percentage` = last visible page /
+pages × 100; page bookmarks are `annotations` with `cfi: "pdf:<page>"`. No `DB_VERSION` change.
 Books also carry `serverId`, `catalogStatus`, reading `status` and `shelves` when synced. When a browser refuses to
 store Blobs, `file` is null and `fileBuffer` (ArrayBuffer) + `fileName` are stored instead (`fileOf()`).
 v8.3 text cleanup adds `sourceHash` (SHA-256 of the file as first imported, so re-importing the original is still a
@@ -48,7 +54,8 @@ duplicate), `cleanedAt`, and for synced books `cleanPending` (new file not yet s
 `cleanAnns` (uids of re-anchored annotations to re-push after the swap).
 
 localStorage: `ketabkhane-reader-preferences` → `{font, lineHeight, fontSize, theme (light/sepia/dark/black/auto),
-align, librarySort, libraryFilter, dailyGoal, margin, para, flow, spread, digits, taps, wake, ttsRate, ttsVoice}`;
+align, librarySort, libraryFilter, dailyGoal, margin, para, flow, spread, digits, taps, wake, ttsRate, ttsVoice, pdfFit
+("page" | "width"; unset = width on phones, page on desktop), pdfInvert (dark/black themes invert PDF pages, default on)}`;
 `ketab-theme`; `borg-clean-rules` (v8.3 cleanup rules: `[{id, type: "phrase" | "line", text} | {id, type: "telegram"}]`;
 mirrored to the server for an admin since v8.7, §4a);
 `borg-reading-days`/`-other`/`-pushed` (stats); `borg-device-id`; `borg-debug` (diagnostics only,
@@ -60,6 +67,9 @@ Migration rules:
 
 ## 4. Key flows
 - **Import:** validate extension/size → `extractMetadata` (opens with epub.js; listens for `openFailed`, 20 s timeout; waits for background loads before `destroy`) → store record. Errors are `UserError` with a Persian message; nothing is stored on failure.
+  v8.8: the file inputs, the share target and "open with" (`launchQueue`, manifest `file_handlers`) also accept PDFs.
+  `sniffPdf()` decides by the bytes (`%PDF-` in the first 1 KB), not the name; a PDF goes through `extractPdfMetadata`
+  (pdf.js, 30 s timeout; password-protected / broken files → `UserError`), duplicates are refused by SHA-256 like EPUBs.
 - **Open:** restore saved CFI directly (`display(cfi)`), build TOC, then `prepareLocations` in background (load cached locations or generate with 1600 chars/location and save to the book record) so percentages are real.
 - **Navigation state:** `relocated` sets progress, chapter label, `prev` disabled only at `atStart`, `next` disabled at `atEnd`; progress is saved per relocation.
 - **Navigation input (v6.1):** keyboard on the main document plus `rendition.on("keydown"|"touchstart"|"touchend"|"click")`
@@ -141,6 +151,9 @@ matched text is removed and no original is kept (owner's decisions, `docs/contex
   shows admins «قانون‌ها برای کتاب‌های ارسالی با API هم روی سرور اعمال می‌شوند» with a state chip (`#cleanSyncState`:
   pending / saving / saved / offline / failed / not supported when the route answers 404). Non-admins: local only, as before.
 
+- **PDFs (v8.8):** never cleaned. `runCleanSearch` lists only EPUBs, `autoCleanImported`/`applyCleanToBook` return 0
+  for `format: "pdf"`, `repairMetadata` skips them, so JSZip/epub.js never see a PDF.
+
 ## 4c. API keys (admin, v8.7, client side)
 Admin panel block «کلیدهای API» (`#apiBlock`, after «کاربران»). Keys let other programs send books straight to the
 public catalog through the machine route `api-book` (Bearer token, multipart; documented in `docs/api-books.md`;
@@ -178,6 +191,42 @@ Details and history of each workaround: `docs/context/reader-engine-notes.md`.
 - **First-run guide (8.2):** overlay `role="dialog"` once per device (`borg-guide-seen`), wording from `bookIsRtl()`
   and the taps/flow prefs; reopen from settings. Tests pre-set the key in `new_ctx` (`show_guide=True` to test it).
 
+## 4d. PDF reader (v8.8, ADR 0009)
+Text-based PDF magazines open in their original layout inside the same `#reader` shell; `#reader.is-pdf` switches the
+UI. `openReader()` hands a `format: "pdf"` record (or one whose bytes are a PDF) to `openPdfReader()`; `rendition` and
+`bookInstance` stay `null` and the state lives in `pdf` (document, pages, zoom, canvas/text caches). `closePdf()` cancels
+renders, frees canvases and destroys the pdf.js worker.
+- **Loading:** `loadPdfJs()` = `import("assets/vendor/pdfjs/pdf.min.mjs")`, worker `pdf.worker.min.mjs` (module
+  worker, `worker-src 'self'`). Options: `isEvalSupported: false`, `enableXfa: false`, vendored `cMapUrl` and
+  `standardFontDataUrl`; PDF scripting is never enabled. Offline before the first use → toast, nothing breaks.
+- **Layout (`pdfRender`):** `.pdf-stage` (scrolls when the page is larger) > `.pdf-spread` > `.pdf-page` (canvas +
+  pdf.js `TextLayer`, `--scale-factor`). Scale = fit («اندازهٔ صفحه»: whole page, desktop default; «عرض صفحه»: viewer
+  width, phone default) × zoom (0.5–5). Two pages side by side when «ستون‌ها» is «خودکار» and the viewer is ≥ 800 px
+  wide and landscape (page 1 alone, then 2–3, 4–5…; RTL books put the lower page on the right). Canvases are drawn at
+  `devicePixelRatio` (≤ 3, ≤ 10 M pixels each) with cancellable render tasks; the neighbouring spreads are pre-rendered
+  when not zoomed in; every other canvas is released (`width = 0`) and its page `cleanup()`ed. Re-laid out on viewer
+  resize (`ResizeObserver`), immersive mode, fit/spread/zoom changes.
+- **Direction:** `detectPdfDirection()` counts Arabic-script vs Latin letters in the text of the first ≤ 6 pages (like
+  `detectBookDirection`, cached in `dirCache`); «جهت این کتاب» overrides it. Image-only PDFs fall back to RTL.
+- **Navigation:** the existing inputs — edge taps (`handleTap`, page coordinates instead of iframe ones), swipes,
+  arrows/PageUp/PageDown/Space, mouse wheel (`onReaderWheel`; a page larger than the viewer scrolls first and turns at
+  its edge with a new gesture), prev/next buttons — call `goForward/goBack` → `pdfStep()`. TOC from `getOutline()`
+  (destinations resolved to page numbers, nested to 3 levels); TOC, search results, bookmarks, the seek bar (page based)
+  and the back chip go through `jumpTo("pdf:<page>")` / `safeDisplay`. Header = the outline entry for the page or
+  «صفحهٔ N از M»; bottom bar shows the page and the time left in the book.
+- **Zoom:** «−/+» in «Aa», ctrl+wheel / trackpad pinch (live CSS preview, re-rendered after 180 ms), two-finger pinch on
+  touch (`touch-action: pan-x pan-y`, so the browser does not zoom the app); the point under the fingers/cursor stays in
+  place; a zoomed page pans (swipes pan instead of turning); a double tap/click in the middle resets the zoom.
+- **Search:** text of each page from `getTextContent()` (cached per page), folded by `pdfFold` (NFKC for Arabic
+  presentation forms, ی/ک/ه variants, digits, half-spaces/harakat dropped, lower case); for Arabic-script queries the
+  reversed query is searched too, because some PDFs store glyphs in visual order. Max 100 results; a result opens its
+  page and marks the match in the text layer (`.pdf-hit`).
+- **Themes:** light; sepia tints the page (`mix-blend-mode: multiply`); dark/black invert the page canvas
+  (`invert(1) hue-rotate(180deg)`, can be switched off: pref `pdfInvert`), the chrome follows the theme.
+- **Settings («Aa»):** font, size, line height, alignment, paragraph spacing, margin, flow and Persian digits
+  (`[data-epub-only]`) are hidden for PDFs; zoom, fit and invert (`[data-pdf-only]`) are shown. Read aloud is hidden.
+- **Not in v1:** highlights/notes on PDF text, TTS, text cleanup, digits, links/forms inside the PDF. Page bookmarks work.
+
 ## 5. Service Worker
 - Install: pre-cache `APP_SHELL` (every file in `src/` the app needs, including vendor, font and `offline.html`).
 - Navigation requests: network first, cached copy (then `index.html`, then `offline.html`) when offline.
@@ -185,6 +234,8 @@ Details and history of each workaround: `docs/context/reader-engine-notes.md`.
 - Activate: delete every cache whose name is not `CACHE_NAME`.
 - Scope is the folder the SW is served from, so `/borg/` and `/borg-test/` have independent caches.
 - Books are **not** in the SW cache; they live in IndexedDB.
+- v8.8: pdf.js (`assets/vendor/pdfjs/…`) is deliberately **not** in `APP_SHELL`; the first PDF import/open fetches it and
+  the cache-first asset handler keeps it (module, worker, the CMaps/fonts a PDF needed) until the next `CACHE_NAME`.
 
 ## 6. Deployment
 Host: shared cPanel (`parsun.com`, user `parsunco`), HTTPS. Single branch `main` (ADR 0007).
@@ -215,10 +266,19 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   section 14: direction detection (no-direction Persian book, English book), nested TOC, load veil; section 17: v8.3
   text cleanup (rules, preview, apply, re-anchored highlight, auto-clean on import; server swap is in `api_test.py`).
   Checks assert visibility (geometry), not DOM presence. Use `poll()` (CSP forbids `wait_for_function`).
+- e2e section 28 (v8.8 PDF): fixtures printed by Chromium (`page.pdf(outline=True, tagged=True)`: 3 English pages,
+  3 Persian RTL pages in Vazirmatn, 120 pages): pdf.js not precached and not loaded before use (runtime-cached after),
+  import (card, JPEG cover, badge, `format`/`pages`, duplicate), canvas pixels inside the viewer, text layer + selection,
+  outline TOC/header, next/prev, keys, edge taps, wheel, seek + back chip, progress `pdf:N` restored after reload,
+  bookmark, search + highlight, settings rows, «+» zoom and pan, double click reset, ctrl+wheel, fit width/page,
+  dark invert, two-page spread, cleanup skips PDFs, 120-page responsiveness (one canvas in the DOM), phone 390 px:
+  fit width, RTL taps and swipes, Persian search, pinch zoom, pan instead of turn, double tap reset; no errors or
+  external requests.
 - `tests/webkit_e2e.py` (~19 checks, gates the deploy): WebKit with iPad (820×1180) and iPhone (390×844) touch contexts
   and a desktop one: import (IndexedDB), text laid out inside the viewer (frame width), touch edge taps turn exactly one
   page, middle tap immersive, TOC jump heading in view + header title, veil lifted, seek bar, back chip, English LTR book
-  with nested TOC, no page errors. `--browser chromium` runs the same checks locally (WebKit cannot run in the agent's container).
+  with nested TOC, no page errors; v8.8: a hand-written text PDF on iPhone (canvas pixels, text layer, edge taps).
+  `--browser chromium` runs the same checks locally (WebKit cannot run in the agent's container).
 - `tests/webkit_probe.py`: WebKit diagnostics per rendering variant (frame width, what is under the viewer); CI runs it
   only when `webkit_e2e.py` fails.
 - e2e section 18 (v8.4): TOC hrefs that go up a folder (`nav/nav.xhtml` → `../text/c1.xhtml`, NCX in `toc/`).
@@ -377,6 +437,10 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   Offline or on failure the book keeps `cleanPending`: `sync()` retries first, skips the book in the normal
   upload/adopt pass, never re-downloads the old server copy, and `syncAnnotations` does not push that book's
   annotations until the swap is done.
+- v8.8 PDFs: `upload-init` carries `format: "pdf"` as a hint (the server detects the format from the bytes); a server
+  book with `format: "pdf"` (or, when the field is missing, PDF bytes) is stored as a PDF record (`.pdf`,
+  `application/pdf`); «مطالعهٔ آنلاین» opens catalog PDFs in the PDF reader the same way (preview rules unchanged).
+  Progress `pdf:<page>` and page bookmarks sync like EPUB CFIs.
 - Progress is pushed 4 s after the last page turn. Deleting a synced book removes it from the account (confirmation).
 - Without an account or offline, everything works locally exactly as before.
 - v8.4 error reports: `reportError(kind, err, context)` (top of `app.js`) queues window `error` / `unhandledrejection`

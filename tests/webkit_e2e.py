@@ -3,7 +3,8 @@
 
 Covers the bugs that only showed up on iPad/iPhone: books stored in IndexedDB (Blob refusal, 8.0.1), text laid
 out inside the viewer (frame width, 8.0.4), edge taps turning exactly one page (8.0.5), TOC jumps landing on the
-chapter heading in the book's direction, the load veil, the seek bar and the back chip, and page errors.
+chapter heading in the book's direction, the load veil, the seek bar and the back chip, and page errors; v8.8: a PDF
+opens in pdf.js (canvas + text layer) and edge taps turn its pages.
 Contexts: iPad (820x1180 touch), iPhone (390x844 touch) and a desktop one (English LTR book).
 
 Usage:  python3 tests/webkit_e2e.py            (WebKit; CI installs it with `playwright install --with-deps webkit`)
@@ -77,6 +78,35 @@ def english_epub(path):
             body = "".join(f"<p>This is paragraph {k} of the section called {h}, written in plain English.</p>" for k in range(40))
             z.writestr(f, f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><title>{h}</title></head><body><h1>{h}</h1>{body}</body></html>')
     return str(path)
+
+def simple_pdf(path, titles):
+    """A small text PDF (Helvetica, one heading + 25 lines + a frame per page, /Title in the info dictionary).
+    Written by hand because page.pdf() exists only in Chromium."""
+    objs = ["<< /Type /Catalog /Pages 2 0 R >>",
+            f"<< /Type /Pages /Kids [{' '.join(f'{4 + 2 * i} 0 R' for i in range(len(titles)))}] /Count {len(titles)} >>",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"]
+    for i, t in enumerate(titles):
+        ops = [f"BT /F1 28 Tf 60 760 Td ({t}) Tj ET", "0 0 0 RG 4 w 40 40 515 762 re S"]
+        ops += [f"BT /F1 14 Tf 60 {710 - 24 * k} Td (Line {k} of {t} in plain English words.) Tj ET" for k in range(25)]
+        objs.append(f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents {5 + 2 * i} 0 R >>")
+        objs.append("\n".join(ops).encode())
+    objs.append("<< /Title (WebKit PDF) /Author (Borg tests) >>")
+    out, offs = b"%PDF-1.4\n", []
+    for k, o in enumerate(objs, 1):
+        offs.append(len(out))
+        body = (f"<< /Length {len(o)} >>\nstream\n".encode() + o + b"\nendstream") if isinstance(o, bytes) else o.encode()
+        out += f"{k} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objs) + 1}\n0000000000 65535 f \n".encode() + "".join(f"{o:010d} 00000 n \n" for o in offs).encode()
+    out += f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R /Info {len(objs)} 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    Path(path).write_bytes(out)
+    return str(path)
+
+PDF_PAGES_JS = "()=>[...document.querySelectorAll('#viewer .pdf-page')].map(p=>+p.dataset.page)"
+PDF_PIX_JS = """()=>{const c=document.querySelector('#viewer .pdf-page canvas');if(!c||!c.dataset.ready)return null;
+  const v=document.getElementById('viewer').getBoundingClientRect(),r=c.getBoundingClientRect(),d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;
+  let dark=0;for(let i=0;i<d.length;i+=32){if(d[i]+d[i+1]+d[i+2]<300)dark++}
+  return {dark,w:Math.round(r.width),h:Math.round(r.height),inside:r.width>100&&r.left>=v.left-1&&r.right<=v.right+1&&r.top>=v.top-1}}"""
 
 async def new_ctx(browser, opts, errors, external):
     ctx = await browser.new_context(**opts)
@@ -199,6 +229,43 @@ async def desktop(browser, url, tmp):
     check("desktop: no page errors, no external requests", not errs and not ext, str(errs[:3] + ext[:3]))
     await ctx.close()
 
+async def pdf_phone(browser, url, tmp):
+    """v8.8: a text PDF opens in pdf.js (module worker, canvas, text layer) and touch edge taps turn its pages."""
+    errs, ext = [], []
+    ctx, pg = await new_ctx(browser, DEVICES["iPhone"], errs, ext)
+    await pg.goto(url); await pg.wait_for_timeout(800)
+    await pg.set_input_files("#epubInput", simple_pdf(tmp / "webkit.pdf", ["Page one", "Page two", "Page three"]))
+    card = pg.locator("#bookGrid .book-card", has_text="WebKit PDF")
+    try:
+        await poll(lambda: card.first.is_visible(), 15000)
+    except TimeoutError:
+        pass
+    ok = await card.count() > 0
+    check("iPhone PDF: importing a PDF stores it and shows its card (title from the PDF)", ok)
+    if not ok:
+        await ctx.close(); return
+    await card.first.click()
+    try:
+        await poll(lambda: pg.evaluate(PDF_PIX_JS), 15000)
+    except TimeoutError:
+        pass
+    px = await pg.evaluate(PDF_PIX_JS)
+    layer = await pg.evaluate("()=>(document.querySelector('#viewer .textLayer')||{}).textContent||''")
+    check("iPhone PDF: page 1 is drawn inside the viewer (non-blank canvas) with its text layer",
+          bool(px) and px["inside"] and px["dark"] > 100 and "Page one" in layer, f"{px} {layer[:60]!r} diag={await pg.evaluate(DIAG_JS)}")
+    async def tap_pages(rx, want):
+        await tap_at(pg, rx)
+        try:
+            await poll(lambda: pg.evaluate("(w)=>JSON.stringify((" + PDF_PAGES_JS + ")())===JSON.stringify(w)", want), 4000)
+        except TimeoutError:
+            pass
+        return await pg.evaluate(PDF_PAGES_JS)
+    p1 = await tap_pages(0.9, [2])
+    p2 = await tap_pages(0.1, [1])
+    check("iPhone PDF: touch edge taps turn the page (English PDF: right edge next, left edge back)", p1 == [2] and p2 == [1], f"{p1} {p2}", gate=TAP_GATE)
+    check("iPhone PDF: no page errors, no external requests", not errs and not ext, str(errs[:3] + ext[:3]))
+    await ctx.close()
+
 async def run(url, engine):
     tmp = Path(tempfile.mkdtemp(prefix="borg-webkit-"))
     try:
@@ -214,6 +281,10 @@ async def run(url, engine):
                 await desktop(browser, url, tmp)
             except Exception as e:
                 check("desktop: run crashed", False, re.sub(r"\s+", " ", str(e))[:300])
+            try:
+                await pdf_phone(browser, url, tmp)
+            except Exception as e:
+                check("iPhone PDF: run crashed", False, re.sub(r"\s+", " ", str(e))[:300])
             await browser.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

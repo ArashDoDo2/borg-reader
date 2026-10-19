@@ -1953,6 +1953,299 @@ async def run(url):
               and "other" not in [x["id"] for x in lr] and any(x.get("text") == "فقط روی این دستگاه" for x in lr), str(pl[-1:])[:300])
         check("v8.7 API keys: no JS errors, no external requests", len(errs27) == 0 and len(ext27) == 0, str(errs27[:3] + ext27[:3]))
         await ctx27.close()
+        # 28. v8.8 PDF: text-based PDF magazines open in their original layout (pdf.js, lazily loaded, canvas + text layer).
+        # Fixtures are real text PDFs printed by Chromium itself (page.pdf with an outline): 3 English pages and 3 Persian
+        # (RTL, Vazirmatn) pages with headings, plus a 120-page one for the memory/responsiveness check.
+        tmpp = Path(tempfile.mkdtemp(prefix="borg-e2e-pdf-"))
+        EN28, FA28 = ["Alpha", "Bravo", "Zeppelin"], ["نخست", "دوم", "سوم"]
+        def pdf_html(lang, title, heads, para, n=12):
+            pages = "".join(f'<section style="page-break-after:always"><h1>{h}</h1>' + "".join(f"<p>{para(i, k)}</p>" for k in range(n)) + "</section>" for i, h in enumerate(heads))
+            return (f'<!doctype html><html lang="{lang}" dir="{"rtl" if lang == "fa" else "ltr"}"><head><meta charset="utf-8"><title>{title}</title>'
+                    f'<style>@font-face{{font-family:Vazirmatn;src:url({url}assets/fonts/Vazirmatn-Variable.woff2)}}body{{font-family:Vazirmatn,sans-serif;font-size:18px}}</style></head><body>{pages}</body></html>')
+        ctxG = await b.new_context()
+        GP = await ctxG.new_page()
+        await GP.goto(url + "offline.html")
+        async def make_pdf(path, html):
+            await GP.set_content(html); await GP.evaluate("document.fonts.ready")
+            await GP.pdf(path=str(path), format="A4", outline=True, tagged=True)  # Chromium builds the outline from the tagged headings
+            return str(path)
+        en_pdf = await make_pdf(tmpp / "magazine-en.pdf", pdf_html("en", "Test Magazine", [f"Chapter {w}" for w in EN28], lambda i, k: f"Paragraph {k} on the page about {EN28[i]} with plain English words for the reader."))
+        fa_pdf = await make_pdf(tmpp / "majale-fa.pdf", pdf_html("fa", "مجلهٔ آزمایشی", [f"فصل {w}" for w in FA28], lambda i, k: f"این پاراگراف شماره {k} از فصل {FA28[i]} در مجلهٔ آزمایشی است و متن فارسی دارد."))
+        big_pdf = await make_pdf(tmpp / "big.pdf", pdf_html("en", "Big Magazine", [f"Article {k}" for k in range(1, 121)], lambda i, k: f"Article {i + 1} paragraph {k} of the big magazine.", n=6))
+        await ctxG.close()
+        PAGES = "()=>[...document.querySelectorAll('#viewer .pdf-page')].map(p=>+p.dataset.page)"
+        PIX = """()=>{const c=document.querySelector('#viewer .pdf-page canvas');if(!c||!c.dataset.ready)return null;
+          const v=document.getElementById('viewer').getBoundingClientRect(),r=c.getBoundingClientRect(),d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;
+          let dark=0,light=0;for(let i=0;i<d.length;i+=32){const s=d[i]+d[i+1]+d[i+2];if(s<300)dark++;else if(s>600)light++}
+          return {dark,light,inside:r.width>100&&r.height>100&&r.left>=v.left-1&&r.right<=v.right+1&&r.top>=v.top-1,w:c.width,cssW:Math.round(r.width),cssH:Math.round(r.height),dpr:devicePixelRatio}}"""
+        LAYER = "()=>[...document.querySelectorAll('#viewer .textLayer')].map(t=>t.textContent).join(' ')"
+        async def pages_are(pg, want, timeout=6000):
+            """Wait until the viewer shows exactly these pages; returns what it shows."""
+            async def ok(): return await pg.evaluate(PAGES) == want
+            try: await poll(ok, timeout)
+            except TimeoutError: pass
+            return await pg.evaluate(PAGES)
+        async def drawn(pg, timeout=10000):
+            try: await poll(lambda: pg.evaluate(PIX), timeout)
+            except TimeoutError: pass
+            return await pg.evaluate(PIX)
+        ext28, errs28 = [], []
+        ctx28, Q = await new_ctx(b, url, ext28, errs28)
+        Q.on("dialog", lambda d: asyncio.ensure_future(d.accept()))
+        await Q.add_init_script(f"try{{const k='ketabkhane-reader-preferences{suffix}';const p=JSON.parse(localStorage.getItem(k)||'{{}}');if(!p.__pdf28){{p.spread='none';p.__pdf28=1;localStorage.setItem(k,JSON.stringify(p))}}}}catch(e){{}}")
+        await Q.goto(url); await Q.wait_for_timeout(1000)
+        await Q.reload(); await Q.wait_for_timeout(800)
+        shell = await Q.evaluate("caches.keys().then(ks=>Promise.all(ks.map(k=>caches.open(k).then(c=>c.keys())))).then(a=>a.flat().map(r=>new URL(r.url).pathname))")
+        check("v8.8 PDF: pdf.js is not in the precached app shell", not any("pdfjs" in k for k in shell) and any(k.endswith("app.js") for k in shell), str([k for k in shell if "pdfjs" in k]))
+        mods0 = await Q.evaluate("performance.getEntriesByType('resource').filter(e=>e.name.includes('pdfjs')).length")
+        check("v8.8 PDF: pdf.js is not loaded before a PDF is used", mods0 == 0, str(mods0))
+        await Q.set_input_files("#epubInput", en_pdf)
+        card = Q.locator('#bookGrid .book-card:has-text("Test Magazine")')
+        try: await poll(lambda: card.count(), 15000)
+        except TimeoutError: pass
+        cov = await card.evaluate("c=>{const i=c.querySelector('.book-cover-thumb img');const r=i&&i.getBoundingClientRect();return {src:i?i.getAttribute('src').slice(0,23):'',w:r?r.width:0,badge:(c.querySelector('.format-badge')||{}).textContent||''}}") if await card.count() else {}
+        check("v8.8 PDF: import shows a card titled from the PDF metadata with a page-1 JPEG cover and a PDF badge",
+              cov.get("src") == "data:image/jpeg;base64," and cov.get("w", 0) > 50 and cov.get("badge") == "PDF" and "اضافه شد" in await Q.inner_text("#toast"), str(cov))
+        rec = [x for x in await Q.evaluate(IDB_JS, ["books"]) if x.get("title") == "Test Magazine"]
+        check("v8.8 PDF: stored as a book record with format pdf, page count and SHA-256", len(rec) == 1 and rec[0].get("format") == "pdf" and rec[0].get("pages") == 3 and len(rec[0].get("contentHash") or "") == 64, str(rec)[:300])
+        await Q.set_input_files("#epubInput", en_pdf); await Q.wait_for_timeout(1500)
+        check("v8.8 PDF: the same PDF again is refused as a duplicate", "قبلاً" in await Q.inner_text("#toast") and await card.count() == 1)
+        await card.click()
+        px = await drawn(Q)
+        check("v8.8 PDF: page 1 is drawn on a canvas inside the viewer (non-blank pixels, devicePixelRatio)",
+              bool(px) and px["inside"] and px["dark"] > 200 and px["light"] > 1000 and px["w"] >= px["cssW"] * px["dpr"] - 2, str(px))
+        try: await poll(lambda: _contains(Q, "#viewer .textLayer", "Chapter Alpha"), 6000)
+        except TimeoutError: pass
+        lay = await Q.evaluate(LAYER)
+        check("v8.8 PDF: the text layer holds the page text (selectable, searchable)", "Chapter Alpha" in lay and "plain English words" in lay and "Bravo" not in lay, lay[:120])
+        sel = await Q.evaluate("""()=>{const s=document.querySelector('#viewer .textLayer');if(!s)return '';
+          const r=document.createRange();r.selectNodeContents(s);const g=getSelection();g.removeAllRanges();g.addRange(r);const t=String(g);g.removeAllRanges();return t.slice(0,60)}""")
+        check("v8.8 PDF: text on the page can be selected", "Alpha" in sel, sel)
+        check("v8.8 PDF: TOC from the PDF outline and the chapter title in the header",
+              await Q.locator("#tocList .toc-link").all_inner_texts() == [f"Chapter {w}" for w in EN28] and await Q.inner_text("#chapterLabel") == "Chapter Alpha"
+              and await Q.is_disabled("#prevPage") and "صفحهٔ ۱ از ۳" in await Q.inner_text("#timeLeft"), await Q.inner_text("#chapterLabel"))
+        check("v8.8 PDF: an English PDF is detected LTR (seek bar LTR)", await Q.get_attribute("#bookSeek", "dir") == "ltr")
+        await Q.click("#nextPage"); p1 = await pages_are(Q, [2])
+        await Q.click("#prevPage"); p2 = await pages_are(Q, [1])
+        check("v8.8 PDF: next/prev buttons turn one page", p1 == [2] and p2 == [1], f"{p1} {p2}")
+        await Q.keyboard.press("ArrowRight"); k1 = await pages_are(Q, [2])
+        await Q.keyboard.press("ArrowLeft"); k2 = await pages_are(Q, [1])
+        await Q.keyboard.press("PageDown"); k3 = await pages_are(Q, [2])
+        await Q.keyboard.press("PageUp"); k4 = await pages_are(Q, [1])
+        check("v8.8 PDF: arrows follow the LTR book (→ next), PageDown/PageUp", (k1, k2, k3, k4) == ([2], [1], [2], [1]), f"{k1} {k2} {k3} {k4}")
+        vb = await Q.locator("#viewer").bounding_box()
+        await Q.mouse.click(vb["x"] + vb["width"] * 0.92, vb["y"] + vb["height"] * 0.5); t1 = await pages_are(Q, [2])
+        await Q.mouse.click(vb["x"] + vb["width"] * 0.08, vb["y"] + vb["height"] * 0.5); t2 = await pages_are(Q, [1])
+        check("v8.8 PDF: edge taps (LTR: right edge = next, left edge = previous)", t1 == [2] and t2 == [1], f"{t1} {t2}")
+        await Q.mouse.move(vb["x"] + vb["width"] / 2, vb["y"] + vb["height"] / 2)
+        await Q.mouse.wheel(0, 120); w1 = await pages_are(Q, [2]); await Q.wait_for_timeout(400)
+        for _ in range(10):
+            await Q.mouse.wheel(0, 8); await Q.wait_for_timeout(16)
+        w2 = await pages_are(Q, [3]); await Q.wait_for_timeout(400)
+        await Q.mouse.wheel(0, -120); w3 = await pages_are(Q, [2])
+        check("v8.8 PDF: mouse wheel turns one page per gesture (down = next, up = back)", (w1, w2, w3) == ([2], [3], [2]), f"{w1} {w2} {w3}")
+        await Q.evaluate("()=>{const r=document.getElementById('bookSeek');r.value='1000';r.dispatchEvent(new Event('input'));r.dispatchEvent(new Event('change'))}")
+        s1 = await pages_are(Q, [3])
+        try: await poll(lambda: Q.is_visible("#backChip"), 4000)
+        except TimeoutError: pass
+        chip = await Q.is_visible("#backChip")
+        check("v8.8 PDF: seek bar jumps to the last page («صفحهٔ ۳ از ۳», next disabled) and offers the way back",
+              s1 == [3] and chip and await Q.is_disabled("#nextPage") and "۳ از ۳" in await Q.inner_text("#timeLeft") and await Q.inner_text("#chapterLabel") == "Chapter Zeppelin", f"{s1} chip={chip}")
+        await Q.click("#backChip"); b1 = await pages_are(Q, [2])
+        check("v8.8 PDF: the back chip returns to the page before the jump", b1 == [2], str(b1))
+        await Q.locator("#tocList .toc-link", has_text="Chapter Alpha").click(); c1 = await pages_are(Q, [1])
+        check("v8.8 PDF: a TOC entry opens its page and becomes the active entry",
+              c1 == [1] and await Q.locator("#tocList .toc-link.active").inner_text() == "Chapter Alpha", str(c1))
+        await Q.click("#nextPage"); await pages_are(Q, [2]); await Q.wait_for_timeout(600)
+        prog = [x for x in await Q.evaluate(IDB_JS, ["progress"]) if x.get("bookId") == rec[0]["id"]]
+        check("v8.8 PDF: progress is stored as pdf:<page> with percentage page/pages", prog and prog[0]["cfi"] == "pdf:2" and prog[0]["percentage"] == 67, str(prog))
+        await Q.click("#bookmarkButton"); await Q.wait_for_timeout(500)
+        anns = [a for a in await Q.evaluate(IDB_JS, ["annotations"]) if a.get("bookId") == rec[0]["id"] and not a.get("deleted")]
+        check("v8.8 PDF: a page bookmark is saved as an annotation pdf:<page>",
+              len(anns) == 1 and anns[0]["type"] == "bookmark" and anns[0]["cfi"] == "pdf:2" and await Q.get_attribute("#bookmarkButton", "aria-pressed") == "true", str(anns))
+        await Q.reload(); await Q.wait_for_timeout(1000)
+        await Q.click('#bookGrid .book-card:has-text("Test Magazine")')
+        r1 = await pages_are(Q, [2], 10000)
+        try: await poll(lambda: _count_gt(Q, "#tocList .toc-link", 2), 6000)
+        except TimeoutError: pass
+        check("v8.8 PDF: reopening after a reload restores the page (pdf:2)", r1 == [2] and await Q.inner_text("#chapterLabel") == "Chapter Bravo", str(r1))
+        cached = await Q.evaluate("caches.keys().then(ks=>Promise.all(ks.map(k=>caches.open(k).then(c=>c.keys())))).then(a=>a.flat().map(r=>new URL(r.url).pathname))")
+        check("v8.8 PDF: after first use pdf.js (module + worker) sits in the runtime cache for offline use",
+              any(k.endswith("pdfjs/pdf.min.mjs") for k in cached) and any(k.endswith("pdfjs/pdf.worker.min.mjs") for k in cached), str([k for k in cached if "pdfjs" in k][:4]))
+        # Search: a word on page 3, jump with the match marked in the text layer
+        await Q.click("#searchToggle"); await Q.fill("#bookSearchInput", "zeppelin"); await Q.press("#bookSearchInput", "Enter")
+        try: await poll(lambda: _count_gt(Q, "#bookSearchResults button", 0), 10000)
+        except TimeoutError: pass
+        res = await Q.locator("#bookSearchResults button").all_inner_texts()
+        check("v8.8 PDF: search finds the word on page 3 (case-insensitive) with an excerpt", len(res) >= 13 and all("صفحهٔ ۳" in r for r in res) and "Zeppelin" in res[0], str(res[:2]))
+        await Q.locator("#bookSearchResults button").first.click()
+        s3 = await pages_are(Q, [3])
+        try: await poll(lambda: Q.locator("#viewer .textLayer .pdf-hit").count(), 6000)
+        except TimeoutError: pass
+        hit = await Q.evaluate("""()=>{const hs=[...document.querySelectorAll('#viewer .textLayer .pdf-hit')];if(!hs.length)return null;const h=hs[0],r=h.getBoundingClientRect(),v=document.getElementById('viewer').getBoundingClientRect();
+          return {t:hs.map(x=>x.textContent).join(''),vis:r.width>2&&r.top>=v.top&&r.bottom<=v.bottom&&r.left>=v.left&&r.right<=v.right,bg:getComputedStyle(h).backgroundColor}}""")
+        check("v8.8 PDF: the search result opens page 3 with every match highlighted in the text layer",
+              s3 == [3] and bool(hit) and hit["t"].lower() == "zeppelin" * 13 and hit["vis"] and hit["bg"] not in ("rgba(0, 0, 0, 0)", "transparent"), f"{s3} {hit}")
+        try: await poll(lambda: Q.is_visible("#backChip"), 3000)
+        except TimeoutError: pass
+        check("v8.8 PDF: the back chip appears after the search jump", await Q.is_visible("#backChip"), await Q.evaluate("()=>{const c=document.getElementById('backChip');return [c.hidden,c.getBoundingClientRect().height,getComputedStyle(c).display]}"))
+        # Settings: EPUB-only rows hidden, PDF rows shown; zoom buttons; fit toggle; double click resets
+        await open_settings(Q)
+        vis = {sid: await Q.is_visible(sid) for sid in ["#readerFont", "#fontUp", "#readerLineHeight", '[data-align="justify"]', '[data-margin="s"]', '[data-para="s"]', '[data-flow="paginated"]', "#prefDigits", "#pdfZoomIn", '[data-pdffit="width"]', "#prefPdfInvert", '[data-theme="dark"]', '[data-spread="auto"]', '[data-bookdir="auto"]', "#prefTaps"]}
+        check("v8.8 PDF: «Aa» hides font/size/line height/align/paragraph/margin/flow/digits and shows zoom, fit and invert",
+              not any(vis[k] for k in ["#readerFont", "#fontUp", "#readerLineHeight", '[data-align="justify"]', '[data-margin="s"]', '[data-para="s"]', '[data-flow="paginated"]', "#prefDigits"])
+              and all(vis[k] for k in ["#pdfZoomIn", '[data-pdffit="width"]', "#prefPdfInvert", '[data-theme="dark"]', '[data-spread="auto"]', '[data-bookdir="auto"]', "#prefTaps"])
+              and not await Q.is_visible("#ttsToggle"), str(vis))
+        before = await drawn(Q)
+        await Q.click("#pdfZoomIn"); await Q.click("#pdfZoomIn")
+        try:
+            async def zoomed(): x = await Q.evaluate(PIX); return x and x["cssW"] > before["cssW"] * 1.5
+            await poll(zoomed, 6000)
+        except TimeoutError: pass
+        after = await drawn(Q)
+        pan = await Q.evaluate("()=>{const s=document.querySelector('#viewer .pdf-stage');const a=[s.scrollLeft,s.scrollTop];s.scrollTop=40;return {can:s.scrollHeight>s.clientHeight+100,moved:s.scrollTop===40,a}}")
+        check("v8.8 PDF: «+» zooms the page (bigger canvas, sharper pixels, «۱۵۶٪») and the zoomed page pans",
+              after and abs(after["cssW"] / before["cssW"] - 1.5625) < 0.03 and after["w"] > before["w"] * 1.5 and await Q.inner_text("#pdfZoomLabel") == "۱۵۶٪" and pan["can"] and pan["moved"], f"{before} → {after} {pan}")
+        await Q.keyboard.press("Escape"); await Q.wait_for_timeout(300)
+        vb = await Q.locator("#viewer").bounding_box()
+        await Q.mouse.click(vb["x"] + vb["width"] / 2, vb["y"] + vb["height"] / 2)
+        await Q.wait_for_timeout(120)
+        await Q.mouse.click(vb["x"] + vb["width"] / 2, vb["y"] + vb["height"] / 2)
+        await Q.wait_for_timeout(900)
+        reset = await drawn(Q)
+        check("v8.8 PDF: a double tap/click on the zoomed page resets the zoom (no immersive toggle)",
+              reset and abs(reset["cssW"] - before["cssW"]) <= 2 and not await Q.evaluate("document.getElementById('reader').classList.contains('immersive')"), str(reset))
+        await Q.mouse.move(vb["x"] + vb["width"] / 2, vb["y"] + vb["height"] / 2)
+        await Q.keyboard.down("Control"); await Q.mouse.wheel(0, -300); await Q.keyboard.up("Control")
+        try:
+            async def zoomed2(): x = await Q.evaluate(PIX); return x and x["cssW"] > before["cssW"] * 1.3
+            await poll(zoomed2, 4000)
+        except TimeoutError: pass
+        cz = await drawn(Q)
+        check("v8.8 PDF: ctrl+wheel zooms the page (not the browser) and keeps the page", cz and cz["cssW"] > before["cssW"] * 1.3 and await Q.evaluate(PAGES) == [3]
+              and await Q.evaluate("Math.round(visualViewport.scale*100)") == 100, str(cz))
+        await open_settings(Q)
+        await Q.click('[data-pdffit="width"]'); await Q.wait_for_timeout(900)
+        fw = await Q.evaluate("()=>{const s=document.querySelector('#viewer .pdf-stage'),p=document.querySelector('#viewer .pdf-page');return {s:s.clientWidth,p:p.getBoundingClientRect().width,z:document.getElementById('pdfZoomLabel').textContent}}")
+        check("v8.8 PDF: «عرض صفحه» fits the page to the viewer width (zoom back to 100%)", abs(fw["s"] - fw["p"]) <= 2 and fw["z"] == "۱۰۰٪", str(fw))
+        await Q.click('[data-pdffit="page"]'); await Q.wait_for_timeout(900)
+        fp = await Q.evaluate("()=>{const s=document.querySelector('#viewer .pdf-stage').getBoundingClientRect(),p=document.querySelector('#viewer .pdf-page').getBoundingClientRect();return p.top>=s.top&&p.bottom<=s.bottom+1&&p.height>s.height*0.85}")
+        check("v8.8 PDF: «اندازهٔ صفحه» shows the whole page", fp)
+        await Q.click('[data-theme="dark"]'); await Q.wait_for_timeout(300)
+        filt = await Q.evaluate("getComputedStyle(document.querySelector('#viewer .pdf-page canvas')).filter")
+        bg = await Q.evaluate("getComputedStyle(document.querySelector('.reader-toolbar')).backgroundColor")
+        await Q.click("#prefPdfInvert"); await Q.wait_for_timeout(200)
+        filt2 = await Q.evaluate("getComputedStyle(document.querySelector('#viewer .pdf-page canvas')).filter")
+        await Q.click("#prefPdfInvert"); await Q.click('[data-theme="light"]'); await Q.wait_for_timeout(200)
+        check("v8.8 PDF: dark theme inverts the page (optional) while the chrome follows the theme", "invert(1)" in filt and filt2 == "none" and bg != "rgb(255, 255, 255)", f"{filt} | {filt2} | {bg}")
+        await Q.click('[data-spread="auto"]'); await Q.wait_for_timeout(300)
+        await Q.keyboard.press("Escape"); await Q.wait_for_timeout(300)
+        await Q.locator("#tocList .toc-link", has_text="Chapter Bravo").click()
+        sp = await pages_are(Q, [2, 3])
+        geo = await Q.evaluate("()=>[...document.querySelectorAll('#viewer .pdf-page')].map(p=>Math.round(p.getBoundingClientRect().left))")
+        check("v8.8 PDF: on a wide landscape viewer «ستون‌ها: خودکار» shows two pages side by side (LTR: 2 left of 3)", sp == [2, 3] and geo[0] < geo[1], f"{sp} {geo}")
+        await open_settings(Q); await Q.click('[data-spread="none"]'); await Q.keyboard.press("Escape"); await Q.wait_for_timeout(500)
+        # Text cleanup never touches PDFs (and never feeds them to JSZip)
+        await Q.click("#closeReader"); await Q.wait_for_timeout(400)
+        await Q.set_input_files("#epubInput", sample); await Q.wait_for_timeout(2500)
+        size0 = [x for x in await Q.evaluate(IDB_JS, ["books"]) if x.get("format") == "pdf"][0]["size"]
+        await Q.click("#cleanOpen"); await Q.wait_for_timeout(300)
+        await Q.fill("#cleanPhrase", "plain English words"); await Q.click("#cleanAdd"); await Q.wait_for_timeout(200)
+        await Q.click("#cleanSearch")
+        try: await poll(lambda: _contains(Q, "#cleanStatus", "بررسی شد"), 15000)
+        except TimeoutError: pass
+        cst, cres = await Q.inner_text("#cleanStatus"), await Q.inner_text("#cleanResults")
+        size1 = [x for x in await Q.evaluate(IDB_JS, ["books"]) if x.get("format") == "pdf"][0]["size"]
+        check("v8.8 PDF: «پاک‌سازی متن» skips PDFs (only the EPUB is scanned, the PDF is untouched, no errors)",
+              "۱ کتاب بررسی شد" in cst and "Test Magazine" not in cres and size0 == size1 and not errs28, f"{cst} | {cres[:80]} | {errs28[:2]}")
+        await Q.click("#cleanClose")
+        await Q.evaluate(f"localStorage.removeItem('borg-clean-rules{suffix}')")
+        # A big magazine: 120 pages stay responsive and only the pages around the current one keep a canvas
+        t0 = await Q.evaluate("Date.now()")
+        await Q.set_input_files("#epubInput", big_pdf)
+        bigc = Q.locator('#bookGrid .book-card:has-text("Big Magazine")')
+        try: await poll(lambda: bigc.count(), 20000)
+        except TimeoutError: pass
+        await bigc.click()
+        await drawn(Q, 15000)
+        await Q.evaluate("()=>{const r=document.getElementById('bookSeek');r.value='840';r.dispatchEvent(new Event('input'));r.dispatchEvent(new Event('change'))}")
+        bp = await pages_are(Q, [101], 8000)
+        pxb = await drawn(Q, 8000)
+        lag = await Q.evaluate("()=>new Promise(r=>{const t=performance.now();setTimeout(()=>r(Math.round(performance.now()-t-50)),50)})")
+        await Q.click("#searchToggle"); await Q.fill("#bookSearchInput", "Article 117 paragraph 3"); await Q.press("#bookSearchInput", "Enter")
+        try: await poll(lambda: _count_gt(Q, "#bookSearchResults button", 0), 20000)
+        except TimeoutError: pass
+        bres = await Q.locator("#bookSearchResults button").all_inner_texts()
+        await Q.keyboard.press("Escape")
+        nc = await Q.evaluate("document.querySelectorAll('#viewer canvas').length")
+        check("v8.8 PDF: a 120-page PDF opens, seeks to page 101 and searches all pages; the main thread stays responsive",
+              bp == [101] and bool(pxb) and pxb["dark"] > 50 and lag < 250 and len(bres) == 1 and "صفحهٔ ۱۱۷" in bres[0] and nc == 1,
+              f"{bp} lag={lag} res={bres[:1]} canvases={nc} t={await Q.evaluate('Date.now()') - t0}ms")
+        await Q.click("#closeReader"); await Q.wait_for_timeout(300)
+        check("v8.8 PDF (desktop): no JS errors, no external requests", not errs28 and not ext28, str(errs28[:3] + ext28[:3]))
+        await ctx28.close()
+        # Phone (390px, touch): Persian RTL PDF — fit to width, RTL edge taps and swipes, pinch zoom + pan, Persian search
+        ext28m, errs28m = [], []
+        ctxM, M = await new_ctx(b, url, ext28m, errs28m, has_touch=True, is_mobile=True)
+        await M.set_viewport_size({"width": 390, "height": 844})
+        await M.goto(url); await M.wait_for_timeout(1000)
+        await M.set_input_files("#epubInputSmall", fa_pdf)
+        cardm = M.locator('#bookGrid .book-card:has-text("مجلهٔ آزمایشی")')
+        try: await poll(lambda: cardm.count(), 15000)
+        except TimeoutError: pass
+        await cardm.click()
+        pxm = await drawn(M)
+        geo = await M.evaluate("""()=>{const v=document.getElementById('viewer').getBoundingClientRect(),p=document.querySelector('#viewer .pdf-page').getBoundingClientRect();
+          return {vw:Math.round(v.width),pw:Math.round(p.width),pr:Math.round(p.right),sw:document.documentElement.scrollWidth,vh:Math.round(v.height)}}""")
+        check("v8.8 PDF mobile 390px: the Persian page fits the viewer width, nothing overflows the screen",
+              bool(pxm) and pxm["dark"] > 100 and abs(geo["pw"] - geo["vw"]) <= 4 and geo["pr"] <= 390 and geo["sw"] <= 390 and geo["vh"] > 400, f"{geo} {pxm}")
+        check("v8.8 PDF: a Persian PDF is detected RTL (seek bar RTL) and titled from its outline",
+              await M.get_attribute("#bookSeek", "dir") == "rtl" and await M.inner_text("#readerChapter") == "فصل نخست", await M.inner_text("#readerChapter"))
+        mb = await M.locator("#viewer").bounding_box()
+        async def tap(rx):
+            await M.touchscreen.tap(mb["x"] + mb["width"] * rx, mb["y"] + mb["height"] * 0.5); await M.wait_for_timeout(900)
+        await tap(0.1); m1 = await pages_are(M, [2])
+        await tap(0.9); m2 = await pages_are(M, [1])
+        check("v8.8 PDF: Persian PDF taps follow RTL (left edge = next, right edge = previous)", m1 == [2] and m2 == [1], f"{m1} {m2}")
+        cdp = await ctxM.new_cdp_session(M)
+        y = mb["y"] + mb["height"] * 0.5
+        await swipe(cdp, mb["x"] + 80, mb["x"] + 300, y); sw1 = await pages_are(M, [2]); await M.wait_for_timeout(600)
+        await swipe(cdp, mb["x"] + 300, mb["x"] + 80, y); sw2 = await pages_are(M, [1]); await M.wait_for_timeout(600)
+        check("v8.8 PDF: swipes follow RTL (finger to the right = next page)", sw1 == [2] and sw2 == [1], f"{sw1} {sw2}")
+        await M.click("#searchToggle"); await M.fill("#bookSearchInput", "فصل سوم"); await M.press("#bookSearchInput", "Enter")
+        try: await poll(lambda: _count_gt(M, "#bookSearchResults button", 0), 10000)
+        except TimeoutError: pass
+        fres = await M.locator("#bookSearchResults button").all_inner_texts()
+        check("v8.8 PDF: Persian search finds «فصل سوم» on page 3 (also when the PDF stores glyphs in visual order)",
+              len(fres) >= 1 and all("صفحهٔ ۳" in r for r in fres), str(fres[:2]))
+        await M.locator("#bookSearchResults button").first.click(); fp3 = await pages_are(M, [3])
+        try: await poll(lambda: M.locator("#viewer .textLayer .pdf-hit").count(), 6000)
+        except TimeoutError: pass
+        check("v8.8 PDF: the Persian match is marked on page 3", fp3 == [3] and await M.locator("#viewer .textLayer .pdf-hit").count() >= 1, str(fp3))
+        await M.click("#backChip"); await pages_are(M, [1])
+        pw0 = (await drawn(M))["cssW"]
+        cx, cy = mb["x"] + mb["width"] / 2, mb["y"] + mb["height"] / 2
+        await cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": cx - 40, "y": cy, "id": 1}, {"x": cx + 40, "y": cy, "id": 2}]})
+        for i in range(1, 7):
+            await cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": cx - 40 - 12 * i, "y": cy, "id": 1}, {"x": cx + 40 + 12 * i, "y": cy, "id": 2}]})
+        await cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        try:
+            async def pinched(): x = await M.evaluate(PIX); return x and x["cssW"] > pw0 * 1.5
+            await poll(pinched, 5000)
+        except TimeoutError: pass
+        pz = await drawn(M)
+        canpan = await M.evaluate("()=>{const s=document.querySelector('#viewer .pdf-stage');return s.scrollWidth>s.clientWidth+2}")
+        check("v8.8 PDF: pinch with two fingers zooms the page (re-rendered, pannable), the page stays", pz and pz["cssW"] > pw0 * 1.5 and canpan and await M.evaluate(PAGES) == [1]
+              and await M.evaluate("Math.round(visualViewport.scale*100)") == 100, f"{pw0} → {pz and pz['cssW']}")
+        sl0 = await M.evaluate("document.querySelector('#viewer .pdf-stage').scrollLeft")
+        await swipe(cdp, mb["x"] + 300, mb["x"] + 80, y); await M.wait_for_timeout(700)
+        sl1 = await M.evaluate("document.querySelector('#viewer .pdf-stage').scrollLeft")
+        check("v8.8 PDF: on a zoomed page a swipe pans instead of turning", await M.evaluate(PAGES) == [1] and sl1 != sl0, f"{sl0} → {sl1}")
+        await M.touchscreen.tap(cx, cy); await M.wait_for_timeout(120); await M.touchscreen.tap(cx, cy); await M.wait_for_timeout(900)
+        dz = await drawn(M)
+        check("v8.8 PDF: double tap resets the zoom", dz and abs(dz["cssW"] - pw0) <= 2 and not await M.evaluate("document.getElementById('reader').classList.contains('immersive')"), str(dz and dz["cssW"]))
+        check("v8.8 PDF (phone): no JS errors, no external requests", not errs28m and not ext28m, str(errs28m[:3] + ext28m[:3]))
+        await ctxM.close(); shutil.rmtree(tmpp, ignore_errors=True)
         await b.close()
 
 def main():

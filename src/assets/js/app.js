@@ -9,6 +9,7 @@
   const DB_VERSION = 3; // v2 (7.2): annotations; v3 (7.3): shelves
   let db, currentBook = null, rendition = null, bookInstance = null, currentProgressKey = null;
   let bookDir = "rtl"; // reading direction of the open book, decided by detectBookDirection()
+  let pdf = null; // v8.8: the open PDF (pdf.js document, pages, zoom, render cache); null while an EPUB (or nothing) is open
   let fontSize = 100, toastTimer;
   const READER_PREFS_KEY = "ketabkhane-reader-preferences" + STORAGE_SUFFIX;
 
@@ -160,6 +161,12 @@
     syncBookDirUI();
     const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
     chk("prefDigits", readerPrefs.digits); chk("prefTaps", readerPrefs.taps !== false); chk("prefWheel", readerPrefs.wheel !== false); chk("prefWake", readerPrefs.wake !== false);
+    // v8.8 PDF: dark/black themes invert the page images (optional), fit and zoom controls.
+    reader.classList.toggle("pdf-invert", (theme === "dark" || theme === "black") && readerPrefs.pdfInvert !== false);
+    pressed("[data-pdffit]", "pdffit", pdfFitMode());
+    chk("prefPdfInvert", readerPrefs.pdfInvert !== false);
+    const zl = document.getElementById("pdfZoomLabel");
+    if (zl) zl.textContent = `${Math.round((pdf ? pdf.zoom : 1) * 100).toLocaleString("fa-IR")}٪`;
     const viewer = document.getElementById("viewer");
     if (viewer) viewer.style.setProperty("--viewer-margin", { s: "0px", m: "2.5%", l: "7%" }[readerPrefs.margin] || "2.5%");
     document.querySelectorAll("[data-align]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.align === readerPrefs.align)));
@@ -276,7 +283,8 @@
   function fileOf(rec) {
     if (!rec) return null;
     if (rec.file instanceof Blob) return rec.file;
-    if (rec.fileBuffer) return new File([rec.fileBuffer], rec.fileName || "book.epub", { type: "application/epub+zip" });
+    if (rec.fileBuffer) return isPdfRecord(rec) ? new File([rec.fileBuffer], rec.fileName || "book.pdf", { type: "application/pdf" })
+      : new File([rec.fileBuffer], rec.fileName || "book.epub", { type: "application/epub+zip" });
     return null;
   }
   function remove(store, key) {
@@ -404,13 +412,17 @@
   // ---- Time left in chapter (from this reader's own page speed) ----
   let secPerPage = 60, lastTurnAt = 0;
   try { secPerPage = Number(localStorage.getItem("borg-sec-per-page")) || 60; } catch (_) {}
-  function updateTimeLeft(location) {
+  /** Learn this reader's seconds per page from the time between page turns. */
+  function notePageTurn() {
     const now = Date.now(), dt = (now - lastTurnAt) / 1000;
     if (lastTurnAt && dt > 3 && dt < 300) {
       secPerPage = Math.round(secPerPage * 0.7 + dt * 0.3);
       try { localStorage.setItem("borg-sec-per-page", String(secPerPage)); } catch (_) {}
     }
     lastTurnAt = now;
+  }
+  function updateTimeLeft(location) {
+    notePageTurn();
     const disp = location?.start?.displayed;
     if (!disp || !disp.total) return;
     const pagesLeft = Math.max(0, disp.total - disp.page);
@@ -507,7 +519,7 @@
     const statusLabel = b.status === "finished" ? "خوانده‌شده" : b.status === "want" ? "می‌خواهم بخوانم" : null;
     const badge = (statusLabel || (pct ? `${pct.toLocaleString("fa-IR")}٪ خوانده‌شده` : (prog ? "شروع‌شده" : "خوانده‌نشده"))) + catalogLabel;
     return `<article class="book-card" tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="باز کردن ${esc(b.title)}">
-          <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${bar}</div>
+          <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${bar}${isPdfRecord(b) ? '<span class="format-badge" aria-label="PDF">PDF</span>' : ""}</div>
           <div class="book-meta"><h3 title="${esc(b.title)}">${libMarkHtml(b.title, hl)}</h3><p>${libMarkHtml(b.author || "نویسنده نامشخص", hl)}</p><span class="book-badge">${badge}</span></div>
           <button class="remove-book" type="button" data-remove="${esc(b.id)}" aria-label="حذف ${esc(b.title)}" title="حذف">×</button>
           <button class="book-options" type="button" data-options="${esc(b.id)}" aria-label="تنظیمات ${esc(b.title)}" title="وضعیت و قفسه">⋯</button>
@@ -664,8 +676,11 @@
   async function importFile(file) {
     try {
       if (!file) return;
-      if (!/\.epub$/i.test(file.name) && file.type !== "application/epub+zip") {
-        showToast("لطفاً یک فایل EPUB انتخاب کن."); return;
+      // v8.8: PDFs are recognised by their bytes (%PDF-), whatever the name; EPUBs by extension or type as before.
+      const isPdf = await sniffPdf(file);
+      if (!isPdf && /\.pdf$/i.test(file.name)) { showToast("این فایل PDF قابل خواندن نیست یا خراب است."); return; }
+      if (!isPdf && !/\.epub$/i.test(file.name) && file.type !== "application/epub+zip") {
+        showToast("لطفاً یک فایل EPUB یا PDF انتخاب کن."); return;
       }
       if (file.size > 100 * 1024 * 1024) {
         showToast("این نسخه برای فایل‌های حداکثر ۱۰۰ مگابایت تنظیم شده است."); return;
@@ -676,12 +691,13 @@
       if (contentHash && await findDuplicate(file.size, contentHash)) {
         throw new UserError("این کتاب قبلاً در کتابخانه هست.");
       }
-      const metadata = await extractMetadata(file);
+      const metadata = isPdf ? await extractPdfMetadata(file) : await extractMetadata(file);
       const record = {
         id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         title: metadata.title, author: metadata.author, cover: metadata.cover,
         publisher: metadata.publisher || "", published: metadata.published || "", language: metadata.language || "", metaExt: true,
-        file: file, size: file.size, addedAt: Date.now(), contentHash
+        file: file, size: file.size, addedAt: Date.now(), contentHash,
+        ...(isPdf ? { format: "pdf", pages: metadata.pages || 0 } : {})
       };
       try {
         await put("books", record);
@@ -854,11 +870,16 @@
   }
   function showSeekPreview() {
     const r = $("bookSeek"), pv = $("seekPreview");
-    if (!locationsReady()) return;
+    if (!locationsReady() && !pdf) return;
     const p = Number(r.value) / 1000;
     let title = "";
-    try { const cfi = bookInstance.locations.cfiFromPercentage(p); title = chapterTitle(new ePub.CFI(cfi).spinePos, cfi); } catch (_) {}
-    pv.textContent = `${title ? title + " · " : ""}٪${faNum(Math.round(p * 100))}`;
+    if (pdf) {
+      const n = pdfPageFromSeek(), e = pdfOutlineFor(pdf, n);
+      pv.textContent = `${e ? e.label + " · " : ""}صفحهٔ ${faNum(n)}`;
+    } else {
+      try { const cfi = bookInstance.locations.cfiFromPercentage(p); title = chapterTitle(new ePub.CFI(cfi).spinePos, cfi); } catch (_) {}
+      pv.textContent = `${title ? title + " · " : ""}٪${faNum(Math.round(p * 100))}`;
+    }
     setSeekValueText(Math.round(p * 100));
     pv.hidden = false;
     const wrap = r.parentElement.getBoundingClientRect(), rr = r.getBoundingClientRect();
@@ -870,6 +891,7 @@
   $("bookSeek").addEventListener("input", () => { seekDragging = true; showSeekPreview(); });
   $("bookSeek").addEventListener("change", () => {
     endSeekDrag();
+    if (pdf) { jumpTo(`pdf:${pdfPageFromSeek()}`); return; } // jumpTo: offers «برگشت به صفحهٔ قبل»
     if (!rendition || !locationsReady()) return;
     let cfi = null;
     try { cfi = bookInstance.locations.cfiFromPercentage(Number($("bookSeek").value) / 1000); } catch (_) {}
@@ -937,8 +959,11 @@
   async function openReader(id, previewRecord) {
     const record = previewRecord || await getBook(id);
     if (!record) { showToast("فایل این کتاب روی دستگاه پیدا نشد."); return; }
-    if (!librariesReady()) { showToast("کتاب‌خوان کامل بارگذاری نشده است. صفحه را تازه‌سازی کن."); return; }
+    // v8.8: a record without `format` (older client, server without the field) is a PDF only if its bytes say so.
+    if (!record.format && fileOf(record) && await sniffPdf(fileOf(record))) record.format = "pdf";
+    if (!isPdfRecord(record) && !librariesReady()) { showToast("کتاب‌خوان کامل بارگذاری نشده است. صفحه را تازه‌سازی کن."); return; }
     const token = ++openToken;
+    closePdf();
     clearJumps();
     currentBook = record; currentProgressKey = record.id;
     $("readerTitle").textContent = record.title;
@@ -959,6 +984,7 @@
     if (!bookFile) { hideOpening(); showToast("فایل این کتاب روی دستگاه پیدا نشد."); return; }
     // The saved position is read while the file is (they are independent).
     const savedP = record.preview ? Promise.resolve(previewPos ? { cfi: previewPos } : null) : getProgress(record.id).catch(() => null);
+    if (isPdfRecord(record)) return openPdfReader(record, token, savedP);
     const epubBytes = await bookFile.arrayBuffer();
     if (token !== openToken) return;
     bookInstance = ePub(epubBytes);
@@ -967,24 +993,7 @@
       reportError("epub", err, "reader:openFailed");
       if (token === openToken) { hideOpening(); showToast("این فایل EPUB قابل خواندن نیست یا خراب است."); }
     });
-    // v8.5: the detected direction is cached on the book record (per file and detector version).
-    const dc = record.dirCache, dirKey = record.contentHash || `size:${record.size || 0}`;
-    if (record.dirOverride === "rtl" || record.dirOverride === "ltr") {
-      bookDir = record.dirOverride; // chosen by hand in «جهت این کتاب» (8.6.5)
-    } else if (dc && dc.v === DIR_DETECT_V && dc.key === dirKey && (dc.dir === "rtl" || dc.dir === "ltr")) {
-      bookDir = dc.dir;
-    } else {
-      countOpenStat("detect");
-      bookDir = await detectBookDirection(bookInstance);
-      if (!record.preview) {
-        const cache = { dir: bookDir, v: DIR_DETECT_V, key: dirKey };
-        // One read-write transaction that only adds the field, so it cannot undo a concurrent write (status etc.).
-        try {
-          const os = db.transaction("books", "readwrite").objectStore("books"), g = os.get(record.id);
-          g.onsuccess = () => { const cur = g.result; if (cur && (cur.contentHash || `size:${cur.size || 0}`) === dirKey) os.put({ ...cur, dirCache: cache }); };
-        } catch (err) { console.warn("Caching the book direction failed:", err); }
-      }
-    }
+    bookDir = await resolveBookDir(record, () => detectBookDirection(bookInstance));
     if (token !== openToken) return;
     $("bookSeek").dir = bookIsRtl() ? "rtl" : "ltr"; // RTL books fill the seek bar from the right
     patchTextWidth(DEBUG.tw || "rects"); // Safari/iPad fix: stock measurement inflates RTL column width to ~500k px → blank page
@@ -1104,6 +1113,26 @@
     updateBookmarkButton();
     prepareLocations(record, token);
   }
+  /**
+   * Reading direction of a book: «جهت این کتاب» override (8.6.5), else the cached detection (v8.5: per file and
+   * detector version), else `detect()` — whose result is cached on the record (not for previews).
+   */
+  async function resolveBookDir(record, detect) {
+    const dc = record.dirCache, dirKey = record.contentHash || `size:${record.size || 0}`;
+    if (record.dirOverride === "rtl" || record.dirOverride === "ltr") return record.dirOverride;
+    if (dc && dc.v === DIR_DETECT_V && dc.key === dirKey && (dc.dir === "rtl" || dc.dir === "ltr")) return dc.dir;
+    countOpenStat("detect");
+    const dir = await detect();
+    if (!record.preview) {
+      const cache = { dir, v: DIR_DETECT_V, key: dirKey };
+      // One read-write transaction that only adds the field, so it cannot undo a concurrent write (status etc.).
+      try {
+        const os = db.transaction("books", "readwrite").objectStore("books"), g = os.get(record.id);
+        g.onsuccess = () => { const cur = g.result; if (cur && (cur.contentHash || `size:${cur.size || 0}`) === dirKey) os.put({ ...cur, dirCache: cache }); };
+      } catch (err) { console.warn("Caching the book direction failed:", err); }
+    }
+    return dir;
+  }
   // v8.5: «در حال باز کردن کتاب…» over the page from the click until the first page is shown.
   function showOpening() { $("openingIndicator").hidden = false; renderSyncChip(); }
   function hideOpening() { $("openingIndicator").hidden = true; }
@@ -1115,6 +1144,10 @@
   }
   async function closeReader() {
     const wasPreview = !!(currentBook && currentBook.preview);
+    if (pdf && currentBook && !currentBook.preview) {
+      try { await saveProgress(currentBook.id, `pdf:${pdf.page}`, pdfPercent(pdf)); } catch (_) {}
+    }
+    closePdf();
     if (rendition && currentBook && !currentBook.preview) {
       try {
         const loc = rendition.currentLocation();
@@ -1141,6 +1174,624 @@
     // A preview was opened from the catalog detail page, which is still underneath: put focus back there.
     if (wasPreview && !$("viewBook").hidden) $("detailRead").focus({ preventScroll: true });
   }
+  // ======================= v8.8 PDF reading (text-based magazines in their original layout) =======================
+  // pdf.js 4.10.38 (legacy build, vendored under assets/vendor/pdfjs) is imported only when a PDF is imported or opened;
+  // the Service Worker's runtime cache keeps it afterwards (it is not in APP_SHELL). PDF scripting is never enabled
+  // (no sandbox build is shipped), eval is off (isEvalSupported: false) and CMaps / standard fonts come from the
+  // vendored folders, so nothing leaves the site. The page is drawn on a canvas inside #viewer with pdf.js' text layer
+  // on top (selection, copy, search marks). Only the visible page(s) and their neighbours keep a canvas.
+  const PDFJS_BASE = new URL("assets/vendor/pdfjs/", document.baseURI).href;
+  const PDF_MAX_PX = 10e6;            // pixels per canvas (iOS refuses canvases above ~16.7 M and limits their total memory)
+  const PDF_ZOOM_MIN = 0.5, PDF_ZOOM_MAX = 5, PDF_ZOOM_STEP = 1.25, PDF_PAD = 10;
+  let pdfjsLoading = null;
+  function loadPdfJs() {
+    if (!pdfjsLoading) {
+      pdfjsLoading = import(PDFJS_BASE + "pdf.min.mjs").then(m => { m.GlobalWorkerOptions.workerSrc = PDFJS_BASE + "pdf.worker.min.mjs"; return m; })
+        .catch(err => { pdfjsLoading = null; throw err; });
+    }
+    return pdfjsLoading;
+  }
+  function pdfOpenOptions(data) {
+    return { data, isEvalSupported: false, enableXfa: false, cMapUrl: PDFJS_BASE + "cmaps/", cMapPacked: true,
+             standardFontDataUrl: PDFJS_BASE + "standard_fonts/", verbosity: 0 };
+  }
+  function isPdfRecord(rec) { return !!rec && rec.format === "pdf"; }
+  /** A PDF starts with "%PDF-" (the format allows up to 1 KB of junk before it). */
+  async function sniffPdf(blob) {
+    try {
+      const b = new Uint8Array(await blob.slice(0, 1024).arrayBuffer());
+      for (let i = 0; i + 4 < b.length; i++) if (b[i] === 0x25 && b[i + 1] === 0x50 && b[i + 2] === 0x44 && b[i + 3] === 0x46 && b[i + 4] === 0x2d) return true;
+    } catch (_) {}
+    return false;
+  }
+  function pdfOpenError(err) {
+    const n = err && err.name;
+    if (n === "PasswordException") return new UserError("این PDF رمز دارد و باز نمی‌شود.");
+    if (n === "InvalidPDFException" || n === "MissingPDFException" || n === "UnexpectedResponseException") return new UserError("این فایل PDF قابل خواندن نیست یا خراب است.");
+    return null;
+  }
+  async function loadPdfJsOrExplain(context) {
+    try { return await loadPdfJs(); }
+    catch (err) {
+      reportError("pdf", err, context);
+      throw new UserError(navigator.onLine ? "نمایشگر PDF بارگذاری نشد؛ صفحه را تازه‌سازی کن." : "نمایشگر PDF هنوز روی این دستگاه ذخیره نشده است؛ یک بار با اینترنت باز کن.");
+    }
+  }
+  /** Page 1 as a small JPEG data URL, like EPUB covers. */
+  async function pdfCoverDataUrl(doc) {
+    const page = await doc.getPage(1);
+    const vp1 = page.getViewport({ scale: 1 }), vp = page.getViewport({ scale: Math.min(2, 360 / Math.max(1, vp1.width)) });
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.floor(vp.width)); c.height = Math.max(1, Math.floor(vp.height));
+    const ctx = c.getContext("2d", { alpha: false });
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    const url = c.toDataURL("image/jpeg", 0.82);
+    c.width = c.height = 0;
+    return url;
+  }
+  /** Title/author from the PDF info dictionary (file name / «نویسنده نامشخص» otherwise), cover and page count. */
+  async function extractPdfMetadata(file) {
+    const lib = await loadPdfJsOrExplain("import:load");
+    let task = null;
+    try {
+      task = lib.getDocument(pdfOpenOptions(new Uint8Array(await file.arrayBuffer())));
+      const doc = await withTimeout(task.promise, 30000, "خواندن این PDF بیش از حد طول کشید؛ ممکن است فایل خراب باشد.");
+      let info = {};
+      try { info = ((await doc.getMetadata()) || {}).info || {}; } catch (_) {}
+      let cover = null;
+      try { cover = await pdfCoverDataUrl(doc); } catch (err) { console.warn("PDF cover skipped:", err); }
+      return { title: cleanMeta(info.Title, 500) || file.name.replace(/\.pdf$/i, "") || "بدون عنوان",
+               author: cleanMeta(info.Author, 300) || "نویسنده نامشخص", cover, pages: doc.numPages };
+    } catch (err) {
+      if (err instanceof UserError) throw err;
+      const known = pdfOpenError(err);
+      if (known) throw known;
+      console.error("PDF metadata failed:", err);
+      reportError("pdf", err, "import:metadata");
+      throw new UserError("این فایل PDF قابل خواندن نیست یا خراب است.");
+    } finally {
+      if (task) { try { task.destroy(); } catch (_) {} }
+    }
+  }
+  // ---- Text (direction detection, search) ----
+  async function pdfPageText(st, n) {
+    if (st.text.has(n)) return st.text.get(n);
+    const page = await pdfPageProxy(st, n);
+    const tc = await page.getTextContent();
+    const text = tc.items.map(it => (it.str || "") + (it.hasEOL ? "\n" : "")).join("");
+    st.text.set(n, text);
+    return text;
+  }
+  /** Like detectBookDirection(): Arabic-script vs Latin letters on the first pages; image-only PDFs fall back to RTL. */
+  async function detectPdfDirection(st) {
+    let rtl = 0, ltr = 0;
+    for (let n = 1; n <= Math.min(st.pages, 6) && rtl + ltr <= 5000; n++) {
+      try {
+        const text = await pdfPageText(st, n);
+        rtl += (text.match(/[֐-ࣿיִ-﷿ﹰ-﻿]/g) || []).length;
+        ltr += (text.match(/[A-Za-zÀ-ɏͰ-ϿЀ-ӿ]/g) || []).length;
+      } catch (_) {}
+    }
+    return rtl + ltr > 50 ? (rtl >= ltr ? "rtl" : "ltr") : "rtl";
+  }
+  // Search key: presentation forms → letters (NFKC), ی/ي/ى, ک/ك, ە/ه, digits 0-9, lower case; half-spaces, bidi marks,
+  // tatweel and harakat dropped; whitespace collapsed. `map[i]` is the index in the original text of key[i].
+  const PDF_DROP = /[​-‏‪-‮⁦-⁩﻿ـً-ٰٟ]/;
+  function pdfFold(text) {
+    let key = "", space = true; const map = [];
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      if (/\s/.test(c)) { if (!space) { key += " "; map.push(i); space = true; } continue; }
+      for (let f of c.normalize("NFKC")) {
+        if (PDF_DROP.test(f)) continue;
+        const d = LIB_DIGITS.indexOf(f);
+        f = d >= 0 ? String(d % 10) : f === "ي" || f === "ى" ? "ی" : f === "ك" ? "ک" : f === "ە" ? "ه" : f.toLowerCase();
+        key += f; map.push(i); space = false;
+      }
+    }
+    return { key, map };
+  }
+  // Many PDFs (Chromium's own, some Persian publishing tools) store Arabic-script text glyph by glyph in visual order,
+  // so a word comes out reversed in the text content; such words are found by also searching the reversed query.
+  function pdfQueryVariants(query) {
+    const q = pdfFold(String(query || "")).key.trim();
+    if (!q) return [];
+    const out = [q];
+    if (/[֐-ࣿ]/.test(q) && q.length > 1) out.push([...q].reverse().join(""));
+    return [...new Set(out)];
+  }
+  function pdfFindAll(key, variants) {
+    const hits = [];
+    variants.forEach((v, k) => { for (let i = key.indexOf(v); i >= 0; i = key.indexOf(v, i + 1)) hits.push([i, v.length, k > 0]); });
+    return hits.sort((a, b) => a[0] - b[0]);
+  }
+  async function pdfSearch(st, query) {
+    const variants = pdfQueryVariants(query), results = [];
+    if (!variants.length) return results;
+    for (let n = 1; n <= st.pages && results.length < 100; n++) {
+      if (n % 8 === 0) await sleep(0); // keep the page responsive on big magazines
+      if (pdf !== st) return [];
+      let text;
+      try { text = await pdfPageText(st, n); } catch (_) { continue; }
+      const { key, map } = pdfFold(text);
+      for (const [i, len, reversed] of pdfFindAll(key, variants)) {
+        const a = map[i], z = map[i + len - 1] + 1, flat = t => t.replace(/\s+/g, " ");
+        let before = flat(text.slice(Math.max(0, a - 40), a)), match = flat(text.slice(a, z)), after = flat(text.slice(z, z + 40));
+        // Text stored in visual order: show the excerpt in reading order.
+        if (reversed) { const rev = t => [...t].reverse().join(""); [before, match, after] = [rev(after), rev(match), rev(before)]; }
+        results.push({ page: n, cfi: `pdf:${n}`, before, match, after });
+        if (results.length >= 100) break;
+      }
+    }
+    return results;
+  }
+  /** Mark the search query in a rendered text layer (the match on the page the search result points to). */
+  function pdfApplyHits(st, n) {
+    const pe = st.pageEls.get(n), layer = pe && pe.el.querySelector(".textLayer");
+    if (!layer) return;
+    layer.querySelectorAll(".pdf-hit").forEach(h => h.replaceWith(document.createTextNode(h.textContent)));
+    layer.normalize();
+    if (!st.hl || st.hl.page !== n || !layer.dataset.ready) return;
+    const nodes = [], starts = [];
+    let all = "";
+    const w = document.createTreeWalker(layer, NodeFilter.SHOW_TEXT);
+    for (let t = w.nextNode(); t; t = w.nextNode()) { nodes.push(t); starts.push(all.length); all += t.nodeValue; }
+    const { key, map } = pdfFold(all);
+    const segs = [];
+    for (const [i, len] of pdfFindAll(key, pdfQueryVariants(st.hl.q))) {
+      const a = map[i], z = map[i + len - 1] + 1;
+      nodes.forEach((t, k) => { const lo = Math.max(a, starts[k]), hi = Math.min(z, starts[k] + t.nodeValue.length); if (lo < hi) segs.push({ k, lo: lo - starts[k], hi: hi - starts[k] }); });
+    }
+    segs.sort((x, y) => y.k - x.k || y.lo - x.lo); // from the end, so earlier offsets stay valid
+    let lastK = -1, lastLo = Infinity, first = null;
+    for (const sg of segs) {
+      if (sg.k === lastK && sg.hi > lastLo) continue;
+      const t = nodes[sg.k];
+      t.splitText(sg.hi);
+      const mid = t.splitText(sg.lo), m = document.createElement("span");
+      m.className = "pdf-hit"; mid.replaceWith(m); m.append(mid);
+      lastK = sg.k; lastLo = sg.lo; first = m;
+    }
+    // A zoomed or fit-to-width page may hide the match: scroll the stage to it.
+    if (first && st.hl.scroll) {
+      st.hl.scroll = false;
+      const s = st.stage, r = first.getBoundingClientRect(), sr = s.getBoundingClientRect();
+      if (r.top < sr.top || r.bottom > sr.bottom) s.scrollTop += r.top - sr.top - s.clientHeight / 3;
+      if (r.left < sr.left || r.right > sr.right) s.scrollLeft += r.left - sr.left - s.clientWidth / 3;
+    }
+  }
+  // ---- Layout ----
+  function pdfFitMode() {
+    const f = readerPrefs.pdfFit;
+    if (f === "width" || f === "page") return f;
+    return window.matchMedia("(max-width: 700px)").matches ? "width" : "page"; // phones: fit to width, desktop: whole page
+  }
+  /** Two pages side by side on wide landscape viewers («ستون‌ها: خودکار»); the first page (cover) stays alone. */
+  function pdfSpreadOn(st) {
+    if (readerPrefs.spread === "none" || st.pages < 3) return false;
+    const w = st.stage.clientWidth, h = st.stage.clientHeight;
+    return w >= 800 && w > h * 1.05;
+  }
+  function pdfFirstOf(st, n) {
+    n = Math.max(1, Math.min(st.pages, n | 0));
+    return pdfSpreadOn(st) && n > 1 ? n - (n % 2 === 1 ? 1 : 0) : n;
+  }
+  function pdfVisible(st) {
+    const a = pdfFirstOf(st, st.page);
+    return pdfSpreadOn(st) && a > 1 && a + 1 <= st.pages ? [a, a + 1] : [a];
+  }
+  function pdfPercent(st) { const v = pdfVisible(st); return Math.round(v[v.length - 1] / st.pages * 100); }
+  function pdfTargetPage(target) {
+    const m = /^pdf:(\d+)$/.exec(String(target == null ? "" : target).trim());
+    const n = m ? Number(m[1]) : (typeof target === "number" ? target : 0);
+    return pdf && n >= 1 && n <= pdf.pages ? n : (n >= 1 && !pdf ? n : 0);
+  }
+  function pdfPageFromSeek() {
+    const v = Number($("bookSeek").value) / 1000;
+    return pdf ? Math.max(1, Math.min(pdf.pages, 1 + Math.round(v * (pdf.pages - 1)))) : 1;
+  }
+  function pdfOutlineFor(st, n) {
+    let best = null;
+    for (const e of st.outline) if (e.page && e.page <= n && (!best || e.page >= best.page)) best = e;
+    return best;
+  }
+  function pdfPageProxy(st, n) {
+    let p = st.proxies.get(n);
+    if (!p) { p = st.doc.getPage(n); st.proxies.set(n, p); p.catch(() => st.proxies.delete(n)); }
+    return p;
+  }
+  function pdfCanPanX() { return !!pdf && pdf.stage.scrollWidth > pdf.stage.clientWidth + 2; }
+  function pdfReleaseCanvas(e) {
+    if (e.task) { try { e.task.cancel(); } catch (_) {} e.task = null; }
+    e.canvas.remove(); e.canvas.width = e.canvas.height = 0; // frees the bitmap right away (iOS keeps it otherwise)
+  }
+  /** The page's canvas at this scale: reused when already rendered (or rendering), otherwise a new cancellable render. */
+  function pdfEnsureCanvas(st, n, page, scale) {
+    const key = `${scale.toFixed(5)}@${window.devicePixelRatio || 1}`;
+    let e = st.canvases.get(n);
+    if (e && e.key === key) return e;
+    if (e) pdfReleaseCanvas(e);
+    const vp = page.getViewport({ scale });
+    let out = Math.min(window.devicePixelRatio || 1, 3);
+    if (vp.width * vp.height * out * out > PDF_MAX_PX) out = Math.sqrt(PDF_MAX_PX / (vp.width * vp.height));
+    const canvas = document.createElement("canvas");
+    canvas.className = "pdf-canvas";
+    canvas.width = Math.max(1, Math.floor(vp.width * out)); canvas.height = Math.max(1, Math.floor(vp.height * out));
+    const task = page.render({ canvasContext: canvas.getContext("2d", { alpha: false }), viewport: vp, transform: out === 1 ? null : [out, 0, 0, out, 0, 0] });
+    e = { key, canvas, task };
+    e.done = task.promise.then(() => { e.task = null; canvas.dataset.ready = "1"; }, err => {
+      e.task = null;
+      if (err && err.name === "RenderingCancelledException") return;
+      console.warn("PDF page render failed:", err);
+      reportError("pdf", err, "reader:render");
+    });
+    st.canvases.set(n, e);
+    return e;
+  }
+  function pdfBuildTextLayer(st, n, page, pe, scale) {
+    if (pe.tl) { try { pe.tl.cancel(); } catch (_) {} pe.tl = null; }
+    pe.el.querySelectorAll(".textLayer").forEach(x => x.remove());
+    const div = document.createElement("div");
+    div.className = "textLayer";
+    pe.el.append(div);
+    const key = pe.key = scale.toFixed(5);
+    page.getTextContent().then(tc => {
+      if (pdf !== st || pe.key !== key) return;
+      const tl = pe.tl = new st.lib.TextLayer({ textContentSource: tc, container: div, viewport: page.getViewport({ scale }) });
+      return tl.render().then(() => { if (pe.tl === tl) { div.dataset.ready = "1"; pdfApplyHits(st, n); } });
+    }).catch(err => { if (!(err && (err.name === "AbortException" || /cancel/i.test(err.message || "")))) console.warn("PDF text layer failed:", err); });
+  }
+  /**
+   * Lay out and draw the visible page(s): scale from the fit mode («اندازهٔ صفحه» / «عرض صفحه») × zoom, canvases at
+   * devicePixelRatio (capped), text layer on top. Then pre-render the neighbouring pages and release every other canvas.
+   * `afterPlace` runs once the pages are in the DOM (before their pixels are ready).
+   */
+  async function pdfRender(afterPlace) {
+    const st = pdf;
+    if (!st) return;
+    const seq = ++st.seq;
+    st.page = pdfFirstOf(st, st.page);
+    const list = pdfVisible(st);
+    let pages;
+    try { pages = await Promise.all(list.map(n => pdfPageProxy(st, n))); }
+    catch (err) { if (pdf === st) { hideOpening(); showToast("این صفحهٔ PDF نمایش داده نشد."); reportError("pdf", err, "reader:getPage"); } return; }
+    if (pdf !== st || seq !== st.seq) return;
+    const fit = pdfFitMode();
+    st.stage.classList.toggle("fit-width", fit === "width");
+    const pad = fit === "width" ? 0 : PDF_PAD;
+    const W = Math.max(50, st.stage.clientWidth - 2 * pad), H = Math.max(50, st.stage.clientHeight - 2 * pad);
+    const vps = pages.map(p => p.getViewport({ scale: 1 }));
+    const sumW = vps.reduce((a, v) => a + v.width, 0), maxH = Math.max(...vps.map(v => v.height));
+    const scale = (fit === "width" ? W / sumW : Math.min(W / sumW, H / maxH)) * st.zoom;
+    const els = list.map((n, i) => {
+      let pe = st.pageEls.get(n);
+      if (!pe) {
+        const el = document.createElement("div");
+        el.className = "pdf-page"; el.dataset.page = String(n);
+        pe = { el, key: "", tl: null }; st.pageEls.set(n, pe);
+      }
+      const vp = pages[i].getViewport({ scale });
+      pe.el.style.width = `${Math.floor(vp.width)}px`; pe.el.style.height = `${Math.floor(vp.height)}px`;
+      pe.el.style.setProperty("--scale-factor", String(scale)); // pdf.js text layer sizes itself from it
+      const c = pdfEnsureCanvas(st, n, pages[i], scale);
+      if (c.canvas.parentNode !== pe.el) pe.el.prepend(c.canvas);
+      const fresh = pe.key !== scale.toFixed(5);
+      if (fresh) pdfBuildTextLayer(st, n, pages[i], pe, scale);
+      return { n, el: pe.el, done: c.done, fresh };
+    });
+    st.spreadEl.style.flexDirection = bookIsRtl() ? "row-reverse" : "row"; // an RTL magazine's first page is on the right
+    st.spreadEl.style.padding = `${pad}px`;
+    st.spreadEl.style.transform = "";
+    st.spreadEl.replaceChildren(...els.map(x => x.el));
+    st.scale = scale;
+    for (const [n, pe] of st.pageEls) if (!list.includes(n)) { if (pe.tl) { try { pe.tl.cancel(); } catch (_) {} } st.pageEls.delete(n); }
+    pdfRelocated(st);
+    if (afterPlace) { try { afterPlace(); } catch (_) {} }
+    els.forEach(x => { if (!x.fresh) pdfApplyHits(st, x.n); }); // new text layers mark themselves when rendered
+    // Neighbours (next and previous spread) keep / get a canvas while not zoomed in; everything else is released.
+    const next = list[list.length - 1] + 1, prevFirst = pdfFirstOf(st, list[0] - 1);
+    const around = st.zoom <= 1 ? [next, next + (pdfSpreadOn(st) ? 1 : 0), prevFirst, prevFirst + (pdfSpreadOn(st) && prevFirst > 1 ? 1 : 0)]
+      .filter(n => n >= 1 && n <= st.pages && !list.includes(n)) : [];
+    const keep = new Set([...list, ...around]);
+    for (const [n, e] of st.canvases) if (!keep.has(n)) { pdfReleaseCanvas(e); st.canvases.delete(n); }
+    for (const [n, p] of st.proxies) if (!keep.has(n)) p.then(pg => { try { if (!st.canvases.has(n)) pg.cleanup(); } catch (_) {} }).catch(() => {});
+    await Promise.all(els.map(x => x.done));
+    if (pdf !== st || seq !== st.seq) return;
+    if (st.token === openToken) hideOpening();
+    for (const n of around) {
+      try {
+        const page = await pdfPageProxy(st, n);
+        if (pdf !== st || seq !== st.seq) return;
+        await pdfEnsureCanvas(st, n, page, scale).done;
+      } catch (_) {}
+      if (pdf !== st || seq !== st.seq) return;
+    }
+  }
+  function pdfScrollToStart(st) {
+    st.stage.scrollTop = 0;
+    st.stage.scrollLeft = bookIsRtl() ? st.stage.scrollWidth : 0; // the stage is LTR: RTL pages start at the right
+  }
+  function pdfShow(n) {
+    const st = pdf;
+    if (!st) return;
+    st.page = pdfFirstOf(st, n);
+    if (st.hl && st.hl.page && pdfVisible(st).includes(st.hl.page)) st.hl.scroll = true;
+    pdfRender(() => pdfScrollToStart(st));
+  }
+  function pdfStep(dir) {
+    const st = pdf;
+    if (!st) return;
+    const vis = pdfVisible(st);
+    if (dir > 0) { if (vis[vis.length - 1] < st.pages) pdfShow(vis[vis.length - 1] + 1); }
+    else if (vis[0] > 1) pdfShow(pdfFirstOf(st, vis[0] - 1));
+  }
+  /** After every render: progress, header, TOC, buttons, seek bar, time left, back-chip bookkeeping, saved position. */
+  function pdfRelocated(st) {
+    const vis = pdfVisible(st), first = vis[0], last = vis[vis.length - 1], N = st.pages, cfi = `pdf:${first}`;
+    const pct = Math.round(last / N * 100);
+    showProgress(pct);
+    const pageLabel = vis.length > 1 ? `صفحهٔ ${faNum(first)}–${faNum(last)} از ${faNum(N)}` : `صفحهٔ ${faNum(first)} از ${faNum(N)}`;
+    const entry = pdfOutlineFor(st, last), label = entry ? entry.label : pageLabel;
+    $("chapterLabel").textContent = label; $("chapterLabel").title = label; $("readerChapter").textContent = label;
+    $("tocList").querySelectorAll(".toc-link[data-page]").forEach((b, i) => {
+      const on = !!entry && st.outline[i] === entry;
+      b.classList.toggle("active", on);
+      if (on) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
+    });
+    $("prevPage").disabled = first <= 1;
+    $("nextPage").disabled = last >= N;
+    if (!seekDragging) { $("bookSeek").value = String(N > 1 ? Math.round((last - 1) / (N - 1) * 1000) : 0); setSeekValueText(pct); }
+    const changed = st.lastCfi !== cfi;
+    st.lastCfi = cfi;
+    if (!changed) return;
+    if (st.shown) notePageTurn(); else { st.shown = true; lastTurnAt = Date.now(); }
+    const min = Math.ceil(Math.max(0, N - last) * secPerPage / 60);
+    $("timeLeft").textContent = last >= N ? `${pageLabel} · آخرین صفحه` : pageLabel;
+    $("seekInfo").textContent = last >= N ? `٪${faNum(pct)} از کتاب · آخرین صفحهٔ کتاب` : `٪${faNum(pct)} از کتاب · حدود ${faNum(Math.max(1, min))} دقیقه تا پایان کتاب`;
+    updateBookmarkButton();
+    markActivity();
+    onJumpRelocated({ start: { cfi } });
+    const bk = currentBook;
+    if (!bk || st.token !== openToken) return;
+    if (last >= N && !bk.preview && bk.status !== "finished") {
+      setBookMeta(bk.id, { status: "finished" }).then(r => { if (r && currentBook && currentBook.id === r.id) { currentBook = r; showToast("تبریک! این کتاب را تمام کردی."); } });
+    }
+    if (bk.preview) { previewPos = cfi; return; }
+    saveProgress(bk.id, cfi, pct).catch(err => console.warn("Saving progress failed:", err));
+  }
+  // ---- Zoom: buttons, ctrl+wheel / trackpad pinch, touch pinch; double tap on a zoomed page resets ----
+  function pdfClampZoom(z) { return Math.min(PDF_ZOOM_MAX, Math.max(PDF_ZOOM_MIN, Math.round(z * 100) / 100)); }
+  /** anchor: {ox, oy} point in the (unzoomed) spread and {cx, cy} where it is on screen; it stays there after zooming. */
+  function pdfSetZoom(z, anchor) {
+    const st = pdf;
+    if (!st) return;
+    z = pdfClampZoom(z);
+    if (z === st.zoom) { st.spreadEl.style.transform = ""; return; }
+    if (!anchor) {
+      const sr = st.stage.getBoundingClientRect(), r = st.spreadEl.getBoundingClientRect();
+      const cx = sr.left + sr.width / 2, cy = sr.top + sr.height / 2;
+      anchor = { ox: cx - r.left, oy: cy - r.top, cx, cy };
+    }
+    const f = z / st.zoom;
+    st.zoom = z;
+    syncSettingsUI();
+    pdfRender(() => {
+      const r = st.spreadEl.getBoundingClientRect();
+      st.stage.scrollLeft += r.left + anchor.ox * f - anchor.cx;
+      st.stage.scrollTop += r.top + anchor.oy * f - anchor.cy;
+    });
+  }
+  function pdfWheelZoom(e) {
+    const st = pdf;
+    if (e.cancelable) e.preventDefault();
+    if (!st || settingsOpen() || searchOpen()) return;
+    if (!st.wheelZoom) {
+      const r = st.spreadEl.getBoundingClientRect();
+      st.wheelZoom = { target: st.zoom, anchor: { ox: e.clientX - r.left, oy: e.clientY - r.top, cx: e.clientX, cy: e.clientY } };
+      st.spreadEl.style.transformOrigin = `${st.wheelZoom.anchor.ox}px ${st.wheelZoom.anchor.oy}px`;
+    }
+    const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
+    st.wheelZoom.target = pdfClampZoom(st.wheelZoom.target * Math.exp(-e.deltaY * unit * 0.0025));
+    st.spreadEl.style.transform = `scale(${st.wheelZoom.target / st.zoom})`; // live preview, re-rendered when the wheel rests
+    clearTimeout(st.wheelZoomTimer);
+    st.wheelZoomTimer = setTimeout(() => { const w = st.wheelZoom; st.wheelZoom = null; if (pdf === st && w) pdfSetZoom(w.target, w.anchor); }, 180);
+  }
+  /** A page larger than the viewer scrolls with the wheel; only at its edge does a (new) wheel gesture turn the page. */
+  function pdfWheelScrolls(e) {
+    const s = pdf.stage, vertical = Math.abs(e.deltaY) >= Math.abs(e.deltaX);
+    const canY = s.scrollHeight > s.clientHeight + 1, canX = s.scrollWidth > s.clientWidth + 1;
+    const scrolls = vertical ? canY && (e.deltaY > 0 ? s.scrollTop + s.clientHeight < s.scrollHeight - 1 : s.scrollTop > 0) : canX;
+    if (!scrolls) return false;
+    clearTimeout(wheelState.quietTimer);
+    wheelState.locked = true; wheelState.sum = 0; wheelState.sumX = 0;
+    wheelState.quietTimer = setTimeout(() => { wheelState.locked = false; wheelState.sum = 0; wheelState.sumX = 0; }, 250);
+    return true; // native scrolling
+  }
+  let pdfPinch = null, pdfPinchEndAt = 0, pdfTapTimer = null, pdfLastMiddle = 0;
+  const touchGap = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY) || 1;
+  function onPdfTouchStart(e) {
+    markActivity();
+    if (!pdf) return;
+    if (e.touches && e.touches.length >= 2) {
+      touchStart = null; // a pinch is never a tap or a swipe
+      const r = pdf.spreadEl.getBoundingClientRect();
+      const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2, cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      pdfPinch = { d: touchGap(e.touches), zoom: pdf.zoom, s: 1, anchor: { ox: cx - r.left, oy: cy - r.top, cx, cy } };
+      pdf.spreadEl.style.transformOrigin = `${pdfPinch.anchor.ox}px ${pdfPinch.anchor.oy}px`;
+      return;
+    }
+    if (Date.now() - pdfPinchEndAt < 350) { touchStart = null; return; }
+    onTouchStart(e);
+  }
+  function onPdfTouchMove(e) {
+    if (!pdfPinch || !pdf || !e.touches || e.touches.length < 2) return;
+    if (e.cancelable) e.preventDefault();
+    const z = pdfClampZoom(pdfPinch.zoom * touchGap(e.touches) / pdfPinch.d);
+    pdfPinch.s = z / pdfPinch.zoom;
+    pdf.spreadEl.style.transform = `scale(${pdfPinch.s})`;
+  }
+  function onPdfTouchEnd(e) {
+    if (pdfPinch) {
+      if (!e.touches || e.touches.length < 2) {
+        const p = pdfPinch; pdfPinch = null; pdfPinchEndAt = Date.now(); touchStart = null;
+        suppressClickUntil = Date.now() + 500;
+        if (pdf) pdfSetZoom(p.zoom * p.s, p.anchor);
+      }
+      return;
+    }
+    if (Date.now() - pdfPinchEndAt < 350) return;
+    // Second tap of a double tap in the middle of a zoomed page: reset the zoom. (onTouchEnd would swallow it as the
+    // synthetic click that follows the first tap.)
+    const t = e.changedTouches && e.changedTouches[0], box = $("viewer").getBoundingClientRect();
+    if (pdf && pdf.zoom !== 1 && t && touchStart && Date.now() - pdfLastMiddle < 350 && box.width
+        && Math.abs(t.clientX - touchStart.x) < 10 && Math.abs(t.clientY - touchStart.y) < 10) {
+      const ratio = (t.clientX - box.left) / box.width;
+      if (ratio >= EDGE_ZONE && ratio <= 1 - EDGE_ZONE) {
+        touchStart = null; clearTimeout(pdfTapTimer); pdfLastMiddle = 0;
+        suppressClickUntil = Date.now() + 700;
+        pdfSetZoom(1);
+        return;
+      }
+    }
+    onTouchEnd(e, null);
+  }
+  /** Middle tap: immersive mode; on a zoomed page a second tap within 350 ms resets the zoom instead. */
+  function pdfMiddleTap() {
+    const toggle = () => setImmersive(!$("reader").classList.contains("immersive"));
+    if (!pdf || pdf.zoom === 1) { toggle(); return; }
+    const now = Date.now();
+    if (now - pdfLastMiddle < 350) { clearTimeout(pdfTapTimer); pdfLastMiddle = 0; pdfSetZoom(1); return; }
+    pdfLastMiddle = now;
+    clearTimeout(pdfTapTimer);
+    pdfTapTimer = setTimeout(toggle, 350);
+  }
+  // ---- Open / close ----
+  async function pdfBuildOutline(st) {
+    let raw = null;
+    try { raw = await st.doc.getOutline(); } catch (_) {}
+    const flat = [];
+    const pageOf = async dest => {
+      try {
+        const d = typeof dest === "string" ? await st.doc.getDestination(dest) : dest;
+        if (!Array.isArray(d) || !d.length) return 0;
+        if (Number.isInteger(d[0])) return d[0] + 1;
+        if (d[0] && typeof d[0] === "object") return (await st.doc.getPageIndex(d[0])) + 1;
+      } catch (_) {}
+      return 0;
+    };
+    // Nested entries up to 3 levels, like the EPUB TOC; entries without a page in this file (web links) are left out.
+    const walk = async (items, depth) => {
+      for (const it of items || []) {
+        const page = await pageOf(it.dest);
+        if (page) flat.push({ label: String(it.title || "").replace(/\s+/g, " ").trim() || `صفحهٔ ${faNum(page)}`, page, depth });
+        if (depth < 2) await walk(it.items, depth + 1);
+      }
+    };
+    await walk(raw, 0);
+    return flat;
+  }
+  async function openPdfReader(record, token, savedP) {
+    $("reader").classList.add("is-pdf");
+    if (bookInstance) bookInstance = null;
+    rendition = null;
+    ttsStop();
+    let lib, doc, task = null;
+    try {
+      lib = await loadPdfJsOrExplain("reader:load");
+      if (token !== openToken) return;
+      const data = new Uint8Array(await fileOf(record).arrayBuffer());
+      if (token !== openToken) return;
+      task = lib.getDocument(pdfOpenOptions(data));
+      doc = await task.promise;
+    } catch (err) {
+      if (task) { try { task.destroy(); } catch (_) {} }
+      if (token !== openToken) return;
+      hideOpening();
+      const known = err instanceof UserError ? err : pdfOpenError(err);
+      if (!known) { console.error("PDF open failed:", err); reportError("pdf", err, "reader:open"); }
+      showToast(known ? known.message : "این فایل PDF قابل خواندن نیست یا خراب است.");
+      return;
+    }
+    if (token !== openToken) { try { task.destroy(); } catch (_) {} return; }
+    $("viewer").innerHTML = '<div class="pdf-stage" dir="ltr"><div class="pdf-spread"></div></div>';
+    const st = pdf = { lib, task, doc, token, pages: doc.numPages, page: 1, zoom: 1, seq: 0, scale: 0,
+                       proxies: new Map(), canvases: new Map(), pageEls: new Map(), text: new Map(), outline: [], hl: null,
+                       stage: $("viewer").querySelector(".pdf-stage"), spreadEl: $("viewer").querySelector(".pdf-spread"), lastCfi: null, shown: false };
+    st.stage.addEventListener("touchstart", onPdfTouchStart, { passive: true });
+    st.stage.addEventListener("touchmove", onPdfTouchMove, { passive: false });
+    st.stage.addEventListener("touchend", onPdfTouchEnd);
+    st.stage.addEventListener("click", e => { markActivity(); onReaderClick(e, null); });
+    if (window.ResizeObserver) {
+      let last = "";
+      st.ro = new ResizeObserver(() => {
+        const size = `${st.stage.clientWidth}x${st.stage.clientHeight}`;
+        if (size === last) return;
+        const first = !last; last = size;
+        if (first) return;
+        clearTimeout(st.resizeTimer);
+        st.resizeTimer = setTimeout(() => { if (pdf === st) pdfRender(); }, 120);
+      });
+      st.ro.observe(st.stage);
+    }
+    bookDir = await resolveBookDir(record, () => detectPdfDirection(st));
+    if (token !== openToken || pdf !== st) return;
+    $("bookSeek").dir = bookIsRtl() ? "rtl" : "ltr";
+    $("bookSeek").disabled = st.pages < 2;
+    syncSettingsUI();
+    lastTurnAt = 0; markActivity(); updateWakeLock();
+    if (!record.preview && (!record.status || record.status === "want")) setBookMeta(record.id, { status: "reading" }).then(r => { if (r && currentBook && currentBook.id === r.id) currentBook = r; });
+    const saved = await savedP;
+    if (token !== openToken || pdf !== st) return;
+    st.page = pdfTargetPage(saved && saved.cfi) || 1;
+    await pdfRender(() => pdfScrollToStart(st));
+    setTimeout(() => { if (token === openToken) hideOpening(); }, 1600); // safety net; normally lifted when page 1 is drawn
+    if (token !== openToken || pdf !== st) return;
+    maybeShowGuide();
+    st.outline = await pdfBuildOutline(st);
+    if (token !== openToken || pdf !== st) return;
+    $("tocList").innerHTML = st.outline.length
+      ? st.outline.map(e => `<button class="toc-link${e.depth ? " toc-sub toc-d" + e.depth : ""}" type="button" dir="auto" data-page="${e.page}">${esc(e.label)}</button>`).join("")
+      : '<p class="muted">این PDF فهرست ندارد؛ با نوار پایین صفحه به هر صفحه برو.</p>';
+    $("tocList").querySelectorAll("[data-page]").forEach(btn => btn.addEventListener("click", () => { closeToc(false); jumpTo(`pdf:${btn.dataset.page}`); }));
+    st.lastCfi = null; pdfRelocated(st); // header and active TOC entry from the outline
+    renderNotesList(); updateBookmarkButton();
+    // Fill what an imported-elsewhere record may lack: page count and a cover (added fields only, one transaction).
+    if (!record.preview && (record.pages !== st.pages || !record.cover)) {
+      let cover = null;
+      if (!record.cover) { try { cover = await pdfCoverDataUrl(doc); } catch (_) {} }
+      if (pdf !== st) return;
+      try {
+        const os = db.transaction("books", "readwrite").objectStore("books"), g = os.get(record.id);
+        g.onsuccess = () => { const cur = g.result; if (cur) os.put({ ...cur, pages: st.pages, ...(cover && !cur.cover ? { cover } : {}) }); };
+      } catch (_) {}
+    }
+  }
+  function closePdf() {
+    const st = pdf;
+    if (!st) return;
+    pdf = null;
+    st.seq++;
+    clearTimeout(st.resizeTimer); clearTimeout(st.wheelZoomTimer); clearTimeout(pdfTapTimer);
+    if (st.ro) { try { st.ro.disconnect(); } catch (_) {} }
+    for (const e of st.canvases.values()) pdfReleaseCanvas(e);
+    for (const pe of st.pageEls.values()) { if (pe.tl) { try { pe.tl.cancel(); } catch (_) {} } }
+    st.canvases.clear(); st.pageEls.clear(); st.text.clear();
+    try { st.task.destroy(); } catch (_) {} // ends the worker and frees the document
+    pdfPinch = null;
+    $("reader").classList.remove("is-pdf");
+    if ($("viewer").querySelector(".pdf-stage")) $("viewer").innerHTML = "";
+  }
+  $("pdfZoomIn").addEventListener("click", () => pdfSetZoom((pdf ? pdf.zoom : 1) * PDF_ZOOM_STEP));
+  $("pdfZoomOut").addEventListener("click", () => pdfSetZoom((pdf ? pdf.zoom : 1) / PDF_ZOOM_STEP));
+  document.querySelectorAll("[data-pdffit]").forEach(b => b.addEventListener("click", () => {
+    readerPrefs.pdfFit = b.dataset.pdffit; saveReaderPrefs();
+    if (pdf) pdf.zoom = 1;
+    syncSettingsUI();
+    if (pdf) pdfRender(() => pdfScrollToStart(pdf));
+  }));
+  $("prefPdfInvert").addEventListener("change", e => { readerPrefs.pdfInvert = e.target.checked; saveReaderPrefs(); syncSettingsUI(); });
+
   // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
   const SWIPE_MIN_PX = 50, EDGE_ZONE = 0.25;
   let touchStart = null, suppressClickUntil = 0;
@@ -1180,8 +1831,8 @@
       return !meta.language || /^(fa|ar|he|ur|ps|ku|ckb|yi|dv|sd|ug)/i.test(meta.language) ? "rtl" : "ltr";
     } catch (_) { return "rtl"; }
   }
-  function goForward() { if (rendition) rendition.next(); }
-  function goBack() { if (rendition) rendition.prev(); }
+  function goForward() { if (pdf) pdfStep(1); else if (rendition) rendition.next(); }
+  function goBack() { if (pdf) pdfStep(-1); else if (rendition) rendition.prev(); }
   // Physical directions: in an RTL book the left side of the page is "forward".
   function goLeft() { if (bookIsRtl()) goForward(); else goBack(); }
   function goRight() { if (bookIsRtl()) goBack(); else goForward(); }
@@ -1206,7 +1857,7 @@
     placeBackChip();
     if (on) showToast("برای نمایش دوبارهٔ نوارها، وسط صفحه را لمس کن.");
     // The viewer changed size without a window resize, so re-paginate explicitly.
-    requestAnimationFrame(() => { try { if (rendition) rendition.resize(); } catch (_) {} });
+    requestAnimationFrame(() => { try { if (rendition) rendition.resize(); } catch (_) {} if (pdf) pdfRender(); });
   }
   function handleReaderKey(e) {
     if (!readerOpen() || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -1264,6 +1915,7 @@
     }
     if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 800) {
       suppressClickUntil = Date.now() + 500;
+      if (pdf && pdfCanPanX()) return; // a zoomed PDF page is being panned, not turned
       // Finger moving right turns to the next page in an RTL book, like a Persian paper book.
       if (dx > 0) goLeft(); else goRight();
     }
@@ -1272,8 +1924,10 @@
   // and one gesture turns at most one page: after a turn, further wheel events are ignored until 250 ms of quiet.
   const wheelState = { sum: 0, sumX: 0, lockUntil: 0, quietTimer: null, locked: false };
   function onReaderWheel(e) {
-    if (readerPrefs.wheel === false || readerPrefs.flow === "scrolled" || !rendition || e.ctrlKey) return;
+    if (pdf && e.ctrlKey) { pdfWheelZoom(e); return; } // v8.8: ctrl+wheel (and trackpad pinch) zooms the PDF page
+    if (readerPrefs.wheel === false || (!pdf && readerPrefs.flow === "scrolled") || (!rendition && !pdf) || e.ctrlKey) return;
     if (settingsOpen() || searchOpen() || $("reader").classList.contains("toc-open")) return;
+    if (pdf && pdfWheelScrolls(e)) return; // a zoomed / fit-to-width page scrolls first, then turns at its edge
     if (e.cancelable) e.preventDefault();
     const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
     clearTimeout(wheelState.quietTimer);
@@ -1305,13 +1959,15 @@
     } catch (_) {}
     const frame = (view && view.frameElement) || (contents && contents.window && contents.window.frameElement);
     const box = $("viewer").getBoundingClientRect();
-    if (!frame || !box.width) return;
-    const ratio = (frame.getBoundingClientRect().left + clientX - box.left) / box.width;
-    const edges = readerPrefs.taps !== false && readerPrefs.flow !== "scrolled";
-    if (!edges) setImmersive(!$("reader").classList.contains("immersive"));
+    if ((!frame && !pdf) || !box.width) return;
+    // The PDF page is part of the main document (clientX is already a page coordinate); EPUB chapters live in an iframe.
+    const ratio = ((pdf || !frame ? 0 : frame.getBoundingClientRect().left) + clientX - box.left) / box.width;
+    const edges = readerPrefs.taps !== false && (!!pdf || readerPrefs.flow !== "scrolled");
+    const middle = () => { if (pdf) pdfMiddleTap(); else setImmersive(!$("reader").classList.contains("immersive")); };
+    if (!edges) middle();
     else if (ratio < EDGE_ZONE) goLeft();
     else if (ratio > 1 - EDGE_ZONE) goRight();
-    else setImmersive(!$("reader").classList.contains("immersive"));
+    else middle();
   }
   $("tocToggle").addEventListener("click", () => { if ($("reader").classList.contains("toc-open")) closeToc(true); else openToc(); });
   $("tocBackdrop").addEventListener("click", () => closeToc(true));
@@ -1325,11 +1981,12 @@
   // stack: CFIs to go back to (newest last). pending: a jump whose relocation has not settled yet.
   const jumps = { stack: [], pending: null, timer: 0, turns: 0, lastCfi: null };
   function currentStartCfi() {
+    if (pdf) return `pdf:${pdf.page}`;
     try { const loc = rendition && rendition.currentLocation(); return (loc && loc.start && loc.start.cfi) || null; } catch (_) { return null; }
   }
   /** Remember the current page before a jump that epub.js (or jumpTo) is about to make. kind "back" = returning via the chip. */
   function noteJumpOrigin(kind) {
-    if (!rendition) return;
+    if (!rendition && !pdf) return;
     clearTimeout(jumps.timer);
     jumps.pending = { from: currentStartCfi(), kind: kind || "jump" };
     jumps.timer = setTimeout(settleJump, 2500); // no relocation at all (link to the same page): settle anyway
@@ -1342,13 +1999,18 @@
    * Plain page turns keep using rendition.next()/prev(). Nothing is stored, so previews (preview-*) are safe.
    */
   function jumpTo(target) {
-    if (!rendition) return Promise.resolve();
+    if (!rendition && !pdf) return Promise.resolve();
     noteJumpOrigin("jump");
     return safeDisplay(target, "jumpTo");
   }
   // rendition.display() rejects ("No Section Found") for targets epub.js cannot resolve; never leave that unhandled.
   // The report carries where it came from and the (trimmed) target so the cause can be found.
   function safeDisplay(target, from) {
+    if (pdf) { // v8.8: PDF targets are "pdf:<page>" (TOC, search, bookmarks, seek bar, back chip)
+      const n = pdfTargetPage(target);
+      if (n) pdfShow(n); else showToast("این بخش در کتاب پیدا نشد.");
+      return Promise.resolve();
+    }
     if (!rendition) return Promise.resolve();
     let p;
     try { p = Promise.resolve(rendition.display(target)); } catch (err) { p = Promise.reject(err); }
@@ -1361,7 +2023,7 @@
   function settleJump() {
     clearTimeout(jumps.timer);
     const p = jumps.pending; jumps.pending = null;
-    if (!p || !rendition) return;
+    if (!p || (!rendition && !pdf)) return;
     const here = currentStartCfi();
     if (p.kind === "jump" && p.from && here && p.from !== here && jumps.stack[jumps.stack.length - 1] !== p.from) {
       jumps.stack.push(p.from);
@@ -1401,7 +2063,7 @@
   $("backChip").addEventListener("click", () => {
     const cfi = jumps.stack.pop();
     updateBackChip();
-    if (!cfi || !rendition) return;
+    if (!cfi || (!rendition && !pdf)) return;
     noteJumpOrigin("back");
     safeDisplay(cfi, "backChip");
   });
@@ -1416,7 +2078,7 @@
     if (!seen) showGuide(null);
   }
   function showGuide(returnFocus) {
-    const rtl = bookIsRtl(), scrolled = readerPrefs.flow === "scrolled", edges = readerPrefs.taps !== false && !scrolled;
+    const rtl = bookIsRtl(), scrolled = !pdf && readerPrefs.flow === "scrolled", edges = readerPrefs.taps !== false && !scrolled;
     const nextSide = rtl ? "چپ" : "راست", prevSide = rtl ? "راست" : "چپ";
     const items = [];
     if (scrolled) {
@@ -1434,7 +2096,10 @@
       items.push(["swipe", `روی گوشی و تبلت: کشیدن انگشت به ${prevSide} صفحهٔ بعد را می‌آورد و به ${nextSide} صفحهٔ قبل را.`]);
       items.push(["keys", `صفحه‌کلید: کلید ${rtl ? "←" : "→"} صفحهٔ بعد و ${rtl ? "→" : "←"} صفحهٔ قبل.`]);
     }
-    items.push(["settings", "دکمهٔ «Aa» بالای صفحه: فونت، اندازهٔ متن، رنگ صفحه و نحوهٔ نمایش."]);
+    if (pdf) {
+      items.push(["zoom", "بزرگ‌نمایی: با دو انگشت (یا Ctrl و چرخ موس)؛ دو بار لمس صفحهٔ بزرگ‌شده، اندازه را برمی‌گرداند."]);
+      items.push(["settings", "دکمهٔ «Aa» بالای صفحه: بزرگ‌نمایی، اندازهٔ صفحه یا عرض صفحه، و رنگ صفحه."]);
+    } else items.push(["settings", "دکمهٔ «Aa» بالای صفحه: فونت، اندازهٔ متن، رنگ صفحه و نحوهٔ نمایش."]);
     $("readerGuideList").innerHTML = items.map(([k, t]) => `<li data-guide="${k}">${esc(t)}</li>`).join("");
     const left = $("readerGuideLeft"), right = $("readerGuideRight");
     left.hidden = right.hidden = !edges;
@@ -1457,6 +2122,12 @@
 
   // ======================= Reading features (v8) =======================
   function reopenCurrentBook() {
+    if (currentBook && pdf) {
+      const rec = currentBook, at = `pdf:${pdf.page}`;
+      if (rec.preview) { previewPos = at; openReader(null, rec).catch(err => console.warn("Reopen failed:", err)); return; }
+      saveProgress(rec.id, at, pdfPercent(pdf)).then(() => openReader(rec.id)).catch(err => console.warn("Reopen failed:", err));
+      return;
+    }
     if (!currentBook || !rendition) return;
     if (currentBook.preview) {
       const rec = currentBook, loc = rendition.currentLocation();
@@ -1474,7 +2145,7 @@
     document.querySelectorAll("[data-bookdir]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.bookdir === v)));
   }
   function setBookDir(value) {
-    if (!currentBook || !rendition) return;
+    if (!currentBook || (!rendition && !pdf)) return;
     const v = value === "rtl" || value === "ltr" ? value : "auto";
     if ((currentBook.dirOverride || "auto") === v) return;
     currentBook.dirOverride = v; syncBookDirUI();
@@ -1492,6 +2163,7 @@
     readerPrefs[key] = value; saveReaderPrefs(); syncSettingsUI();
     if (how === "styles") applyReaderStyles();
     if (how === "resize") requestAnimationFrame(() => { try { rendition && rendition.resize(); } catch (_) {} });
+    if (how === "reopen" && pdf && key === "spread") { pdfRender(); return; } // a PDF only re-lays out its pages
     if (how === "reopen") reopenCurrentBook();
   }
   document.querySelectorAll("[data-margin]").forEach(b => b.addEventListener("click", () => setPref("margin", b.dataset.margin, "resize")));
@@ -1860,6 +2532,7 @@
   }
   const escapeRegExp = t => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   async function searchBook(query) {
+    if (pdf) return pdfSearch(pdf, query);
     const book = bookInstance;
     if (!book || !query) return [];
     const results = [], seen = new Set();
@@ -1886,13 +2559,19 @@
     const results = await searchBook(q);
     if (token !== openToken) return;
     $("bookSearchStatus").textContent = results.length ? `${results.length.toLocaleString("fa-IR")} نتیجه${results.length >= 100 ? " (۱۰۰ مورد اول)" : ""}` : "چیزی پیدا نشد.";
+    $("bookSearchResults").dataset.q = q;
+    if (pdf) { // v8.8: PDF results carry the page and the match itself (it may be in visual order, see pdfSearch)
+      $("bookSearchResults").innerHTML = results.map(r => `<button type="button" data-cfi="pdf:${r.page}"><small>صفحهٔ ${faNum(r.page)}</small><span dir="auto">${esc(r.before)}<mark>${esc(r.match)}</mark>${esc(r.after)}</span></button>`).join("");
+      return;
+    }
     const pattern = new RegExp(searchVariants(q).map(v => escapeRegExp(esc(v))).join("|"), "g");
     $("bookSearchResults").innerHTML = results.map(r => `<button type="button" data-cfi="${esc(r.cfi)}"><small>بخش ${(r.index + 1).toLocaleString("fa-IR")}</small>${esc(r.excerpt).replace(pattern, m => `<mark>${m}</mark>`)}</button>`).join("");
   });
   $("bookSearchResults").addEventListener("click", e => {
     const btn = e.target.closest("[data-cfi]");
-    if (!btn || !rendition) return;
+    if (!btn || (!rendition && !pdf)) return;
     closeSearch(false);
+    if (pdf) pdf.hl = { page: pdfTargetPage(btn.dataset.cfi), q: $("bookSearchResults").dataset.q || "" }; // marked in the text layer
     jumpTo(btn.dataset.cfi);
   });
   document.addEventListener("click", e => {
@@ -1946,14 +2625,18 @@
   }
   $("fontUp").addEventListener("click", () => setFontSize(fontSize + 10));
   $("fontDown").addEventListener("click", () => setFontSize(fontSize - 10));
-  $("prevPage").addEventListener("click", () => rendition?.prev());
-  $("nextPage").addEventListener("click", () => rendition?.next());
+  $("prevPage").addEventListener("click", goBack);
+  $("nextPage").addEventListener("click", goForward);
   $("closeReader").addEventListener("click", closeReader);
   // ======================= Bookmarks, highlights, notes (v7.2) =======================
   const HL_COLORS = { yellow: "#ffe066", green: "#9be3b4", pink: "#f7a8c8" };
   let pendingSelection = null, editingUid = null, renderedHighlights = new Set();
   const cfiCompare = (a, b) => { try { return new ePub.CFI().compare(a, b); } catch (_) { return 0; } };
   async function bookmarkOnPage() {
+    if (pdf && currentBook) { // v8.8: PDF bookmarks are whole pages ("pdf:<page>")
+      const vis = pdfVisible(pdf);
+      return (await getAnnotations(currentBook.id)).find(a => a.type === "bookmark" && vis.includes(pdfTargetPage(a.cfi))) || null;
+    }
     if (!rendition || !currentBook) return null;
     const loc = rendition.currentLocation();
     if (!loc?.start?.cfi) return null;
@@ -1975,8 +2658,20 @@
   }
   const PREVIEW_NO_SAVE = "در حالت پیش‌نمایش نشانک و یادداشت ذخیره نمی‌شود؛ اول کتاب را به کتابخانه اضافه کن.";
   $("bookmarkButton").addEventListener("click", async () => {
-    if (!currentBook || !rendition) return;
+    if (!currentBook || (!rendition && !pdf)) return;
     if (currentBook.preview) { showToast(PREVIEW_NO_SAVE); return; }
+    if (pdf) {
+      const existing = await bookmarkOnPage();
+      if (existing) { await saveAnnotation({ ...existing, deleted: true }); showToast("نشانک برداشته شد."); }
+      else {
+        const n = pdf.page, e = pdfOutlineFor(pdf, n);
+        await saveAnnotation({ uid: newUid(), bookId: currentBook.id, type: "bookmark", cfi: `pdf:${n}`, quote: `صفحهٔ ${faNum(n)}${e ? " · " + e.label : ""}`.slice(0, 140),
+                               note: "", color: "", createdAt: Date.now(), deleted: false });
+        showToast("نشانک ذخیره شد.");
+      }
+      updateBookmarkButton(); renderNotesList();
+      return;
+    }
     const loc = rendition.currentLocation();
     if (!loc?.start?.cfi) return;
     const existing = await bookmarkOnPage();
@@ -2005,6 +2700,7 @@
     renderedHighlights.delete(a.uid);
   }
   async function renderBookAnnotations() {
+    if (pdf && currentBook) { renderNotesList(); return; }
     if (!rendition || !currentBook) return;
     const anns = await getAnnotations(currentBook.id);
     const live = new Set(anns.filter(a => a.type === "highlight").map(a => a.uid));
@@ -2014,12 +2710,12 @@
   }
   async function renderNotesList() {
     if (!currentBook) { $("notesList").innerHTML = ""; return; }
-    const anns = (await getAnnotations(currentBook.id)).sort((a, b) => cfiCompare(a.cfi, b.cfi));
+    const anns = (await getAnnotations(currentBook.id)).sort((a, b) => pdf ? (pdfTargetPage(a.cfi) || 0) - (pdfTargetPage(b.cfi) || 0) : cfiCompare(a.cfi, b.cfi));
     $("notesList").innerHTML = anns.length ? anns.map(a => `<div class="note-item" data-goto="${esc(a.cfi)}">
         <span class="note-mark" style="background:${a.type === "bookmark" ? "#2f7a62" : (HL_COLORS[a.color] || HL_COLORS.yellow)}"></span>
         <span class="note-text"><span class="note-quote" dir="auto">${a.type === "bookmark" ? "🔖 " : ""}${esc(a.quote || "")}</span>${a.note ? `<span class="note-note" dir="auto">✎ ${esc(a.note)}</span>` : ""}</span>
         <button class="note-del" type="button" data-del="${esc(a.uid)}" aria-label="حذف">×</button></div>`).join("")
-      : '<p class="muted">هنوز نشانک یا یادداشتی نداری. متن را انتخاب کن تا هایلایت شود.</p>';
+      : (pdf ? '<p class="muted">هنوز نشانکی نداری. با دکمهٔ نشانک، صفحه را نشانه بگذار.</p>' : '<p class="muted">هنوز نشانک یا یادداشتی نداری. متن را انتخاب کن تا هایلایت شود.</p>');
   }
   document.querySelectorAll("[data-ptab]").forEach(b => b.addEventListener("click", () => {
     document.querySelectorAll("[data-ptab]").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
@@ -2037,7 +2733,7 @@
       return;
     }
     const item = e.target.closest("[data-goto]");
-    if (item && rendition) { closeToc(false); jumpTo(item.dataset.goto); }
+    if (item && (rendition || pdf)) { closeToc(false); jumpTo(item.dataset.goto); }
   });
   $("exportNotes").addEventListener("click", async () => {
     if (!currentBook) return;
@@ -2439,6 +3135,7 @@
     const data = await fileOf(b).arrayBuffer();
     let r = await api("upload-init", { method: "POST", body: {
       sha256: b.contentHash, size: data.byteLength, title: b.title || "بدون عنوان", author: b.author || "", cover: b.cover || undefined, ...metaBody(b),
+      ...(isPdfRecord(b) ? { format: "pdf" } : {}), // v8.8: hint only; the server detects the format from the bytes
     } });
     if (r.exists) return r.book;
     const chunk = r.chunk_bytes, id = r.upload_id;
@@ -2454,6 +3151,8 @@
     const same = sb.sha256 && (await getAllBooks()).find(b => b.contentHash === sb.sha256);
     if (same) return same;
     if (!blob) blob = await (await api("book-file", { query: `&id=${sb.id}` })).blob();
+    // v8.8: `format` comes from the server; without it (older server) the bytes decide, EPUB otherwise.
+    const isPdf = sb.format === "pdf" || (sb.format !== "epub" && await sniffPdf(blob));
     let cover = null;
     if (sb.has_cover) {
       try { cover = await blobToDataUrl(await (await api("book-cover", { query: `&id=${sb.id}` })).blob()); } catch (_) {}
@@ -2461,9 +3160,10 @@
     const record = {
       id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       title: sb.title, author: sb.author || "نویسنده نامشخص", cover,
-      file: new File([blob], `${sb.title}.epub`, { type: "application/epub+zip" }),
+      file: isPdf ? new File([blob], `${sb.title}.pdf`, { type: "application/pdf" }) : new File([blob], `${sb.title}.epub`, { type: "application/epub+zip" }),
       size: blob.size, addedAt: Date.now(), contentHash: sb.sha256, serverId: sb.id, catalogStatus: sb.catalog_status || null,
       publisher: sb.publisher || "", published: sb.published || "", language: sb.language || "", metaExt: true,
+      ...(isPdf ? { format: "pdf" } : {}),
     };
     await put("books", record);
     return record;
@@ -2691,7 +3391,7 @@
     const [bg, fg] = paletteFor(b.title || String(b.id));
     const action = !withAction ? "" : b.in_library ? '<span class="book-badge">در کتابخانهٔ تو</span>'
       : `<button class="secondary-button" type="button" data-catalog-add="${b.id}">＋ افزودن به کتابخانهٔ من</button>`;
-    return `<article class="book-card catalog-card" data-detail="${b.id}" tabindex="0" role="button" aria-label="جزئیات ${esc(b.title)}"><div class="book-cover-thumb" style="background:${bg};color:${fg}">${catalogCover(b, true)}</div>
+    return `<article class="book-card catalog-card" data-detail="${b.id}" tabindex="0" role="button" aria-label="جزئیات ${esc(b.title)}"><div class="book-cover-thumb" style="background:${bg};color:${fg}">${catalogCover(b, true)}${b.format === "pdf" ? '<span class="format-badge" aria-label="PDF">PDF</span>' : ""}</div>
       <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p>
       ${withAction && b.description ? `<p title="${esc(b.description)}">${esc(b.description)}</p>` : ""}${action ? `<div class="catalog-actions">${action}</div>` : ""}</div></article>`;
   }
@@ -2882,9 +3582,10 @@
     btn.disabled = true; btn.textContent = "در حال دریافت…";
     try {
       const blob = await catalogFile(id);
-      const file = new File([blob], `${b.title}.epub`, { type: "application/epub+zip" });
+      const isPdf = b.format === "pdf" || (b.format !== "epub" && await sniffPdf(blob));
+      const file = isPdf ? new File([blob], `${b.title}.pdf`, { type: "application/pdf" }) : new File([blob], `${b.title}.epub`, { type: "application/epub+zip" });
       await openReader(null, { id: `preview-${id}`, preview: true, catalogId: id, title: b.title, author: b.author || "نویسنده نامشخص",
-                               file, size: blob.size, language: b.language || "" });
+                               file, size: blob.size, language: b.language || "", ...(isPdf ? { format: "pdf" } : {}) });
     } catch (err) {
       console.warn("Online reading failed:", err);
       reportError("api", err, "catalog:read-online");
@@ -2899,11 +3600,12 @@
   });
   /** The book being previewed was just added: keep reading it as the stored copy (progress is saved from now on). */
   async function adoptPreview(id, rec) {
-    if (!rec || !currentBook || !currentBook.preview || currentBook.catalogId !== id || !rendition) return;
+    if (!rec || !currentBook || !currentBook.preview || currentBook.catalogId !== id || (!rendition && !pdf)) return;
     currentBook = rec; currentProgressKey = rec.id;
     $("previewBanner").hidden = true;
     try {
-      const loc = rendition.currentLocation();
+      if (pdf) await saveProgress(rec.id, `pdf:${pdf.page}`, pdfPercent(pdf));
+      const loc = pdf ? null : rendition.currentLocation();
       if (loc?.start?.cfi) await saveProgress(rec.id, loc.start.cfi, percentFor(loc.start.cfi, loc.start.percentage));
       const r = await setBookMeta(rec.id, { status: "reading" });
       if (r && currentBook && currentBook.id === r.id) currentBook = r;
@@ -3471,7 +4173,7 @@
   async function applyCleanToBook(bookId, rules) {
     const rec = await getBook(bookId);
     const file = fileOf(rec);
-    if (!rec || !file || !rules.length) return 0;
+    if (!rec || !file || !rules.length || isPdfRecord(rec)) return 0; // v8.8: PDFs are never cleaned
     const oldBuf = await file.arrayBuffer();
     const res = await cleanEpub(oldBuf, rules, true);
     if (!res.blob || !res.total) return 0;
@@ -3519,7 +4221,7 @@
     if (!rules.length) return 0;
     try {
       const rec = await getBook(bookId), file = fileOf(rec);
-      if (!file) return 0;
+      if (!file || isPdfRecord(rec)) return 0;
       const dry = await cleanEpub(await file.arrayBuffer(), rules, false);
       const ok = rules.filter(r => dry.stats[r.id].count && !isTooBroad(dry.stats[r.id], dry.totalChars, r));
       return ok.length ? await applyCleanToBook(bookId, ok) : 0;
@@ -3584,7 +4286,7 @@
     if (!librariesReady()) { showToast("کتاب‌خوان کامل بارگذاری نشده است. صفحه را تازه‌سازی کن."); return; }
     cleanBusy = true; renderCleanRules(); resetCleanResults("");
     try {
-      const all = (await getAllBooks()).filter(b => fileOf(b));
+      const all = (await getAllBooks()).filter(b => fileOf(b) && !isPdfRecord(b)); // v8.8: cleanup is for EPUB text only
       const books = [], broad = new Set();
       for (let i = 0; i < all.length; i++) {
         setCleanProgress(i, all.length, `در حال بررسی ${faNum(i + 1)} از ${faNum(all.length)}: «${all[i].title}»`);
@@ -3716,7 +4418,7 @@
   async function repairMetadata() {
     let changed = false;
     for (const b of await getAllBooks()) {
-      if ((b.metaChecked && b.metaExt) || !fileOf(b)) continue;
+      if ((b.metaChecked && b.metaExt) || !fileOf(b) || isPdfRecord(b)) continue; // PDF metadata is read on import
       const rec = { ...b, metaChecked: true, metaExt: true };
       const weak = !b.metaChecked && (!b.cover || !b.author || b.author === UNKNOWN_AUTHOR || looksLikeFilename(b.title));
       if (!b.metaExt && !weak) {
