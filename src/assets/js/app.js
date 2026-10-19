@@ -3697,6 +3697,8 @@
     else if (location.hash.startsWith("#catalog")) showView("catalog");
     else if (!$("viewBook").hidden || !$("viewCatalog").hidden) showView("mine");
   }
+  // The app restores the catalog position itself (showCatalog); the browser's own restore fired after it and moved the list.
+  try { history.scrollRestoration = "manual"; } catch (_) {}
   window.addEventListener("popstate", routeFromHash);
   $("detailBack").addEventListener("click", () => {
     if (history.state && history.state.borg === "book" && history.state.inApp) history.back();
@@ -3736,14 +3738,15 @@
     relatedCache.set(b.id, res);
     return res;
   }
-  /** Deep link to a book that is not in memory. The API has no single-book route, so (as before v8.9) the whole
-   *  list (`catalog` without `page`) is read once; it is only needed for a cold deep link. */
+  /** Deep link to a book that is not in memory: `catalog?page=1&per=1&id=<id>` (v8.9 server). A server without paging
+   *  (no `total` in the answer) returns the whole list, which is used as before. */
   async function fetchCatalogBook(id) {
     if (detailFetching === id) return;
     detailFetching = id;
     try {
-      const r = await api("catalog");
-      catalogFull = rememberCatalog(r.books || []);
+      const r = await api("catalog", { query: `&page=1&per=1&id=${encodeURIComponent(id)}` });
+      if (typeof r.total === "number") rememberCatalog(r.books || []);
+      else catalogFull = rememberCatalog(r.books || []);
       if (!catalogSeen.has(id)) detailChecked.add(id);
     } catch (err) {
       if (detailId === id && !$("viewBook").hidden) $("detailTitle").textContent = apiMessage(err);

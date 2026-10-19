@@ -651,6 +651,12 @@ function catalog_page(array $p, int $uid, callable $out): array {
     if ($category !== '') { $where[] = 'c.category = ?'; $args[] = mb_substr($category, 0, 80); }
     $author = scalar_param($p, 'author');
     if ($author !== '') { $where[] = 'b.author = ?'; $args[] = mb_substr($author, 0, 300); }
+    // A single book (deep link #catalog/book/<id>) without loading the whole catalog.
+    $idParam = scalar_param($p, 'id');
+    if ($idParam !== '') {
+        if (!ctype_digit($idParam)) fail(400, 'bad_id', 'id must be a book id.');
+        $where[] = 'b.id = ?'; $args[] = (int)$idParam;
+    }
     $format = scalar_param($p, 'format');
     if ($format !== '') {
         if (!in_array($format, ['epub', 'pdf'], true)) fail(400, 'bad_format', 'format must be "epub" or "pdf".');

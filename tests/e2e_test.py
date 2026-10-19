@@ -2291,6 +2291,7 @@ async def run(url):
                 if qs.get("q"): bs = [x for x in bs if qs["q"] in x["title"]]
                 if qs.get("author"): bs = [x for x in bs if x["author"] == qs["author"]]
                 if qs.get("format"): bs = [x for x in bs if x["format"] == qs["format"]]
+                if qs.get("id"): bs = [x for x in bs if str(x["id"]) == qs["id"]]
                 facets = [{"name": c, "count": sum(1 for x in bs if x["category"] == c)} for c in CAT_CATS]
                 if qs.get("category"): bs = [x for x in bs if x["category"] == qs["category"]]
                 if qs.get("sort") == "title": bs.sort(key=lambda x: x["title"])
@@ -2344,6 +2345,8 @@ async def run(url):
         card = P.locator('#catalogGrid .book-card[data-detail="9070"]')
         await card.scroll_into_view_if_needed(); await P.evaluate("window.scrollBy(0, 120)"); await P.wait_for_timeout(300)
         y0 = await P.evaluate("window.scrollY")
+        CARD_TOP = "Math.round(document.querySelector('#catalogGrid .book-card[data-detail=\"9070\"]').getBoundingClientRect().top)"
+        t0 = await P.evaluate(CARD_TOP)
         n_before = len(cat_reqs())
         await card.click(); await P.wait_for_timeout(800)
         check("v8.9 catalog: book page opens from a later page", await P.is_visible("#viewBook") and await P.inner_text("#detailTitle") == "کتاب نمونه 70"
@@ -2357,10 +2360,10 @@ async def run(url):
               and 0 < len(rel) <= 6 and "کتاب نمونه 70" not in rel, f"{rel} {rel_reqs}")
         n_before = len(cat_reqs())
         await P.go_back(); await P.wait_for_timeout(700)
-        y1 = await P.evaluate("window.scrollY")
+        y1 = await P.evaluate("window.scrollY"); t1 = await P.evaluate(CARD_TOP)
         check("v8.9 catalog: back from the book page keeps the loaded books and the scroll position",
-              await P.is_visible("#viewCatalog") and await ncards(P) == CAT_N and abs(y1 - y0) < 60 and len(cat_reqs()) == n_before,
-              f"y {y0}->{y1}, cards={await ncards(P)}, new requests={cat_reqs()[n_before:]}")
+              await P.is_visible("#viewCatalog") and await ncards(P) == CAT_N and abs(t1 - t0) < 100 and len(cat_reqs()) == n_before,
+              f"y {y0}->{y1}, card top {t0}->{t1}, cards={await ncards(P)}, new requests={cat_reqs()[n_before:]}")
         # Search: debounced, sent to the server
         await P.evaluate("window.scrollTo(0, 0)")
         n_before = len(cat_reqs())
@@ -2419,12 +2422,16 @@ async def run(url):
         check("v8.9 catalog: mobile scrolling loads the next page", await ncards(P) >= 48)
         check("v8.9 catalog paging: no JS errors", not errsP and not extP, str((errsP + extP)[:3]))
         await ctxP.close()
-        # Cold deep link to a book that no loaded page holds: the existing whole-list path finds it
+        # Cold deep link to a book that no loaded page holds: one small request for that id, never the whole list
         ctxQ, Q, errsQ, extQ = await cat_ctx()
+        dreqs = []
+        Q.on("request", lambda r_: ("r=catalog" in r_.url) and dreqs.append(r_.url))
         await Q.goto(url + "#catalog/book/9077"); await Q.wait_for_timeout(500)
         try: await poll(lambda: _contains(Q, "#detailTitle", "کتاب نمونه 77"), 10000); deep = True
         except TimeoutError: deep = False
         check("v8.9 catalog: deep link to an unloaded book still opens it", deep and await Q.is_visible("#viewBook"))
+        check("v8.9 catalog: the deep link asks for that one book (id=…), not the whole list",
+              any("id=9077" in u and "per=1" in u for u in dreqs) and all("page=" in u for u in dreqs), str(dreqs[:4]))
         await Q.click("#detailBack"); await Q.wait_for_timeout(800)
         check("v8.9 catalog: back from a deep link loads the first page", await Q.is_visible("#viewCatalog") and await ncards(Q) == 24)
         check("v8.9 catalog deep link: no JS errors", not errsQ and not extQ, str((errsQ + extQ)[:3]))
