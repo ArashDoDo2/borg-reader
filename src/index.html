@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.6.3">
+  <meta name="app-version" content="8.6.4">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -338,9 +338,13 @@
   <dialog id="cleanDialog" class="account-dialog clean-dialog" aria-labelledby="cleanTitle">
     <button id="cleanClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
     <h2 id="cleanTitle">پاک‌سازی متن</h2>
-    <p class="muted small clean-intro">عبارت‌هایی که اینجا اضافه کنی از <b>خود فایل</b> همهٔ کتاب‌ها حذف می‌شوند (فقط همان عبارت). نسخهٔ اصلی نگه داشته نمی‌شود. کتاب‌هایی که از این به بعد اضافه کنی هم خودکار پاک‌سازی می‌شوند.</p>
+    <p class="muted small clean-intro">عبارت‌هایی که اینجا اضافه کنی از <b>خود فایل</b> همهٔ کتاب‌ها حذف می‌شوند (فقط همان عبارت، یا اگر «کل خط» را انتخاب کنی، کل خط/پاراگرافی که آن را دارد؛ مناسب برای خط‌هایی که بخشی از آن ثابت و بقیه مثل لینک‌ها متغیر است). نسخهٔ اصلی نگه داشته نمی‌شود. کتاب‌هایی که از این به بعد اضافه کنی هم خودکار پاک‌سازی می‌شوند.</p>
     <form id="cleanForm" class="admin-row clean-form" novalidate>
       <input id="cleanPhrase" class="admin-input" placeholder="عبارت دقیق، مثلاً: کانال ما در تلگرام" maxlength="200" aria-label="عبارت برای حذف" autocomplete="off">
+      <select id="cleanMode" class="admin-input clean-mode" aria-label="چه چیزی حذف شود">
+        <option value="phrase">فقط همین عبارت</option>
+        <option value="line">کل خطِ شامل این متن</option>
+      </select>
       <button id="cleanAdd" class="secondary-button" type="submit">افزودن</button>
     </form>
     <p id="cleanError" class="form-error" role="alert"></p>
@@ -369,7 +373,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۶.۳</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۶.۴</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

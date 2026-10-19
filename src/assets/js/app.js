@@ -3145,11 +3145,34 @@
   // t.me / telegram.me / telegram.dog URLs (with or without scheme) and @handles of 5–32 [A-Za-z0-9_] characters.
   const TG_SOURCE = String.raw`(?:(?<![A-Za-z0-9_.\-@])https?:\/\/(?:www\.)?|(?<![A-Za-z0-9_.\-\/@:])(?:www\.)?)(?:t\.me|telegram\.me|telegram\.dog)\/[A-Za-z0-9_\-+\/?=&%.#~]*[A-Za-z0-9_\-\/]|(?<![A-Za-z0-9_.@\/])@[A-Za-z0-9_]{5,32}(?![A-Za-z0-9_])`;
   function loadCleanRules() {
-    try { const r = JSON.parse(localStorage.getItem(CLEAN_KEY) || "[]"); return Array.isArray(r) ? r.filter(x => x && (x.type === "telegram" || (x.type === "phrase" && typeof x.text === "string"))) : []; }
+    try { const r = JSON.parse(localStorage.getItem(CLEAN_KEY) || "[]"); return Array.isArray(r) ? r.filter(x => x && (x.type === "telegram" || ((x.type === "phrase" || x.type === "line") && typeof x.text === "string"))) : []; }
     catch (_) { return []; }
   }
   function saveCleanRules(rules) { try { localStorage.setItem(CLEAN_KEY, JSON.stringify(rules)); } catch (_) {} }
-  const ruleLabel = r => r.type === "telegram" ? TG_LABEL : `«${r.text}»`;
+  const ruleLabel = r => r.type === "telegram" ? TG_LABEL : r.type === "line" ? `کل خطِ شامل «${r.text}»` : `«${r.text}»`;
+  // "line" rules remove the smallest block (paragraph, list item, heading, div…) whose text contains the fixed part,
+  // whatever else (e.g. a changing URL) is in it; blocks much longer than the fixed part are left alone.
+  const CLEAN_LINE_EXTRA = 400;
+  const LINE_BLOCKS = new Set(["p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "td", "th", "dd", "dt", "figcaption", "pre", "caption", "aside", "footer", "header", "section", "article"]);
+  const squash = t => String(t || "").replace(/[\s\u00a0]+/g, " ").trim();
+  function cleanLines(root, rules, stats) {
+    let changed = false;
+    for (const r of rules) {
+      if (r.type !== "line") continue;
+      const needle = squash(r.text), s = stats[r.id];
+      if (!needle) continue;
+      const hits = [...root.querySelectorAll("*")].filter(el => LINE_BLOCKS.has((el.localName || "").toLowerCase()) && squash(el.textContent).includes(needle));
+      const deepest = hits.filter(el => !hits.some(o => o !== el && el.contains(o)));
+      for (const el of deepest) {
+        const text = squash(el.textContent);
+        if (text.length > needle.length + CLEAN_LINE_EXTRA) { s.tooLong = (s.tooLong || 0) + 1; continue; }
+        s.count++; s.chars += text.length;
+        if (s.snippets.length < CLEAN_SNIPPETS) s.snippets.push({ before: "", match: text.length > 160 ? text.slice(0, 157) + "…" : text, after: "" });
+        el.parentNode && el.parentNode.removeChild(el); changed = true;
+      }
+    }
+    return changed;
+  }
   function ruleRegex(r) {
     return r.type === "telegram" ? new RegExp(TG_SOURCE, "g") : new RegExp(r.text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
   }
@@ -3184,14 +3207,17 @@
     if (xml && doc.getElementsByTagName("parsererror").length) { doc = new DOMParser().parseFromString(src, "text/html"); viaHtml = true; }
     const root = doc.body || doc.documentElement;
     if (!root) return { chars: 0, output: null };
+    const allChars = squash(root.textContent).length;
+    let changed = cleanLines(root, rules, stats);
+    const textRules = rules.filter(r => r.type !== "line");
     const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    const touched = new Set(); let chars = 0, changed = false;
+    const touched = new Set(); let chars = 0;
     for (let n = walker.nextNode(); n; n = walker.nextNode()) {
       const parentName = (n.parentNode && n.parentNode.localName || "").toLowerCase();
       if (parentName === "script" || parentName === "style") continue;
       let v = n.nodeValue; chars += v.length;
       const orig = v;
-      for (const r of rules) {
+      for (const r of textRules) {
         const s = stats[r.id];
         v = v.replace(ruleRegex(r), (m, ...rest) => {
           const off = rest[rest.length - 2], str = rest[rest.length - 1];
@@ -3205,6 +3231,7 @@
         for (let p = n.parentNode; p && p !== root; p = p.parentNode) if ((p.localName || "").toLowerCase() === "a") { touched.add(p); break; }
       }
     }
+    chars = Math.max(chars, allChars);
     if (!changed) return { chars, output: null };
     // A link whose text became empty (e.g. <a href="https://t.me/x">https://t.me/x</a>) is removed with it.
     for (const a of touched) {
@@ -3248,7 +3275,9 @@
     const blob = await out.generateAsync({ type: "blob", mimeType: "application/epub+zip", compression: "DEFLATE", compressionOptions: { level: 6 } });
     return { stats, totalChars, total, blob };
   }
-  const isTooBroad = (s, totalChars) => s.count > CLEAN_MAX_HITS || (totalChars > 0 && s.chars > totalChars * CLEAN_MAX_SHARE);
+  // Whole-line rules remove whole lines by design (e.g. one footer line per article ≈ 2% of a magazine), so their
+  // share limit is 10%; phrases keep the 2% limit. Both are capped at CLEAN_MAX_HITS matches per book.
+  const isTooBroad = (s, totalChars, rule) => s.count > CLEAN_MAX_HITS || (totalChars > 0 && s.chars > totalChars * (rule && rule.type === "line" ? 0.1 : CLEAN_MAX_SHARE));
 
   // ---- Re-anchoring annotations by their quote ----
   // Display-time changes (RLM→ZWNJ, Persian digits, ي/ك) are folded char-for-char so offsets stay aligned.
@@ -3386,7 +3415,7 @@
       const rec = await getBook(bookId), file = fileOf(rec);
       if (!file) return 0;
       const dry = await cleanEpub(await file.arrayBuffer(), rules, false);
-      const ok = rules.filter(r => dry.stats[r.id].count && !isTooBroad(dry.stats[r.id], dry.totalChars));
+      const ok = rules.filter(r => dry.stats[r.id].count && !isTooBroad(dry.stats[r.id], dry.totalChars, r));
       return ok.length ? await applyCleanToBook(bookId, ok) : 0;
     } catch (err) { console.warn("Auto cleanup failed:", err); return 0; }
   }
@@ -3427,11 +3456,13 @@
     const list = books.map(b => {
       const live = rules.filter(r => !broad.has(r.id) || cleanIncluded(r.id));
       const count = live.reduce((n, r) => n + b.stats[r.id].count, 0);
-      if (!count) return "";
+      if (!count && !live.some(r => b.stats[r.id].tooLong)) return "";
       const snips = live.flatMap(r => b.stats[r.id].snippets).slice(0, CLEAN_SNIPPETS)
         .map(s => `<li dir="auto">…${esc(s.before)}<mark>${esc(s.match)}</mark>${esc(s.after)}…</li>`).join("");
+      const long = live.reduce((n, r) => n + (b.stats[r.id].tooLong || 0), 0);
       return `<div class="clean-book" data-clean-id="${esc(b.id)}"><label class="clean-book-head"><input type="checkbox" data-clean-book="${esc(b.id)}" checked>`
-        + ` <b dir="auto">${esc(b.title)}</b> <span class="clean-count">${faNum(count)} مورد</span></label><ul class="clean-snips">${snips}</ul></div>`;
+        + ` <b dir="auto">${esc(b.title)}</b> <span class="clean-count">${faNum(count)} مورد</span></label><ul class="clean-snips">${snips}</ul>`
+        + (long ? `<p class="muted small">${faNum(long)} خط خیلی بلند است و حذف نمی‌شود.</p>` : "") + `</div>`;
     }).filter(Boolean);
     const keep = new Map([...$("cleanResults").querySelectorAll("[data-clean-broad]")].map(x => [x.dataset.cleanBroad, x.checked]));
     const keepBooks = new Map([...$("cleanResults").querySelectorAll("[data-clean-book]")].map(x => [x.dataset.cleanBook, x.checked]));
@@ -3453,7 +3484,7 @@
         await sleep(0); // keep the page responsive between books
         try {
           const r = await cleanEpub(await fileOf(all[i]).arrayBuffer(), rules, false);
-          rules.forEach(rule => { if (isTooBroad(r.stats[rule.id], r.totalChars)) broad.add(rule.id); });
+          rules.forEach(rule => { if (isTooBroad(r.stats[rule.id], r.totalChars, rule)) broad.add(rule.id); });
           if (r.total) books.push({ id: all[i].id, title: all[i].title || "بدون عنوان", stats: r.stats, totalChars: r.totalChars });
         } catch (err) { console.warn("Cleanup scan failed:", all[i].title, err); }
       }
@@ -3486,10 +3517,10 @@
   $("cleanClose").addEventListener("click", () => $("cleanDialog").close());
   $("cleanForm").addEventListener("submit", e => {
     e.preventDefault();
-    const text = $("cleanPhrase").value.trim(), rules = loadCleanRules();
+    const text = $("cleanPhrase").value.trim(), rules = loadCleanRules(), mode = $("cleanMode").value === "line" ? "line" : "phrase";
     if ([...text].length < CLEAN_MIN_LEN) { $("cleanError").textContent = `عبارت باید دست‌کم ${faNum(CLEAN_MIN_LEN)} نویسه باشد؛ عبارت‌های کوتاه بخش‌های درست متن را هم پاک می‌کنند.`; return; }
-    if (rules.some(r => r.type === "phrase" && r.text === text)) { $("cleanError").textContent = "این عبارت قبلاً اضافه شده است."; return; }
-    rules.push({ id: newUid(), type: "phrase", text: text.slice(0, 200) });
+    if (rules.some(r => r.type === mode && r.text === text)) { $("cleanError").textContent = "این قاعده قبلاً اضافه شده است."; return; }
+    rules.push({ id: newUid(), type: mode, text: text.slice(0, 200) });
     saveCleanRules(rules); $("cleanPhrase").value = ""; $("cleanError").textContent = "";
     resetCleanResults(""); renderCleanRules();
   });

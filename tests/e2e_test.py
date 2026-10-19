@@ -1725,6 +1725,44 @@ async def run(url):
         check("v8.6.3: with the setting off the wheel does not turn pages", abs((await WP.evaluate(SL)) - s3) <= 2)
         check("v8.6.3 wheel: no JS errors", len(errsW) == 0, str(errsW[:3]))
         await ctxW.close()
+        # 25. v8.6.4: «کل خطِ شامل این متن» removes the whole line whose rest (e.g. a URL) changes; long blocks are kept
+        import zipfile as _zf25
+        tmpc = Path(tempfile.mkdtemp(prefix="borg-e2e-line-"))
+        lbk = tmpc / "lines.epub"
+        with _zf25.ZipFile(lbk, "w") as z:
+            z.writestr(_zf25.ZipInfo("mimetype"), "application/epub+zip", compress_type=_zf25.ZIP_STORED)
+            z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+            z.writestr("content.opf", '<?xml version="1.0" encoding="utf-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">line-1</dc:identifier><dc:title>Line Rule Test</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="b.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/><itemref idref="b"/></spine></package>')
+            z.writestr("nav.xhtml", '<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>TOC</title></head><body><nav epub:type="toc"><ol><li><a href="a.xhtml">First</a></li><li><a href="b.xhtml">Second</a></li></ol></nav></body></html>')
+            for f, h, u in (("a.xhtml", "First", "leaders/2026/10/15/what-if"), ("b.xhtml", "Second", "briefing/2026/10/15/search")):
+                long = "<p id='long'>A very long paragraph that quotes This article was downloaded by zlibrary from somewhere in the middle of real text. " + "Real content continues here. " * 30 + "</p>"
+                z.writestr(f, f'<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" lang="en"><head><title>{h}</title></head><body><h1>{h}</h1><p id="keep">Normal text stays.</p>' + "".join(f"<p>Article body paragraph {k} with ordinary sentences about the economy and science.</p>" for k in range(40))
+                           + (long if h == "First" else "")
+                           + f'<p id="dl" class="x">This article was downloaded by <a href="https://z-lib.example/">zlibrary</a> from <a href="https://www.economist.com/{u}">https://www.economist.com/{u}</a></p></body></html>')
+        errsC, extC = [], []
+        ctxC, CP = await new_ctx(b, url, extC, errsC)
+        await CP.goto(url); await CP.wait_for_timeout(1000)
+        await CP.set_input_files("#epubInput", str(lbk)); await CP.wait_for_timeout(2500)
+        await CP.click("#cleanOpen"); await CP.wait_for_timeout(300)
+        await CP.fill("#cleanPhrase", "This article was downloaded by zlibrary from")
+        await CP.select_option("#cleanMode", "line"); await CP.click("#cleanAdd"); await CP.wait_for_timeout(200)
+        check("v8.6.4: a whole-line rule is listed as «کل خطِ شامل …»", "کل خطِ شامل" in await CP.inner_text("#cleanRules"))
+        await CP.click("#cleanSearch")
+        await poll(lambda: CP.is_visible("#cleanApply"), 15000)
+        res = await CP.inner_text("#cleanResults")
+        check("v8.6.4: preview counts both lines (the URL differs) and keeps the long paragraph", "۲ مورد" in res and "خیلی بلند" in res and "economist.com" in res, res[:300])
+        await CP.click("#cleanApply")
+        await poll(lambda: _contains(CP, "#cleanStatus", "حذف شد"), 20000)
+        await CP.click("#cleanClose"); await CP.wait_for_timeout(300)
+        await CP.click('#bookGrid .book-card:has-text("Line Rule Test")'); await CP.wait_for_timeout(3000)
+        DOCQ = "()=>{const d=document.querySelector('#viewer iframe').contentDocument;return {dl:!!d.getElementById('dl'),keep:!!d.getElementById('keep'),long:!!d.getElementById('long'),txt:d.body.textContent.includes('downloaded by zlibrary from https')}}"
+        a1 = await CP.evaluate(DOCQ)
+        await CP.locator("#tocList .toc-link", has_text="Second").first.click(); await CP.wait_for_timeout(2000)
+        a2 = await CP.evaluate(DOCQ)
+        check("v8.6.4: the download lines are gone from both chapters, normal text and the long paragraph stay",
+              not a1["dl"] and not a2["dl"] and a1["keep"] and a2["keep"] and a1["long"] and not a2["txt"], f"{a1} {a2}")
+        check("v8.6.4 line rule: no JS errors", len(errsC) == 0, str(errsC[:3]))
+        await ctxC.close(); shutil.rmtree(tmpc, ignore_errors=True)
         await b.close()
 
 def main():
