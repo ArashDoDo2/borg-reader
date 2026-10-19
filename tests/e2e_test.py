@@ -2818,13 +2818,13 @@ async def run(url):
         dlg32 = []
         C.on("dialog", lambda d: (dlg32.append(d.message), asyncio.ensure_future(d.accept())))
         now32 = int(_t32.time())
-        def _c(i, n, p=None, cnt=0, sort=0): return {"id": i, "name": n, "parent_id": p, "sort": sort, "count": cnt, "count_all": cnt + 2}
+        def _c(i, n, p=None, cnt=0, sort=0): return {"id": i, "name": n, "parent_id": p or 0, "sort": sort, "count": cnt, "count_all": cnt + 2}
         cats32 = [_c(1, "ادبیات", None, 60), _c(11, "شعر", 1, 20), _c(12, "داستان", 1, 20), _c(13, "نمایشنامه", 1, 0),
                   _c(2, "تاریخ", None, 20), _c(21, "ایران", 2, 20), _c(22, "جهان", 2, 0),
                   _c(3, "علوم", None, 20), _c(5, "هنر", None, 0), _c(51, "موسیقی", 5), _c(52, "سینما", 5), _c(53, "نقاشی", 5), _c(4, "کودک", None, 0)]
         def cobj32(i):
             c = next(x for x in cats32 if x["id"] == i); p = next((x for x in cats32 if x["id"] == c["parent_id"]), None)
-            return {"id": i, "name": c["name"], "parent_id": c["parent_id"], "parent_name": p["name"] if p else None}
+            return {"id": i, "name": c["name"], "parent_id": c["parent_id"], "parent_name": p["name"] if p else ""}
         BOOKCATS32 = {0: [11], 1: [12, 21], 2: [3]}
         books32 = [{"id": 7000 + i, "sha256": f"{i:064x}", "size": 50000 + i, "title": f"کتاب دسته {i}", "author": f"نویسنده {i % 4}",
                     "language": "fa", "publisher": "", "published": "", "has_cover": False, "format": "epub", "description": "", "category": "",
@@ -3047,8 +3047,8 @@ async def run(url):
         sv = await nposts32("category-save", 1)
         try: await poll(lambda: _contains(C, "#catTree", "فلسفه"), 4000)
         except TimeoutError: pass
-        check("v8.10 admin: «افزودن دستهٔ اصلی» sends category-save {name, parent_id: null} with CSRF; the tree shows it",
-              sv[:1] == [{"name": "فلسفه", "parent_id": None}] and bool(calls32("category-save", "POST")[0]["csrf"]) and "فلسفه" in await C.inner_text("#catTree"), str(sv))
+        check("v8.10 admin: «افزودن دستهٔ اصلی» sends category-save {name, parent_id: 0} with CSRF; the tree shows it",
+              sv[:1] == [{"name": "فلسفه", "parent_id": 0}] and bool(calls32("category-save", "POST")[0]["csrf"]) and "فلسفه" in await C.inner_text("#catTree"), str(sv))
         await C.fill("#catAddTopName", "ادبیات"); await C.press("#catAddTopName", "Enter")
         await nposts32("category-save", 2); await C.wait_for_timeout(300)
         check("v8.10 admin: a duplicate name (409) is explained in Persian", "همین نام" in await C.inner_text("#catAdmError"), await C.inner_text("#catAdmError"))
@@ -3082,7 +3082,7 @@ async def run(url):
         await C.wait_for_timeout(300)
         kid_order = await C.evaluate("[...document.querySelectorAll('#catTree [data-cat-id=\"1\"] .cat-kid')].map(e => +e.dataset.catId)")
         check("v8.10 admin: ↓/↑ reorder through category-order {parent_id, ids} (top level and inside a parent)",
-              len(od) == 2 and od[0]["parent_id"] is None and od[0]["ids"][:2] == [2, 1] and len(od[0]["ids"]) == 6
+              len(od) == 2 and od[0]["parent_id"] == 0 and od[0]["ids"][:2] == [2, 1] and len(od[0]["ids"]) == 6
               and od[1] == {"parent_id": 1, "ids": [12, 11]} and kid_order == [12, 11]
               and await C.evaluate("document.querySelector('#catTree .cat-top').dataset.catId") == "2", f"{od} {kid_order}")
         await C.click('#catTree [data-cat-id="3"] > .cat-row [data-cat-act="delete"]'); await C.wait_for_timeout(200)

@@ -3437,13 +3437,12 @@
   // followed by its children; a top-level count includes its children's books. Books carry `categories: [{id, name,
   // parent_id, parent_name}]`. An empty list (or a server without the route) turns every category UI off: the old
   // free-text category flows stay as they were.
-  const cats = { list: [], byId: new Map(), tops: [], kids: new Map(), loaded: false, supported: true, at: 0, pending: null, seq: 0, topPid: null };
+  const cats = { list: [], byId: new Map(), tops: [], kids: new Map(), loaded: false, supported: true, at: 0, pending: null, seq: 0 };
   const CATS_TTL = 5 * 60 * 1000;
   const catTreeOn = () => cats.list.length > 0;
   function setCategories(list) {
     const raw = (Array.isArray(list) ? list : []).filter(c => c && c.id != null && String(c.name || "").trim());
     const top = raw.find(c => !Number(c.parent_id));
-    if (top) cats.topPid = top.parent_id === undefined ? null : top.parent_id;
     cats.list = raw.map(c => ({ ...c, id: Number(c.id), name: String(c.name).trim(), parent_id: Number(c.parent_id) || null, count: Number(c.count) || 0,
                                 ...(c.count_all != null ? { count_all: Number(c.count_all) || 0 } : {}) }));
     cats.byId = new Map(cats.list.map(c => [c.id, c]));
@@ -5148,7 +5147,7 @@
     } finally { catAdm.busy = false; }
   }
   const cleanCatName = v => String(v || "").replace(/\s+/g, " ").trim().slice(0, 80);
-  const topParent = () => (cats.topPid === undefined ? null : cats.topPid); // what this server uses for "no parent"
+  const topParent = () => 0; // the server's "no parent" (contract: parent_id 0 = top level; null is rejected as bad_parent_id)
   $("catAddTop").addEventListener("submit", async e => {
     e.preventDefault();
     const name = cleanCatName($("catAddTopName").value);
