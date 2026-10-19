@@ -838,3 +838,6 @@ body.dark .api-warn{color:#f0a58c}
 .reader.pdf-invert .textLayer .pdf-hit{background:rgba(0,90,255,.45)}
 /* Library: PDF badge on the cover */
 .book-cover-thumb .format-badge{position:absolute;top:8px;right:8px;z-index:2;padding:1px 6px;border-radius:6px;background:rgba(23,59,53,.85);color:#fff;font-size:10px;font-weight:700;letter-spacing:.04em;direction:ltr;line-height:1.6}
+
+/* v8.8.1: drop zone feedback while dragging files over the library */
+body.drop-active #app{outline:3px dashed var(--green2);outline-offset:-10px}

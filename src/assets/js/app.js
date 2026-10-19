@@ -673,23 +673,21 @@
     } catch (_) { el.textContent = ""; }
   }
   function resetInputs() { inputEls.forEach(el => { if (el) el.value = ""; }); }
-  async function importFile(file) {
+  // quiet: used by importFiles() for several files — no toasts/sync per file, returns the outcome instead.
+  async function importFile(file, quiet) {
+    const say = msg => { if (!quiet) showToast(msg); };
     try {
-      if (!file) return;
+      if (!file) return { ok: false };
       // v8.8: PDFs are recognised by their bytes (%PDF-), whatever the name; EPUBs by extension or type as before.
       const isPdf = await sniffPdf(file);
-      if (!isPdf && /\.pdf$/i.test(file.name)) { showToast("این فایل PDF قابل خواندن نیست یا خراب است."); return; }
-      if (!isPdf && !/\.epub$/i.test(file.name) && file.type !== "application/epub+zip") {
-        showToast("لطفاً یک فایل EPUB یا PDF انتخاب کن."); return;
-      }
-      if (file.size > 100 * 1024 * 1024) {
-        showToast("این نسخه برای فایل‌های حداکثر ۱۰۰ مگابایت تنظیم شده است."); return;
-      }
-      if (!db) { showToast("ذخیره‌سازی مرورگر آماده نیست."); return; }
-      showToast("در حال بررسی کتاب…");
+      if (!isPdf && /\.pdf$/i.test(file.name)) throw new UserError("این فایل PDF قابل خواندن نیست یا خراب است.");
+      if (!isPdf && !/\.epub$/i.test(file.name) && file.type !== "application/epub+zip") throw new UserError("لطفاً یک فایل EPUB یا PDF انتخاب کن.");
+      if (file.size > 100 * 1024 * 1024) throw new UserError("این نسخه برای فایل‌های حداکثر ۱۰۰ مگابایت تنظیم شده است.");
+      if (!db) throw new UserError("ذخیره‌سازی مرورگر آماده نیست.");
+      say("در حال بررسی کتاب…");
       const contentHash = await sha256(await file.arrayBuffer());
       if (contentHash && await findDuplicate(file.size, contentHash)) {
-        throw new UserError("این کتاب قبلاً در کتابخانه هست.");
+        const dup = new UserError("این کتاب قبلاً در کتابخانه هست."); dup.duplicate = true; throw dup;
       }
       const metadata = isPdf ? await extractPdfMetadata(file) : await extractMetadata(file);
       const record = {
@@ -710,17 +708,49 @@
       }
       // v8.3: saved cleanup rules apply to new books before they are uploaded.
       const cleaned = await autoCleanImported(record.id);
-      renderLibrary();
-      requestPersistentStorage();
-      sync();
-      showToast(cleaned ? `کتاب به کتابخانه اضافه شد؛ ${faNum(cleaned)} مورد حذف شد` : "کتاب به کتابخانه همین دستگاه اضافه شد.");
+      if (!quiet) {
+        renderLibrary();
+        requestPersistentStorage();
+        sync();
+      }
+      say(cleaned ? `کتاب به کتابخانه اضافه شد؛ ${faNum(cleaned)} مورد حذف شد` : "کتاب به کتابخانه همین دستگاه اضافه شد.");
+      return { ok: true, cleaned };
     } catch (err) {
       // Expected outcomes (duplicate, broken file, …) are UserErrors and are not logged as app errors.
       if (!(err instanceof UserError)) { console.error(err); reportError("import", err, "import"); }
-      showToast(err instanceof UserError ? err.message : "افزودن کتاب انجام نشد.");
+      say(err instanceof UserError ? err.message : "افزودن کتاب انجام نشد.");
+      return { ok: false, duplicate: !!(err && err.duplicate), message: err instanceof UserError ? err.message : "افزودن کتاب انجام نشد." };
     } finally {
-      resetInputs();
+      if (!quiet) resetInputs();
     }
+  }
+  // Several files at once (multi-select, drag & drop): one after another, progress in a toast, one summary at the end.
+  let importingMany = false;
+  async function importFiles(list) {
+    const files = Array.from(list || []).filter(Boolean);
+    if (!files.length) return;
+    if (files.length === 1) return importFile(files[0]);
+    if (importingMany) { showToast("افزودن کتاب‌های قبلی هنوز تمام نشده است."); return; }
+    importingMany = true;
+    let added = 0, dups = 0, cleanedSum = 0; const failed = [];
+    try {
+      for (let i = 0; i < files.length; i++) {
+        showToast(`در حال افزودن ${faNum(i + 1)} از ${faNum(files.length)}…`);
+        const r = await importFile(files[i], true);
+        if (r && r.ok) { added++; cleanedSum += r.cleaned || 0; }
+        else if (r && r.duplicate) dups++;
+        else failed.push(files[i].name);
+        if ((i + 1) % 5 === 0) renderLibrary();
+      }
+    } finally {
+      importingMany = false; resetInputs();
+      renderLibrary(); requestPersistentStorage(); sync();
+    }
+    const parts = [`${faNum(added)} کتاب اضافه شد`];
+    if (dups) parts.push(`${faNum(dups)} تکراری بود`);
+    if (failed.length) parts.push(`${faNum(failed.length)} ناموفق: ${failed.slice(0, 3).join("، ")}${failed.length > 3 ? "…" : ""}`);
+    if (cleanedSum) parts.push(`${faNum(cleanedSum)} مورد پاک‌سازی شد`);
+    showToast(parts.join("؛ "));
   }
   let openToken = 0, previewPos = null;
   function percentFor(cfi, fallback) {
@@ -2838,7 +2868,18 @@
     e.preventDefault();
     $("searchInput").focus(); $("searchInput").select();
   });
-  inputEls.forEach(el => el?.addEventListener("change", e => importFile(e.target.files?.[0])));
+  inputEls.forEach(el => el?.addEventListener("change", e => importFiles(e.target.files)));
+  // Drag & drop EPUB/PDF files onto the library (not while reading).
+  document.addEventListener("dragover", e => {
+    if (readerOpen() || !e.dataTransfer || ![...(e.dataTransfer.types || [])].includes("Files")) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = "copy"; document.body.classList.add("drop-active");
+  });
+  document.addEventListener("dragleave", e => { if (!e.relatedTarget) document.body.classList.remove("drop-active"); });
+  document.addEventListener("drop", e => {
+    document.body.classList.remove("drop-active");
+    if (readerOpen() || !e.dataTransfer || !e.dataTransfer.files || !e.dataTransfer.files.length) return;
+    e.preventDefault(); importFiles(e.dataTransfer.files);
+  });
   const onLibraryClick = async e => {
     const optBtn = e.target.closest("[data-options]");
     if (optBtn) { e.stopPropagation(); openBookOptions(optBtn.dataset.options); return; }

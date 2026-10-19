@@ -2246,6 +2246,25 @@ async def run(url):
         check("v8.8 PDF: double tap resets the zoom", dz and abs(dz["cssW"] - pw0) <= 2 and not await M.evaluate("document.getElementById('reader').classList.contains('immersive')"), str(dz and dz["cssW"]))
         check("v8.8 PDF (phone): no JS errors, no external requests", not errs28m and not ext28m, str(errs28m[:3] + ext28m[:3]))
         await ctxM.close(); shutil.rmtree(tmpp, ignore_errors=True)
+        # 29. v8.8.1: several files at once: progress, one summary (added / duplicate / failed), all cards appear
+        errsM, extM = [], []
+        ctxM, MP = await new_ctx(b, url, extM, errsM)
+        await MP.goto(url); await MP.wait_for_timeout(1000)
+        multi_ok = await MP.evaluate("[...document.querySelectorAll('input[type=file]')].every(i=>i.multiple)")
+        check("v8.8.1: every file picker allows selecting several files", multi_ok)
+        await MP.set_input_files("#epubInputSmall" if await MP.is_visible("#epubInputSmall") else "#epubInput",
+                                 [str(FIX / "sample-fa.epub"), str(FIX / "sample-fa-2.epub"), str(FIX / "sample-fa.epub"), str(FIX / "corrupt.epub")])
+        try:
+            await poll(lambda: _contains(MP, "#toast", "کتاب اضافه شد"), 30000)
+        except TimeoutError:
+            pass
+        toast = await MP.inner_text("#toast")
+        cards = await MP.locator("#bookGrid .book-card").count()
+        check("v8.8.1: summary counts added, duplicate and failed files", "۲ کتاب اضافه شد" in toast and "۱ تکراری" in toast and "۱ ناموفق" in toast and "corrupt.epub" in toast, toast)
+        check("v8.8.1: both new books appear in the library", cards == 2, f"cards={cards}")
+        unexpected = [e for e in errsM if "Metadata extraction failed" not in e]  # the corrupt file is expected to fail
+        check("v8.8.1 multi import: no unexpected JS errors", not unexpected, str(unexpected[:3]))
+        await ctxM.close()
         await b.close()
 
 def main():
