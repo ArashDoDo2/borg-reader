@@ -22,6 +22,16 @@ def check(name, ok, info=""):
 def free_port():
     s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
 
+def spawn_php(tmp):
+    """Another `php -S` on the already prepared docroot/config (same database)."""
+    docroot, cfg, port = tmp / "www", tmp / "config.php", free_port()
+    proc = subprocess.Popen(["php", "-d", "display_errors=0", "-d", "upload_max_filesize=2M", "-d", "post_max_size=8M", "-S", f"127.0.0.1:{port}", "-t", str(docroot)],
+                            env=dict(os.environ, BORG_CONFIG=str(cfg)), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(50):
+        try: socket.create_connection(("127.0.0.1", port), 0.2).close(); break
+        except OSError: time.sleep(0.1)
+    return proc, f"http://127.0.0.1:{port}/borg/api/"
+
 def start_php(tmp):
     docroot = tmp / "www"; docroot.mkdir()
     (docroot / "borg").symlink_to(ROOT / "src", target_is_directory=True)
@@ -395,9 +405,17 @@ def run_api_books(base, tmp, admin, user):
     check("api-book without a file -> 400 missing_file", st == 400 and r.get("error") == "missing_file", str(r))
     st, r = api_book(base, tok, file=("bad.epub", (FIX / "corrupt.epub").read_bytes()))
     check("api-book invalid EPUB -> 400 not_epub", st == 400 and r.get("error") == "not_epub", str(r))
-    st, r = api_book(base, tok, file=("big.epub", make_big_epub(tmp).read_bytes()))
-    check("api-book file over PHP upload_max_filesize -> 413 with a clear error", st == 413 and r.get("error") == "file_too_large_for_php" and "upload_max_filesize" in r.get("message", ""), str(r))
-    st, r = api_book(base, tok, raw=b"x" * (9 * 1024 * 1024), ctype="multipart/form-data; boundary=zzz")
+    # Over-size requests go to a throwaway `php -S`: on GitHub runners the built-in server can die on them
+    # (connection reset, then every later request refused). Apache in production answers 413.
+    xproc, xbase = spawn_php(tmp)
+    st, r = api_book(xbase, tok, file=("big.epub", make_big_epub(tmp).read_bytes()))
+    check("api-book file over PHP upload_max_filesize -> 413 with a clear error (or refused by the test server)",
+          (st == 413 and r.get("error") == "file_too_large_for_php" and "upload_max_filesize" in r.get("message", "")) or (st == 0 and r.get("error") == "connection_closed"), str(r))
+    if st == 0:  # the throwaway server died on the first one: restart it for the second check
+        xproc.terminate(); xproc.wait(5); xproc, xbase = spawn_php(tmp)
+    st, r = api_book(xbase, tok, raw=b"x" * (9 * 1024 * 1024), ctype="multipart/form-data; boundary=zzz")
+    try: xproc.terminate(); xproc.wait(5)
+    except Exception: pass
     # Apache answers 413 post_too_large; `php -S` sometimes closes the connection instead. Either way nothing is stored.
     check("api-book request over PHP post_max_size -> 413 post_too_large (or refused by the test server)",
           (st == 413 and r.get("error") == "post_too_large") or (st == 0 and r.get("error") == "connection_closed"), str(r))
