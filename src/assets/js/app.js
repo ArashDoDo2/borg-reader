@@ -3089,7 +3089,7 @@
     document.querySelector('[data-view="admin"]').hidden = !(user && user.role === "admin");
     if (!user) {
       showView("mine"); syncChip.at = 0; syncChip.failed = false; unpushedProgress.clear(); setSyncStatus("");
-      catalogBooks = []; catalogLoaded = false; previewCache = null;
+      resetCatalog(); previewCache = null;
       if (location.hash.startsWith("#catalog")) setHash("", false);
     }
     $("authForms").hidden = !!user;
@@ -3110,12 +3110,12 @@
     $("viewBook").hidden = view !== "book";
     $("viewAdmin").hidden = view !== "admin";
     closeAddMenu();
-    if (view === "catalog") { renderCatalog(); loadCatalog(); }
-    if (view === "book") { renderBookDetail(); if (!catalogLoaded) loadCatalog(); }
+    if (view === "catalog") showCatalog();
+    if (view === "book") renderBookDetail();
     if (view === "admin") { hideNewApiToken(); loadAdmin(); }
   }
   document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.addEventListener("click", () => {
-    if (t.dataset.view === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; }
+    if (t.dataset.view === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; catalogState.at = 0; }
     setHash(t.dataset.view === "catalog" ? "#catalog" : "", false);
     showView(t.dataset.view);
   }));
@@ -3408,8 +3408,25 @@
   }
 
   // ---------- Public catalog ----------
+  // v8.9: the catalog is paged on the server (`catalog&page=N&per=…` with q/category/author/format/sort → books, total,
+  // categories). A server without paging answers with the whole list and no `total`: the client then filters and sorts
+  // that list itself, as before. Loaded pages stay in memory, so coming back from a book page restores list and scroll.
   let catalogBooks = [], catalogLoaded = false;
-  const catalogFilter = { author: "", category: "" };
+  const catalogFilter = { author: "", category: "", format: "", sort: "new" };
+  const CATALOG_PER = 24, CATALOG_TTL = 5 * 60 * 1000;
+  // mode: "" unknown, "paged" server pages, "full" whole list filtered here. seq invalidates answers to older requests.
+  const catalogState = { mode: "", key: "", total: 0, page: 0, facets: [], loading: false, failed: false, seq: 0, at: 0, scrollY: null };
+  const catalogSeen = new Map();   // id → latest record from any catalog answer (book page, add, read online)
+  const relatedCache = new Map();  // id → «کتاب‌های مشابه» of that book
+  let catalogFull = null;          // the whole list, when one was fetched (old server, or a deep link to an unloaded book)
+  const detailChecked = new Set(); // book ids looked up in the whole list (deep link) and not found
+  let detailFetching = 0;
+  function resetCatalog() {
+    catalogBooks = []; catalogLoaded = false; catalogFull = null;
+    Object.assign(catalogState, { mode: "", key: "", total: 0, page: 0, facets: [], loading: false, failed: false, at: 0, scrollY: null });
+    catalogState.seq++;
+    catalogSeen.clear(); relatedCache.clear(); detailChecked.clear(); detailFetching = 0;
+  }
   let detailId = null;
   let previewCache = null; // { id, blob }: the last catalog file fetched for online reading, reused when it is added
   const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -3436,20 +3453,128 @@
       <div class="book-meta"><h3 title="${esc(b.title)}">${esc(b.title)}</h3><p>${esc(b.author || "نویسنده نامشخص")}</p>
       ${withAction && b.description ? `<p title="${esc(b.description)}">${esc(b.description)}</p>` : ""}${action ? `<div class="catalog-actions">${action}</div>` : ""}</div></article>`;
   }
+  const rememberCatalog = books => { for (const b of books) catalogSeen.set(b.id, b); return books; };
+  const catalogSearchText = () => $("catalogSearch").value.trim();
+  function catalogQueryKey() {
+    const f = catalogFilter;
+    return JSON.stringify([catalogSearchText(), f.author, f.category, f.format, f.sort]);
+  }
+  function catalogQuery(page, per = CATALOG_PER, params = null) {
+    const f = catalogFilter;
+    const p = params || { q: catalogSearchText(), category: f.category, author: f.author, format: f.format, sort: f.sort === "new" ? "" : f.sort };
+    return `&page=${page}&per=${per}` + Object.entries(p).filter(([, v]) => v).map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join("");
+  }
+  const catalogFiltered = () => !!(catalogSearchText() || catalogFilter.author || catalogFilter.category || catalogFilter.format);
+  /** (Re)load the first page for the current search and filters (or the whole list from a server without paging). */
   async function loadCatalog() {
+    const seq = ++catalogState.seq, key = catalogQueryKey();
+    const paged = catalogState.mode !== "full";
+    catalogState.loading = true; catalogState.failed = false; catalogState.scrollY = null;
     if (!catalogBooks.length) $("catalogGrid").innerHTML = '<p class="muted">در حال بارگذاری…</p>';
+    $("catalogGrid").classList.add("is-loading"); $("catalogGrid").setAttribute("aria-busy", "true");
+    renderCatalogMore();
     try {
-      catalogBooks = (await api("catalog")).books || [];
-      catalogLoaded = true;
+      const r = await api("catalog", { query: paged ? catalogQuery(1) : "" });
+      if (seq !== catalogState.seq) return;
+      const books = rememberCatalog(r.books || []);
+      if (paged && typeof r.total === "number") {
+        const seen = new Set();
+        catalogBooks = books.filter(b => !seen.has(b.id) && seen.add(b.id));
+        Object.assign(catalogState, { mode: "paged", total: Math.max(r.total, catalogBooks.length), page: 1,
+          facets: Array.isArray(r.categories) ? r.categories : [] });
+      } else {
+        // No `total`: this server has no paging and sent the whole list (params ignored).
+        catalogState.mode = "full"; catalogBooks = books; catalogFull = books;
+      }
+      catalogState.key = key; catalogState.at = Date.now(); catalogLoaded = true;
+      catalogState.loading = false;
       renderCatalog();
       if (!$("viewBook").hidden) renderBookDetail();
     } catch (err) {
+      if (seq !== catalogState.seq) return;
+      catalogState.loading = false;
       $("catalogGrid").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`;
-      if (!$("viewBook").hidden && !catalogBooks.length) $("detailTitle").textContent = apiMessage(err);
+      if (!$("viewBook").hidden && !catalogSeen.has(detailId)) $("detailTitle").textContent = apiMessage(err);
+    } finally {
+      if (seq === catalogState.seq) {
+        $("catalogGrid").classList.remove("is-loading"); $("catalogGrid").removeAttribute("aria-busy");
+        renderCatalogMore(); queueCatalogCheck();
+      }
     }
   }
+  /** Next page, appended (cards already shown stay in place, so the scroll position does not move). */
+  async function loadMoreCatalog() {
+    const st = catalogState;
+    if (st.mode !== "paged" || st.loading || !catalogLoaded || catalogBooks.length >= st.total) return;
+    const seq = st.seq;
+    st.loading = true; st.failed = false; renderCatalogMore();
+    try {
+      const r = await api("catalog", { query: catalogQuery(st.page + 1) });
+      if (seq !== st.seq) return;
+      const got = r.books || [];
+      const have = new Set(catalogBooks.map(b => b.id));
+      const fresh = rememberCatalog(got.filter(b => !have.has(b.id) && have.add(b.id)));
+      st.page += 1;
+      if (typeof r.total === "number") st.total = r.total;
+      if (!got.length) st.total = catalogBooks.length; // past the end (books were removed meanwhile): stop here
+      catalogBooks.push(...fresh);
+      st.total = Math.max(st.total, catalogBooks.length);
+      if (fresh.length) {
+        if (!$("catalogGrid").querySelector("[data-detail]")) $("catalogGrid").innerHTML = "";
+        $("catalogGrid").insertAdjacentHTML("beforeend", fresh.map(b => catalogCardHtml(b, true)).join(""));
+      }
+      renderCatalogCount();
+    } catch (err) {
+      if (seq !== st.seq) return;
+      st.failed = true; // no automatic retry loop: the «بیشتر» button retries
+      showToast(apiMessage(err));
+    } finally {
+      if (seq === st.seq) { st.loading = false; renderCatalogMore(); queueCatalogCheck(); }
+    }
+  }
+  function catalogHasMore() {
+    return catalogState.mode === "paged" && catalogLoaded && catalogBooks.length < catalogState.total;
+  }
+  function renderCatalogMore() {
+    const more = catalogHasMore();
+    $("catalogMore").hidden = !more;
+    const btn = $("catalogMoreButton");
+    const busy = more && catalogState.loading;
+    btn.disabled = busy;
+    btn.textContent = busy ? "در حال بارگذاری…" : catalogState.failed ? "تلاش دوباره" : "بیشتر";
+  }
+  // Infinite scroll: the «بیشتر» row is the sentinel; the button stays as a fallback (no IntersectionObserver, keyboard).
+  function catalogNearEnd() {
+    if ($("viewCatalog").hidden || $("catalogMore").hidden) return false;
+    return $("catalogMore").getBoundingClientRect().top < window.innerHeight + 600;
+  }
+  function queueCatalogCheck() {
+    requestAnimationFrame(() => { if (!catalogState.failed && catalogNearEnd()) loadMoreCatalog(); });
+  }
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting) && !catalogState.failed) loadMoreCatalog();
+    }, { rootMargin: "0px 0px 600px 0px" }).observe($("catalogMore"));
+  }
+  $("catalogMoreButton").addEventListener("click", () => { catalogState.failed = false; loadMoreCatalog(); });
+  /** Show the catalog view: from memory when the same list was loaded recently (back from a book page), else load. */
+  function showCatalog() {
+    const st = catalogState;
+    const fresh = catalogLoaded && Date.now() - st.at < CATALOG_TTL && (st.mode === "full" || st.key === catalogQueryKey());
+    renderCatalog();
+    if (!fresh) { loadCatalog(); return; }
+    const y = st.scrollY;
+    st.scrollY = null;
+    if (y != null) {
+      window.scrollTo(0, y);
+      requestAnimationFrame(() => { window.scrollTo(0, y); queueCatalogCheck(); });
+    } else queueCatalogCheck();
+  }
   function catalogCategories() {
-    return [...new Set(catalogBooks.map(catOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fa"));
+    if (catalogState.mode === "paged") {
+      return catalogState.facets.map(c => String((c && c.name) || "").trim()).filter(Boolean).sort((a, b) => a.localeCompare(b, "fa"));
+    }
+    return [...new Set((catalogFull || catalogBooks).map(catOf).filter(Boolean))].sort((a, b) => a.localeCompare(b, "fa"));
   }
   function fillCategoryList(extra) {
     const cats = new Set([...catalogCategories(), ...(extra || [])].filter(Boolean));
@@ -3457,6 +3582,7 @@
   }
   function renderCatalogFilters() {
     const cats = catalogCategories();
+    const counts = new Map(catalogState.mode === "paged" ? catalogState.facets.map(c => [String((c && c.name) || "").trim(), Number(c && c.count)]) : []);
     const chips = [];
     if (catalogFilter.author) {
       chips.push(`<button type="button" class="filter-chip-active" data-clear-author aria-label="برداشتن فیلتر نویسنده ${esc(catalogFilter.author)}">نویسنده: ${esc(catalogFilter.author)} <span aria-hidden="true">✕</span></button>`);
@@ -3464,28 +3590,82 @@
     if (cats.length || catalogFilter.category) {
       const list = cats.includes(catalogFilter.category) || !catalogFilter.category ? cats : [...cats, catalogFilter.category];
       chips.push(`<button type="button" data-cat-filter="" aria-pressed="${!catalogFilter.category}">همهٔ دسته‌ها</button>`);
-      chips.push(...list.map(c => `<button type="button" data-cat-filter="${esc(c)}" aria-pressed="${c === catalogFilter.category}">${esc(c)}</button>`));
+      // The count is drawn by CSS (data-count), so the chip's text stays the category name.
+      chips.push(...list.map(c => {
+        const n = counts.get(c);
+        const cnt = Number.isFinite(n) && n > 0 ? ` data-count="${n.toLocaleString("fa-IR")}" aria-label="${esc(c)} (${n.toLocaleString("fa-IR")} کتاب)"` : "";
+        return `<button type="button" data-cat-filter="${esc(c)}" aria-pressed="${c === catalogFilter.category}"${cnt}>${esc(c)}</button>`;
+      }));
     }
     $("catalogFilters").innerHTML = chips.join("");
     $("catalogFilters").hidden = !chips.length;
   }
-  function renderCatalog() {
-    const q = $("catalogSearch").value.trim().toLocaleLowerCase();
+  /** Old servers (whole list): filter and sort here. Paged servers already did it. */
+  function visibleCatalogBooks() {
+    if (catalogState.mode === "paged") return catalogBooks;
+    const q = catalogSearchText().toLocaleLowerCase(), f = catalogFilter;
     const books = catalogBooks.filter(b => !q || `${b.title} ${b.author} ${b.description || ""} ${b.submitter || ""} ${b.category || ""} ${b.publisher || ""}`.toLocaleLowerCase().includes(q))
-      .filter(b => !catalogFilter.author || authorOf(b) === catalogFilter.author)
-      .filter(b => !catalogFilter.category || catOf(b) === catalogFilter.category);
-    renderCatalogFilters();
-    fillCategoryList();
-    $("catalogEmpty").hidden = !catalogLoaded || catalogBooks.length > 0;
-    $("catalogGrid").innerHTML = books.map(b => catalogCardHtml(b, true)).join("");
-    if (catalogBooks.length && !books.length) $("catalogGrid").innerHTML = '<p class="muted">کتابی با این مشخصات پیدا نشد.</p>';
+      .filter(b => !f.author || authorOf(b) === f.author)
+      .filter(b => !f.category || catOf(b) === f.category)
+      .filter(b => !f.format || (b.format === "pdf" ? "pdf" : "epub") === f.format);
+    if (f.sort === "title") books.sort((a, b) => String(a.title || "").localeCompare(String(b.title || ""), "fa"));
+    if (f.sort === "author") books.sort((a, b) => authorOf(a).localeCompare(authorOf(b), "fa") || String(a.title || "").localeCompare(String(b.title || ""), "fa"));
+    return books;
   }
-  $("catalogSearch").addEventListener("input", renderCatalog);
-  $("catalogFilters").addEventListener("click", e => {
-    if (e.target.closest("[data-clear-author]")) { catalogFilter.author = ""; renderCatalog(); return; }
-    const c = e.target.closest("[data-cat-filter]");
-    if (c) { catalogFilter.category = c.dataset.catFilter; renderCatalog(); }
+  function renderCatalogCount() {
+    const n = catalogState.mode === "paged" ? catalogState.total : visibleCatalogBooks().length;
+    $("catalogCount").textContent = catalogLoaded ? `${n.toLocaleString("fa-IR")} کتاب` : "";
+  }
+  function renderCatalogControls() {
+    $("catalogFormat").querySelectorAll("[data-format]").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.format === catalogFilter.format)));
+    $("catalogSort").value = catalogFilter.sort;
+  }
+  function renderCatalog() {
+    const books = visibleCatalogBooks();
+    renderCatalogFilters();
+    renderCatalogControls();
+    fillCategoryList();
+    renderCatalogCount();
+    const nothingAtAll = catalogLoaded && (catalogState.mode === "paged" ? catalogState.total === 0 && !catalogFiltered() : catalogBooks.length === 0);
+    $("catalogEmpty").hidden = !nothingAtAll;
+    if (catalogLoaded || catalogBooks.length) $("catalogGrid").innerHTML = books.map(b => catalogCardHtml(b, true)).join("");
+    if (catalogLoaded && !books.length && !nothingAtAll) {
+      $("catalogGrid").innerHTML = '<div class="catalog-noresult"><p class="muted">کتابی با این مشخصات پیدا نشد.</p>'
+        + '<button type="button" class="secondary-button" data-catalog-reset>پاک کردن جست‌وجو و فیلترها</button></div>';
+    }
+    renderCatalogMore();
+  }
+  /** Search/filters changed: paged servers get a new first page, the whole list is filtered here at once. */
+  function applyCatalogFilters() {
+    if (catalogState.mode === "full") { renderCatalog(); return; }
+    renderCatalogFilters(); renderCatalogControls();
+    loadCatalog();
+  }
+  let catalogSearchTimer = 0;
+  $("catalogSearch").addEventListener("input", () => {
+    clearTimeout(catalogSearchTimer);
+    if (catalogState.mode === "full") { renderCatalog(); return; }
+    catalogSearchTimer = setTimeout(applyCatalogFilters, 300);
   });
+  $("catalogFilters").addEventListener("click", e => {
+    if (e.target.closest("[data-clear-author]")) { catalogFilter.author = ""; applyCatalogFilters(); return; }
+    const c = e.target.closest("[data-cat-filter]");
+    if (c) { catalogFilter.category = c.dataset.catFilter; applyCatalogFilters(); }
+  });
+  $("catalogFormat").addEventListener("click", e => {
+    const t = e.target.closest("[data-format]");
+    if (!t || t.dataset.format === catalogFilter.format) return;
+    catalogFilter.format = t.dataset.format;
+    applyCatalogFilters();
+  });
+  $("catalogSort").addEventListener("change", e => { catalogFilter.sort = e.target.value; applyCatalogFilters(); });
+  /** The book was added to the user's library: update every copy in memory (no reload, the loaded pages stay). */
+  function markCatalogInLibrary(id) {
+    const lists = [catalogBooks, catalogFull || [], [...catalogSeen.values()], ...relatedCache.values()];
+    for (const list of lists) for (const b of list) if (b.id === id) b.in_library = true;
+    const card = $("catalogGrid").querySelector(`[data-catalog-add="${id}"]`);
+    if (card) card.outerHTML = '<span class="book-badge">در کتابخانهٔ تو</span>';
+  }
 
   // ---- Navigation between the catalog and a book's page (deep-linkable: #catalog, #catalog/book/ID) ----
   function setHash(hash, push, state) {
@@ -3493,6 +3673,7 @@
     try { (push ? history.pushState : history.replaceState).call(history, state || null, "", url); } catch (_) {}
   }
   function openCatalogBook(id, push = true) {
+    if (!$("viewCatalog").hidden) catalogState.scrollY = window.scrollY; // restored when coming back (showCatalog)
     detailId = id;
     setHash(`#catalog/book/${id}`, push, { borg: "book", id, inApp: push });
     showView("book");
@@ -3527,15 +3708,48 @@
     if (t.dataset.crumb === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; goToCatalog(true); }
     else filterCatalogBy("category", t.dataset.crumbCat || "");
   });
-  $("detailAuthor").addEventListener("click", () => { const b = catalogBooks.find(x => x.id === detailId); if (b && authorOf(b)) filterCatalogBy("author", authorOf(b)); });
+  $("detailAuthor").addEventListener("click", () => { const b = catalogSeen.get(detailId); if (b && authorOf(b)) filterCatalogBy("author", authorOf(b)); });
   $("detailMeta").addEventListener("click", e => { const t = e.target.closest("[data-meta-cat]"); if (t) filterCatalogBy("category", t.dataset.metaCat); });
 
   // ---- Book page ----
-  function relatedBooks(b) {
-    const others = catalogBooks.filter(x => x.id !== b.id);
+  function relatedBooks(b, list) {
+    const others = list.filter(x => x.id !== b.id);
     const sameAuthor = authorOf(b) ? others.filter(x => authorOf(x) === authorOf(b)) : [];
     const sameCat = catOf(b) ? others.filter(x => catOf(x) === catOf(b) && !sameAuthor.includes(x)) : [];
     return [...sameAuthor, ...sameCat].slice(0, 6);
+  }
+  /** «کتاب‌های مشابه» without the whole list: one small page by the same author, then one by the same category. */
+  async function relatedFor(b) {
+    if (catalogState.mode === "full" && catalogFull) return relatedBooks(b, catalogFull);
+    if (relatedCache.has(b.id)) return relatedCache.get(b.id);
+    const out = [], ids = new Set([b.id]);
+    for (const [k, v] of [["author", authorOf(b)], ["category", catOf(b)]]) {
+      if (!v || out.length >= 6) continue;
+      const r = await api("catalog", { query: catalogQuery(1, 6, { [k]: v }) });
+      if (typeof r.total !== "number") { // server without paging: this was the whole list
+        catalogFull = rememberCatalog(r.books || []);
+        return relatedBooks(b, catalogFull);
+      }
+      for (const x of rememberCatalog(r.books || [])) if (!ids.has(x.id)) { ids.add(x.id); out.push(x); }
+    }
+    const res = out.slice(0, 6);
+    relatedCache.set(b.id, res);
+    return res;
+  }
+  /** Deep link to a book that is not in memory. The API has no single-book route, so (as before v8.9) the whole
+   *  list (`catalog` without `page`) is read once; it is only needed for a cold deep link. */
+  async function fetchCatalogBook(id) {
+    if (detailFetching === id) return;
+    detailFetching = id;
+    try {
+      const r = await api("catalog");
+      catalogFull = rememberCatalog(r.books || []);
+      if (!catalogSeen.has(id)) detailChecked.add(id);
+    } catch (err) {
+      if (detailId === id && !$("viewBook").hidden) $("detailTitle").textContent = apiMessage(err);
+      return;
+    } finally { if (detailFetching === id) detailFetching = 0; }
+    if (detailId === id && !$("viewBook").hidden) renderBookDetail();
   }
   function formatPublished(v) {
     const t = String(v || "").trim();
@@ -3543,12 +3757,13 @@
   }
   async function renderBookDetail() {
     closeAddMenu();
-    const b = catalogBooks.find(x => x.id === detailId);
+    const b = catalogSeen.get(detailId);
     $("detailBody").hidden = !b;
     if (!b) {
       $("detailCrumbs").innerHTML = '<button type="button" class="crumb" data-crumb="catalog">کتابخانهٔ عمومی</button>';
-      $("detailTitle").textContent = catalogLoaded ? "این کتاب در کتابخانهٔ عمومی پیدا نشد." : "در حال بارگذاری…";
+      $("detailTitle").textContent = detailChecked.has(detailId) ? "این کتاب در کتابخانهٔ عمومی پیدا نشد." : "در حال بارگذاری…";
       $("detailTitle").hidden = false;
+      if (!detailChecked.has(detailId)) fetchCatalogBook(detailId);
       return;
     }
     const cat = catOf(b);
@@ -3587,14 +3802,18 @@
     $("detailAddGroup").hidden = !!b.in_library;
     $("detailInLibrary").hidden = !b.in_library;
     $("detailAdd").disabled = false; $("detailAddMore").disabled = false;
-    const related = relatedBooks(b);
-    $("detailRelatedSection").hidden = !related.length;
-    $("detailRelated").innerHTML = related.map(x => catalogCardHtml(x, false)).join("");
     // Only offer "read more" when the description is really cut off (measured once the page is visible).
     requestAnimationFrame(() => {
       const d = $("detailDesc");
       $("detailMore").hidden = !desc || d.scrollHeight <= d.clientHeight + 2;
     });
+    if ($("detailRelated").dataset.for !== String(b.id)) { $("detailRelatedSection").hidden = true; $("detailRelated").innerHTML = ""; }
+    let related = [];
+    try { related = await relatedFor(b); } catch (err) { console.warn("Similar books failed:", err); }
+    if (detailId !== b.id) return;
+    $("detailRelated").dataset.for = String(b.id);
+    $("detailRelatedSection").hidden = !related.length;
+    $("detailRelated").innerHTML = related.map(x => catalogCardHtml(x, false)).join("");
   }
   $("detailMore").addEventListener("click", () => {
     const d = $("detailDesc"), open = d.classList.toggle("clamped") === false;
@@ -3615,7 +3834,7 @@
     return blob;
   }
   async function readOnline(id) {
-    const b = catalogBooks.find(x => x.id === id);
+    const b = catalogSeen.get(id);
     if (!b) return;
     const btn = $("detailRead");
     if (btn.dataset.local) { openReader(btn.dataset.local).catch(err => { console.error(err); reportError("reader", err, "openReader"); showToast("بازکردن کتاب ناموفق بود."); }); return; }
@@ -3660,7 +3879,7 @@
       while (syncing) await sleep(150); // a running sync must not see the new local copy before the server does
       await api("catalog-add", { method: "POST", body: { book_id: id } });
       showToast("به کتابخانه‌ات اضافه شد؛ در حال دریافت…");
-      const cb = catalogBooks.find(x => x.id === id);
+      const cb = catalogSeen.get(id);
       let rec = null;
       if (cb) {
         try { rec = await downloadBook({ ...cb, catalog_status: "approved" }, previewCache && previewCache.id === id ? previewCache.blob : null); }
@@ -3677,7 +3896,10 @@
       if (shelves.length) showToast(rec ? "به کتابخانه و قفسه‌های انتخاب‌شده اضافه شد." : "به کتابخانه اضافه شد؛ قفسه‌ها بعد از دریافت تنظیم می‌شوند.");
       else if (rec) showToast("به کتابخانه‌ات اضافه شد.");
       renderLibrary();
-      await loadCatalog();
+      markCatalogInLibrary(id);
+      // Whole-list servers: reload as before. Paged: the loaded pages (and scroll position) stay; the copies were updated.
+      if (catalogState.mode === "full") await loadCatalog();
+      else if (!$("viewBook").hidden && detailId === id) renderBookDetail();
     } catch (err) { if (btn) btn.disabled = false; showToast(apiMessage(err)); }
   }
   function addMenuOpen() { return !$("detailAddMenu").hidden; }
@@ -3726,6 +3948,11 @@
   });
 
   $("catalogGrid").addEventListener("click", e => {
+    if (e.target.closest("[data-catalog-reset]")) {
+      $("catalogSearch").value = "";
+      Object.assign(catalogFilter, { author: "", category: "", format: "" });
+      applyCatalogFilters(); return;
+    }
     const btn = e.target.closest("[data-catalog-add]");
     if (btn) { e.stopPropagation(); addFromCatalog(Number(btn.dataset.catalogAdd), { btn }); return; }
     const card = e.target.closest("[data-detail]");

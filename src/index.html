@@ -92,7 +92,19 @@
           <div class="library-controls"><label class="search-box"><span>⌕</span><input id="catalogSearch" type="search" placeholder="جست‌وجو در کتابخانهٔ عمومی…" autocomplete="off"></label></div></div>
         <p class="muted catalog-hint">برای پیشنهاد یک کتاب، در «کتابخانهٔ من» دکمهٔ ⇪ روی جلد آن را بزن.</p>
         <div id="catalogFilters" class="filter-chips catalog-filters" role="group" aria-label="فیلتر کتابخانهٔ عمومی" hidden></div>
+        <div class="catalog-toolbar">
+          <p id="catalogCount" class="catalog-count" aria-live="polite"></p>
+          <div class="catalog-tools">
+            <div id="catalogFormat" class="segmented catalog-format" role="group" aria-label="نوع فایل">
+              <button type="button" data-format="" aria-pressed="true">همه</button><button type="button" data-format="epub" aria-pressed="false">EPUB</button><button type="button" data-format="pdf" aria-pressed="false">PDF</button>
+            </div>
+            <select id="catalogSort" class="reader-select catalog-sort" aria-label="مرتب‌سازی کتابخانهٔ عمومی">
+              <option value="new">تازه‌ترین</option><option value="title">عنوان</option><option value="author">نویسنده</option>
+            </select>
+          </div>
+        </div>
         <div id="catalogGrid" class="book-grid"></div>
+        <div id="catalogMore" class="catalog-more" hidden><button id="catalogMoreButton" class="secondary-button" type="button">بیشتر</button></div>
         <p id="catalogEmpty" class="muted" hidden>هنوز کتابی در کتابخانهٔ عمومی نیست.</p>
       </div>
       <div id="viewBook" class="view book-page" hidden>

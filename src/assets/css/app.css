@@ -841,3 +841,24 @@ body.dark .api-warn{color:#f0a58c}
 
 /* v8.8.1: drop zone feedback while dragging files over the library */
 body.drop-active #app{outline:3px dashed var(--green2);outline-offset:-10px}
+
+/* v8.9 catalog paging */
+.catalog-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px 14px;flex-wrap:wrap;margin:-8px 0 16px}
+.catalog-count{margin:0;color:var(--muted);font-size:13px}
+.catalog-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.catalog-format{flex-wrap:nowrap}
+.catalog-format button{min-width:52px}
+.catalog-sort{min-height:38px;max-width:160px}
+.catalog-filters [data-count]::after{content:attr(data-count);margin-inline-start:6px;font-size:11px;opacity:.7}
+#catalogGrid.is-loading{opacity:.55;transition:opacity .15s}
+.catalog-more{display:flex;justify-content:center;padding:22px 0 8px}
+.catalog-more[hidden]{display:none}
+.catalog-more button{min-width:160px}
+.catalog-noresult{grid-column:1/-1;display:flex;flex-direction:column;align-items:center;gap:10px;padding:24px 0;text-align:center}
+@media(max-width:760px){
+ .catalog-toolbar{margin:0 0 12px}
+ .catalog-tools{width:100%}
+ .catalog-format{flex:1 1 auto}
+ .catalog-format button{flex:1;min-height:40px}
+ .catalog-sort{flex:0 1 140px;min-height:40px;font-size:16px}
+}
