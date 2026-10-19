@@ -683,9 +683,12 @@ def run_migration7():
         st, r = upload(a, FIX / "sample-fa.epub", "قدیمی")
         bid = (r.get("book") or {}).get("id")
         proc.terminate(); proc.wait(5)
-        # Turn the database back into a schema-6 one: drop the column and forget migration 7.
+        # Turn the database back into a schema-6 one: undo migration 8 (indexes, source, search_key), drop the format
+        # column and forget migrations 7 and 8.
         db = sqlite3.connect(tmp2 / "old.sqlite")
-        db.execute("ALTER TABLE books DROP COLUMN format"); db.execute("DELETE FROM schema_migrations WHERE version = 7"); db.commit()
+        for ix in ("books_created", "books_format", "catalog_status", "catalog_category", "user_books_book"): db.execute(f"DROP INDEX {ix}")
+        for col in ("format", "source", "search_key"): db.execute(f"ALTER TABLE books DROP COLUMN {col}")
+        db.execute("DELETE FROM schema_migrations WHERE version IN (7, 8)"); db.commit()
         cols = [c[1] for c in db.execute("PRAGMA table_info(books)")]
         db.close()
         proc, base2 = spawn_php(tmp2)
@@ -694,11 +697,414 @@ def run_migration7():
         st2, L = a.call("GET", "library")
         bk = next((x for x in L.get("books", []) if x["id"] == bid), {})
         st3, body, hd = raw_get(a, "book-file", f"&id={bid}")
-        check("migration 7 applied on an existing database", "format" not in cols and h.get("schema_version") == 7, f"{cols} {h.get('schema_version')}")
+        check("migrations 7 and 8 applied on an existing database", "format" not in cols and "search_key" not in cols and h.get("schema_version") == 8, f"{cols} {h.get('schema_version')}")
         check("migration 7: existing book reads as format epub and its file is still served", bk.get("format") == "epub" and st3 == 200
               and body == epub and hd.get("Content-Type") == "application/epub+zip", f"{bk} {st3}")
+        db = sqlite3.connect(tmp2 / "old.sqlite")
+        row = db.execute("SELECT source, search_key FROM books WHERE id = ?", (bid,)).fetchone()
+        idx = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        db.close()
+        check("migration 8: existing book gets source 'app' and an empty search_key; indexes created", row == ("app", "")
+              and {"books_created", "books_format", "catalog_status", "catalog_category", "user_books_book"} <= idx, f"{row} {idx}")
+        st, r = a.call("GET", "admin-books", query="&q=" + urllib.parse.quote("قديمي"))
+        db = sqlite3.connect(tmp2 / "old.sqlite")
+        key = db.execute("SELECT search_key FROM books WHERE id = ?", (bid,)).fetchone()[0]
+        db.close()
+        check("migration 8: admin-books backfills the old row's search_key and finds it", st == 200 and [b["id"] for b in r.get("books", [])] == [bid]
+              and key == "قدیمی", f"{st} {str(r)[:200]} {key!r}")
     finally:
         proc.terminate(); proc.wait(5); shutil.rmtree(tmp2, ignore_errors=True)
+
+def tiny_epub(path, n):
+    """The smallest EPUB validate_epub accepts (mimetype + container.xml), unique per n."""
+    import zipfile
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+        z.writestr("c.xhtml", f"<p>{n}</p>" + "x" * (n * 37 % 500))  # sizes differ, for sort=size
+    return path
+
+def search_norm_py(s):
+    """Python twin of search_norm() in lib/books.php (and the client's library search folding)."""
+    import re
+    s = s.translate(str.maketrans({"ي": "ی", "ى": "ی", "ك": "ک", **{d: str(i % 10) for i, d in enumerate("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩")}}))
+    s = re.sub("[​-‏‪-‮⁦-⁩﻿ـً-ٰٟ]", "", s).lower()
+    return re.sub(r"\s+", " ", s).strip()
+
+def run_large_catalog():
+    """Migration 8: admin-books (paging, filters, normalised search, sort, facets), admin-bulk, catalog paging, source,
+    search_key maintenance and backfill — on a fresh database with ~130 books so every count is exact."""
+    import sqlite3
+    tmp3 = Path(tempfile.mkdtemp(prefix="borg-large-"))
+    dbfile = tmp3 / "large.sqlite"
+    proc, base = start_php(tmp3, dsn=f"sqlite:{dbfile}")
+    Q = urllib.parse.quote
+    PNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    try:
+        admin, user = Client(base), Client(base)
+        st, r = admin.call("POST", "setup", {"setup_key": SETUP_KEY, "email": "la@x.io", "password": "password1", "name": "مدیر بزرگ"})
+        A = r["user"]["id"]
+        code = admin.call("POST", "invites", {"note": "large"})[1]["code"]
+        st, r = user.call("POST", "register", {"invite": code, "email": "lu@x.io", "password": "password2", "name": "کاربر بزرگ"})
+        U = r["user"]["id"]
+        names = {A: "مدیر بزرگ", U: "کاربر بزرگ"}
+
+        # ---- ~120 books through the normal upload flow; M = the expected state of every book ----
+        M = {}
+        cats = ["رمان", "شعر", "تاریخ"]
+        special = {1: ("كتاب‌هاي قديمي ۱۲۳", None), 2: ("دیوان", "حافظ"), 3: ("Hello WORLD Book", None), 4: ("تخفیف 50% ویژه", None),
+                   6: ("a_b test", None), 7: ("axb test", None), 8: ("کِتابِ مُعرَّب", None), 9: ("سال ٢٠٢٤", None)}
+        t0 = time.time()
+        for i in range(120):
+            by = U if i % 3 == 0 else A
+            c = user if by == U else admin
+            pdf = i % 12 == 5
+            title = f"کتاب نمونه {i:03d}"; author = ["حافظ", "سعدی", "مولوی", "فردوسی"][i % 4]; publisher = ["نشر الف", "نشر ب", "نشر ج"][i % 3]
+            if i in special: title, author = special[i][0], special[i][1] or author
+            if pdf:
+                p = tmp3 / f"b{i}.pdf"; p.write_bytes(make_pdf(f"Large {i}"))
+            else:
+                p = tiny_epub(tmp3 / f"b{i}.epub", i)
+            st, r = upload(c, p, title, author, cover=PNG if i % 4 == 1 else None,
+                           init_extra={"publisher": publisher, **({"format": "pdf"} if pdf else {})})
+            if st != 201: check(f"large: upload {i}", False, str(r)[:200]); continue
+            b = r["book"]
+            M[b["id"]] = {"title": title, "author": author, "publisher": publisher, "format": "pdf" if pdf else "epub", "by": by,
+                          "api": False, "cover": b["has_cover"], "size": b["size"], "status": None, "category": "", "lib": {by}}
+            bid = b["id"]
+            if by == A and i % 5 != 0:
+                cat = "" if i % 7 == 0 else cats[i % 3]
+                admin.call("POST", "catalog-submit", {"book_id": bid, "category": cat})
+                M[bid].update(status="approved", category=cat)
+            elif by == U and i % 2 == 0:
+                cat = "رمان" if i % 4 == 0 else ""
+                user.call("POST", "catalog-submit", {"book_id": bid, "category": cat})
+                M[bid].update(status="pending", category=cat)
+                if i % 9 == 0:
+                    admin.call("POST", "catalog-review", {"book_id": bid, "approve": False})
+                    M[bid]["status"] = "rejected"
+        check("large: 120 books uploaded through the normal flow", len(M) == 120, f"{len(M)} in {time.time() - t0:.1f}s")
+        # three books from the owner's program (api-book) -> source 'api'
+        tok = admin.call("POST", "api-token-create", {"name": "large"})[1]["token"]
+        api_ids = []
+        for k in range(3):
+            st, r = api_book(base, tok, fields={"title": f"کتاب برنامه {k}", "author": "ربات", "category": "مجله"},
+                             file=(f"api{k}.epub", tiny_epub(tmp3 / f"api{k}.epub", 1000 + k).read_bytes()))
+            if st == 201:
+                api_ids.append(r["book"]["id"])
+                M[r["book"]["id"]] = {"title": f"کتاب برنامه {k}", "author": "ربات", "publisher": "", "format": "epub", "by": A, "api": True,
+                                      "cover": False, "size": r["book"]["size"], "status": "approved", "category": "مجله", "lib": set()}
+        check("large: api-book uploads accepted", len(api_ids) == 3)
+        sid = {i: next(b for b, m in M.items() if m["title"] == special[i][0]) for i in special}
+
+        def listing(query="", c=None):
+            """All pages of admin-books for a query string (per=100)."""
+            out, page, tot = [], 1, None
+            while True:
+                st, r = (c or admin).call("GET", "admin-books", query=f"{query}&per=100&page={page}")
+                if st != 200: return st, r, []
+                out += r["books"]; tot = r["total"]
+                if len(r["books"]) < 100: break
+                page += 1
+            return st, {"total": tot, "facets": r["facets"]}, out
+        def ids(query=""):
+            st, r, rows = listing(query)
+            return [b["id"] for b in rows] if st == 200 else ("error", st, r)
+        def expect(pred, q=""):
+            words = [w for w in search_norm_py(q).split(" ") if w]
+            return {b for b, m in M.items() if pred(m) and all(w in search_norm_py(f"{m['title']} {m['author']} {m['publisher']}") for w in words)}
+
+        # ---- response shape, paging, per cap ----
+        st, r = admin.call("GET", "admin-books")
+        b0 = (r.get("books") or [{}])[0]
+        check("admin-books: default page 1, per 50, total = all books", st == 200 and r["page"] == 1 and r["per"] == 50 and r["total"] == len(M)
+              and len(r["books"]) == 50, str({k: r.get(k) for k in ("page", "per", "total")}))
+        check("admin-books: book fields", set(b0) >= {"id", "sha256", "size", "title", "author", "language", "publisher", "published", "has_cover", "format",
+              "catalog_status", "category", "description", "submitter", "uploader_id", "uploader_name", "created_at", "source", "in_libraries"}, str(sorted(b0)))
+        seen = []
+        for page in range(1, 20):
+            st, r = admin.call("GET", "admin-books", query=f"&per=7&page={page}")
+            seen += [b["id"] for b in r["books"]]
+            if not r["books"]: break
+        check("admin-books: pages of 7 cover every book exactly once", sorted(seen) == sorted(M) and r["total"] == len(M) and r["page"] == page, f"{len(seen)} {len(set(seen))}")
+        st, r = admin.call("GET", "admin-books", query="&per=500")
+        check("admin-books: per capped at 100", st == 200 and r["per"] == 100 and len(r["books"]) == 100)
+        st, r = admin.call("GET", "admin-books", query="&per=0&page=-3")
+        check("admin-books: per/page below 1 -> 1", st == 200 and r["per"] == 1 and r["page"] == 1 and len(r["books"]) == 1)
+        st, r = admin.call("GET", "admin-books", query="&page=99999999999999999999")
+        check("admin-books: huge page clamped (no 500)", st == 200 and r["page"] == 100000 and r["books"] == [], str(r)[:200])
+
+        # ---- filters ----
+        for name, query, pred in [
+            ("status=approved", "&status=approved", lambda m: m["status"] == "approved"),
+            ("status=pending", "&status=pending", lambda m: m["status"] == "pending"),
+            ("status=rejected", "&status=rejected", lambda m: m["status"] == "rejected"),
+            ("status=none", "&status=none", lambda m: m["status"] is None),
+            ("category=شعر", "&category=" + Q("شعر"), lambda m: m["status"] and m["category"] == "شعر"),
+            ("category=__none__", "&category=__none__", lambda m: m["category"] == ""),
+            ("format=pdf", "&format=pdf", lambda m: m["format"] == "pdf"),
+            ("format=epub", "&format=epub", lambda m: m["format"] == "epub"),
+            ("uploader=user", f"&uploader={U}", lambda m: m["by"] == U and not m["api"]),
+            ("uploader=admin (app uploads only)", f"&uploader={A}", lambda m: m["by"] == A and not m["api"]),
+            ("uploader=api", "&uploader=api", lambda m: m["api"]),
+            ("no_cover=1", "&no_cover=1", lambda m: not m["cover"]),
+            ("combined status+format+uploader", f"&status=approved&format=pdf&uploader={A}", lambda m: m["status"] == "approved" and m["format"] == "pdf" and not m["api"]),
+        ]:
+            got = ids(query); want = expect(pred)
+            check(f"admin-books filter {name}", isinstance(got, list) and sorted(got) == sorted(want) and len(want) > 0, f"{len(got) if isinstance(got, list) else got} vs {len(want)}")
+        codes = [admin.call("GET", "admin-books", query=qq)[0] for qq in ("&status=x", "&format=mobi", "&uploader=bob", "&sort=x", "&dir=up", "&category=" + "x" * 81)]
+        check("admin-books: bad status/format/uploader/sort/dir/category -> 400", codes == [400] * 6, str(codes))
+
+        # ---- normalised Persian search (all words, LIKE on search_key) ----
+        for q, want in [("کتابهای قدیمی 123", {sid[1]}), ("قديمي", {sid[1]}), ("۱۲۳", {sid[1]}), ("کتاب‌ها", {sid[1]}), ("كتابهاي", {sid[1]}),
+                        ("hello world", {sid[3]}), ("HELLO", {sid[3]}), ("50%", {sid[4]}), ("%", {sid[4]}), ("a_b", {sid[6]}),
+                        ("کتاب معرب", {sid[8]}), ("2024", {sid[9]}), ("۲۰۲۴", {sid[9]}), ("حافظ دیوان", {sid[2]}), ("دیوان ناموجود", set()),
+                        ("  دیـــوان  ", {sid[2]})]:
+            got = ids("&q=" + Q(q))
+            check(f"admin-books search {q!r}", isinstance(got, list) and set(got) == want and len(got) == len(want), f"{got}")
+        for q in ["نمونه 01", "نشر ج", "سعدی نشر", "ربات"]:
+            got = ids("&q=" + Q(q)); want = expect(lambda m: True, q)
+            check(f"admin-books search {q!r} matches the model", isinstance(got, list) and sorted(got) == sorted(want) and want, f"{len(got)} vs {len(want)}")
+
+        # ---- sort orders ----
+        st, r, rows = listing("&sort=date")
+        check("sort=date (default desc): newest first, id breaks ties", [(b["created_at"], b["id"]) for b in rows] == sorted([(b["created_at"], b["id"]) for b in rows], reverse=True))
+        st, r, rows = listing("&sort=date&dir=asc")
+        check("sort=date&dir=asc", [b["id"] for b in rows] == sorted([b["id"] for b in rows]))
+        st, r, rows = listing("&sort=title")
+        check("sort=title (default asc)", [(b["title"], b["id"]) for b in rows] == sorted((b["title"], b["id"]) for b in rows))
+        st, r, rows = listing("&sort=title&dir=desc")
+        check("sort=title&dir=desc", [(b["title"], b["id"]) for b in rows] == sorted(((b["title"], b["id"]) for b in rows), reverse=True))
+        st, r, rows = listing("&sort=size")
+        check("sort=size (default desc)", [(b["size"], b["id"]) for b in rows] == sorted(((b["size"], b["id"]) for b in rows), reverse=True))
+        rank = {"pending": 0, "approved": 1, "rejected": 2, None: 3}
+        st, r, rows = listing("&sort=status")
+        check("sort=status asc: pending, approved, rejected, not in catalog", [rank[b["catalog_status"]] for b in rows] == sorted(rank[b["catalog_status"]] for b in rows))
+        st, r, rows = listing("&sort=status&dir=desc")
+        check("sort=status desc", [rank[b["catalog_status"]] for b in rows] == sorted((rank[b["catalog_status"]] for b in rows), reverse=True))
+
+        # ---- row values ----
+        st, r, rows = listing()
+        R = {b["id"]: b for b in rows}
+        ok = all(R[b]["catalog_status"] == m["status"] and R[b]["category"] == m["category"] and R[b]["source"] == ("api" if m["api"] else "app")
+                 and R[b]["uploader_id"] == m["by"] and R[b]["uploader_name"] == names[m["by"]] and R[b]["in_libraries"] == len(m["lib"])
+                 and R[b]["format"] == m["format"] for b, m in M.items())
+        check("admin-books rows: status, category, source, uploader, in_libraries, format match", ok)
+        pend = next(b for b, m in M.items() if m["status"] == "pending")
+        check("admin-books rows: submitter of a user's submission", R[pend]["submitter"] == names[U] and R[next(b for b, m in M.items() if m["status"] is None)]["submitter"] is None)
+        user.call("POST", "catalog-add", {"book_id": api_ids[0]}); M[api_ids[0]]["lib"].add(U)
+        st, r, rows = listing("&uploader=api")
+        check("in_libraries counts user_books", {b["id"]: b["in_libraries"] for b in rows}.get(api_ids[0]) == 1)
+
+        # ---- facets (for q only) ----
+        def facets_ok(q=""):
+            st, r = admin.call("GET", "admin-books", query=("&q=" + Q(q) if q else "") + "&status=approved&format=pdf")  # other filters ignored
+            f = r["facets"]; sel = expect(lambda m: True, q)
+            want_status = {k: sum(1 for b in sel if (M[b]["status"] or "none") == k) for k in ("approved", "pending", "rejected", "none")}
+            cc = {}
+            for b in sel:
+                if M[b]["status"] and M[b]["category"]: cc[M[b]["category"]] = cc.get(M[b]["category"], 0) + 1
+            up = {}
+            for b in sel:
+                k = "api" if M[b]["api"] else M[b]["by"]; up[k] = up.get(k, 0) + 1
+            fm = {"epub": sum(1 for b in sel if M[b]["format"] == "epub"), "pdf": sum(1 for b in sel if M[b]["format"] == "pdf")}
+            got_up = {u["id"]: u["count"] for u in f["uploaders"]}
+            return (f["status"] == want_status and {c["name"]: c["count"] for c in f["categories"]} == cc and got_up == up and f["formats"] == fm
+                    and all(u["name"] == ("API" if u["id"] == "api" else names[u["id"]]) for u in f["uploaders"])
+                    and [c["count"] for c in f["categories"]] == sorted((c["count"] for c in f["categories"]), reverse=True)), f
+        ok, f = facets_ok()
+        check("facets: status, categories, uploaders (incl. api), formats for all books", ok, json.dumps(f, ensure_ascii=False)[:400])
+        ok, f = facets_ok("حافظ")
+        check("facets follow q", ok and sum(f["status"].values()) == len(expect(lambda m: True, "حافظ")), json.dumps(f, ensure_ascii=False)[:400])
+
+        # ---- search_key follows metadata edits ----
+        x = next(b for b, m in M.items() if m["by"] == A and m["status"] == "approved" and not m["api"])
+        old_title = M[x]["title"]
+        admin.call("POST", "book-meta", {"book_id": x, "title": "عنوان تازه‌ي ويرايش"})
+        M[x]["title"] = "عنوان تازه‌ي ويرايش"
+        check("search_key updated by book-meta", ids("&q=" + Q("تازهی ویرایش")) == [x] and x not in ids("&q=" + Q(old_title)))
+        admin.call("POST", "catalog-update", {"book_id": x, "author": "نویسندهٔ يكتا", "publisher": "ناشر يكتا"})
+        M[x]["author"] = "نویسندهٔ يكتا"; M[x]["publisher"] = "ناشر يكتا"
+        check("search_key updated by catalog-update (author, publisher)", ids("&q=" + Q("یکتا ناشر")) == [x])
+        st, r = upload(admin, tiny_epub(tmp3 / "replace.epub", 5000), "بدون عنوان")
+        nb = r["book"]["id"]
+        st, r = admin.call("POST", "book-replace", {"old_book_id": x, "new_book_id": nb})
+        M[nb] = dict(M.pop(x), size=r["book"]["size"], cover=r["book"]["has_cover"])
+        check("search_key updated by book-replace metadata copy", st == 200 and ids("&q=" + Q("یکتا ناشر")) == [nb], str(r)[:200])
+
+        # ---- admin-bulk: permissions and validation ----
+        codes = [user.call("GET", "admin-books")[0], user.call("POST", "admin-bulk", {"action": "approve", "ids": [1]})[0],
+                 Client(base).call("GET", "admin-books")[0], admin.call("POST", "admin-bulk", {"action": "approve", "ids": [1]}, csrf=False)[0],
+                 admin.call("GET", "admin-bulk")[0]]
+        check("non-admin 403, anonymous 401, missing CSRF 403, GET admin-bulk 405", codes == [403, 403, 401, 403, 405], str(codes))
+        bad = [admin.call("POST", "admin-bulk", b) for b in (
+            {"action": "explode", "ids": [1]}, {"action": "approve"}, {"action": "approve", "ids": "1,2"}, {"action": "approve", "ids": [1, "x"]},
+            {"action": "approve", "ids": [0]}, {"action": "set_category", "ids": [1]}, {"action": "set_category", "ids": [1], "category": "x" * 81},
+            {"action": "approve", "filter": {"status": "nope"}})]
+        check("admin-bulk validation -> 400", [s for s, _ in bad] == [400] * 8 and [r["error"] for _, r in bad] ==
+              ["bad_action", "missing_target", "bad_ids", "bad_ids", "bad_ids", "missing_category", "too_long_category", "bad_status"], str([r.get("error") for _, r in bad]))
+        st, r = admin.call("POST", "admin-bulk", {"action": "delete", "ids": list(range(1, 5002))})
+        check("admin-bulk: more than 5000 ids -> 400 too_many, nothing deleted", st == 400 and r.get("error") == "too_many" and len(ids()) == len(M), str(r))
+        st, r = admin.call("POST", "admin-bulk", {"action": "approve", "ids": list(range(10 ** 6, 10 ** 6 + 5000))})
+        check("admin-bulk: exactly 5000 ids accepted (unknown ids skipped)", st == 200 and r == {"affected": 0, "skipped": 5000}, str(r))
+
+        def state_ok():
+            st, r, rows = listing()
+            got = {b["id"]: (b["catalog_status"], b["category"]) for b in rows}
+            want = {b: (m["status"], m["category"] if m["status"] else "") for b, m in M.items()}
+            return got == want
+        def bulk(body):
+            return admin.call("POST", "admin-bulk", body)
+        def pick(pred, n):
+            return [b for b, m in sorted(M.items()) if pred(m)][:n]
+
+        # ---- admin-bulk by ids ----
+        pending, approved, none_ = pick(lambda m: m["status"] == "pending", 3), pick(lambda m: m["status"] == "approved" and not m["api"], 2), pick(lambda m: m["status"] is None, 1)
+        st, r = bulk({"action": "approve", "ids": pending + approved + none_ + [999999], "filter": {"status": "none"}})
+        for b in pending: M[b]["status"] = "approved"
+        check("bulk ids approve: pending -> approved; approved/none/unknown skipped (ids win over filter)", r == {"affected": 3, "skipped": 4} and state_ok(), str(r))
+        st, r = admin.call("GET", "catalog-pending")
+        check("bulk approve sets reviewed status (catalog-pending shrinks)", all(b not in [x["id"] for x in r["books"]] for b in pending))
+        st, r = bulk({"action": "reject", "ids": approved + [str(approved[0])]})
+        for b in approved: M[b]["status"] = "rejected"
+        check("bulk ids reject (string ids accepted, duplicates once)", r == {"affected": 2, "skipped": 0} and state_ok(), str(r))
+        tgt = pick(lambda m: m["status"] == "approved" and m["category"] != "علمی" and not m["api"], 3) + pick(lambda m: m["status"] is None, 1)
+        st, r = bulk({"action": "set_category", "ids": tgt, "category": " علمی "})
+        for b in tgt[:3]: M[b]["category"] = "علمی"
+        check("bulk ids set_category (trimmed; book not in catalog skipped)", r == {"affected": 3, "skipped": 1} and state_ok(), str(r))
+        st, r = bulk({"action": "set_category", "ids": tgt, "category": "علمی"})
+        check("bulk set_category again: unchanged rows skipped", r == {"affected": 0, "skipped": 4}, str(r))
+        st, r = bulk({"action": "clear_category", "ids": tgt})
+        for b in tgt[:3]: M[b]["category"] = ""
+        check("bulk ids clear_category", r == {"affected": 3, "skipped": 1} and state_ok(), str(r))
+        rm = pick(lambda m: m["status"] == "approved" and not m["api"], 2)
+        st, r = bulk({"action": "remove_catalog", "ids": rm + [api_ids[1]]})
+        for b in rm: M[b].update(status=None, category="")
+        api_gone = M.pop(api_ids[1])
+        st2, _ = admin.call("GET", "book-file", query=f"&id={api_ids[1]}")
+        check("bulk ids remove_catalog: rows removed; a book in no library is garbage-collected", r == {"affected": 3, "skipped": 0} and state_ok() and st2 == 404, str(r))
+        st, f = admin.call("GET", "book-file", query=f"&id={rm[0]}")
+        check("bulk remove_catalog keeps a book that is still in a library", st == 200)
+        add = pick(lambda m: m["status"] is None, 3) + pick(lambda m: m["status"] == "pending", 1)
+        st, r = bulk({"action": "add_catalog", "ids": add})
+        for b in add[:3]: M[b].update(status="approved", category="")
+        check("bulk ids add_catalog: approved rows for books not in the catalog only", r == {"affected": 3, "skipped": 1} and state_ok(), str(r))
+        st, rr, rows = listing("&status=approved")
+        check("bulk add_catalog: submitter is the admin", all(b["submitter"] == names[A] for b in rows if b["id"] in add[:3]))
+        dl = pick(lambda m: m["by"] == U and m["status"] == "pending", 1) + pick(lambda m: m["by"] == A and m["status"] is None, 1)
+        st, r = bulk({"action": "delete", "ids": dl + [999998]})
+        for b in dl: M.pop(b)
+        L = [b["id"] for b in user.call("GET", "library")[1]["books"]]
+        st2, _ = admin.call("GET", "book-file", query=f"&id={dl[0]}")
+        check("bulk ids delete: books gone everywhere (unknown id skipped)", r == {"affected": 2, "skipped": 1} and state_ok() and dl[0] not in L and st2 == 404, str(r))
+
+        # ---- admin-bulk by filter ----
+        n_pend = len(expect(lambda m: m["status"] == "pending"))
+        st, r = bulk({"action": "approve", "filter": {"status": "pending"}})
+        for m in M.values():
+            if m["status"] == "pending": m["status"] = "approved"
+        st2, rr = admin.call("GET", "admin-books")
+        check("bulk filter approve status=pending", r == {"affected": n_pend, "skipped": 0} and n_pend > 0 and rr["facets"]["status"]["pending"] == 0 and state_ok(), str(r))
+        sel = expect(lambda m: m["status"] == "rejected")
+        st, r = bulk({"action": "reject", "filter": {"status": "rejected"}})
+        check("bulk filter reject on already rejected: all skipped", r == {"affected": 0, "skipped": len(sel)}, str(r))
+        sel = expect(lambda m: m["status"] == "approved" and m["category"] == "شعر")
+        st, r = bulk({"action": "set_category", "filter": {"status": "approved", "category": "شعر"}, "category": "شعر کلاسیک"})
+        for b in sel: M[b]["category"] = "شعر کلاسیک"
+        check("bulk filter set_category (status+category)", r == {"affected": len(sel), "skipped": 0} and len(sel) > 0 and state_ok(), str(r))
+        sel = expect(lambda m: m["status"] and m["category"] == "تاریخ", "حافظ")
+        st, r = bulk({"action": "clear_category", "filter": {"q": "حافظ", "category": "تاریخ"}})
+        for b in sel: M[b]["category"] = ""
+        check("bulk filter clear_category (q+category)", r == {"affected": len(sel), "skipped": 0} and len(sel) > 0 and state_ok(), str(r))
+        sel = expect(lambda m: m["format"] == "pdf" and m["status"] is not None)
+        alls = expect(lambda m: m["format"] == "pdf")
+        st, r = bulk({"action": "remove_catalog", "filter": {"format": "pdf"}})
+        for b in sel: M[b].update(status=None, category="")
+        check("bulk filter remove_catalog format=pdf", r == {"affected": len(sel), "skipped": len(alls) - len(sel)} and len(sel) > 0 and state_ok(), str(r))
+        sel = expect(lambda m: m["status"] is None and m["format"] == "pdf")
+        st, r = bulk({"action": "add_catalog", "filter": {"status": "none", "format": "pdf"}})
+        for b in sel: M[b].update(status="approved", category="")
+        check("bulk filter add_catalog status=none&format=pdf", r == {"affected": len(sel), "skipped": 0} and len(sel) > 0 and state_ok(), str(r))
+        sel = expect(lambda m: m["by"] == U and not m["api"] and m["status"] == "rejected")
+        st, r = bulk({"action": "delete", "filter": {"uploader": str(U), "status": "rejected"}})
+        for b in sel: M.pop(b)
+        check("bulk filter delete uploader+status", r == {"affected": len(sel), "skipped": 0} and len(sel) > 0 and state_ok(), str(r))
+
+        # ---- catalog paging (user) ----
+        appr = expect(lambda m: m["status"] == "approved")
+        st, r = user.call("GET", "catalog")
+        check("catalog without page: unchanged full response", st == 200 and set(r) == {"books"} and sorted(b["id"] for b in r["books"]) == sorted(appr)
+              and set(r["books"][0]) == {"id", "sha256", "size", "title", "author", "language", "publisher", "published", "has_cover", "format",
+                                         "description", "category", "submitter", "in_library"}, str(sorted(r.get("books", [{}])[0]))[:300])
+        full_new = [b["id"] for b in r["books"]]
+        st, r = user.call("GET", "catalog", query="&page=1&per=5")
+        check("catalog page: total, page, per, same book fields", st == 200 and r["total"] == len(appr) and r["page"] == 1 and r["per"] == 5
+              and len(r["books"]) == 5 and set(r["books"][0]) == {"id", "sha256", "size", "title", "author", "language", "publisher", "published",
+              "has_cover", "format", "description", "category", "submitter", "in_library"}, str({k: r.get(k) for k in ("total", "page", "per")}))
+        st, r = user.call("GET", "catalog", query="&page=1")
+        check("catalog page: per defaults to 24", r["per"] == 24 and len(r["books"]) == min(24, len(appr)))
+        st, r = user.call("GET", "catalog", query="&page=1&per=1000")
+        check("catalog page: per capped at 60", r["per"] == 60 and len(r["books"]) == min(60, len(appr)))
+        got = []
+        for page in range(1, 20):
+            st, r = user.call("GET", "catalog", query=f"&page={page}&per=24")
+            got += [b["id"] for b in r["books"]]
+            if len(r["books"]) < 24: break
+        check("catalog pages (sort=new) cover the unpaged list exactly once", sorted(got) == sorted(full_new) and len(set(got)) == len(got), f"{len(got)} vs {len(full_new)}")
+        def cat_all(query):
+            out = []
+            for page in range(1, 20):
+                st, r = user.call("GET", "catalog", query=f"{query}&page={page}&per=60")
+                if st != 200: return ("error", st, r)
+                out += r["books"]
+                if len(r["books"]) < 60: break
+            return out
+        rows = cat_all("&sort=title")
+        check("catalog sort=title", [(b["title"], b["id"]) for b in rows] == sorted((b["title"], b["id"]) for b in rows) and len(rows) == len(appr))
+        rows = cat_all("&sort=author")
+        check("catalog sort=author", [(b["author"], b["title"], b["id"]) for b in rows] == sorted((b["author"], b["title"], b["id"]) for b in rows))
+        check("catalog page: in_library per user", all(b["in_library"] == (U in M[b["id"]]["lib"]) for b in rows) and any(b["in_library"] for b in rows))
+        for name, query, pred, q in [
+            ("category", "&category=" + Q("رمان"), lambda m: m["category"] == "رمان", ""),
+            ("author", "&author=" + Q("سعدی"), lambda m: m["author"] == "سعدی", ""),
+            ("format", "&format=pdf", lambda m: m["format"] == "pdf", ""),
+            ("q", "&q=" + Q("كتاب نمونه 1"), lambda m: True, "كتاب نمونه 1"),
+            ("q+category+format", "&q=" + Q("نمونه") + "&category=" + Q("رمان") + "&format=epub", lambda m: m["category"] == "رمان" and m["format"] == "epub", "نمونه"),
+        ]:
+            rows = cat_all(query); want = expect(lambda m: m["status"] == "approved" and pred(m), q)
+            check(f"catalog page filter {name}", isinstance(rows, list) and sorted(b["id"] for b in rows) == sorted(want) and want, f"{len(rows)} vs {len(want)}")
+        st, r = user.call("GET", "catalog", query="&page=1&q=" + Q("حافظ"))
+        cc = {}
+        for b in expect(lambda m: m["status"] == "approved" and m["category"], "حافظ"): cc[M[b]["category"]] = cc.get(M[b]["category"], 0) + 1
+        check("catalog page: categories (approved, for q)", {c["name"]: c["count"] for c in r["categories"]} == cc and cc, str(r.get("categories"))[:300])
+        st, r = user.call("GET", "catalog", query="&page=99")
+        check("catalog page past the end: empty list, real total", st == 200 and r["books"] == [] and r["total"] == len(appr))
+        codes = [user.call("GET", "catalog", query=qq)[0] for qq in ("&page=1&sort=x", "&page=1&format=x")]
+        check("catalog page: bad sort/format -> 400", codes == [400, 400], str(codes))
+
+        # ---- search_key backfill: rows written with an empty key (e.g. before migration 8), 500 per request ----
+        db = sqlite3.connect(dbfile)
+        now = int(time.time())
+        db.executemany("INSERT INTO books (sha256, size, title, author, language, has_cover, uploaded_by, created_at) VALUES (?, 1, ?, 'نويسندهٔ قديم', '', 0, ?, ?)",
+                       [(hashlib.sha256(f"bf{k}".encode()).hexdigest(), f"پر شدنی {k}", A, now) for k in range(600)])
+        db.commit()
+        empty0 = db.execute("SELECT COUNT(*) FROM books WHERE search_key = ''").fetchone()[0]
+        db.close()
+        st, r = admin.call("GET", "admin-books", query="&q=" + Q("نویسندهٔ قدیم") + "&per=1")
+        db = sqlite3.connect(dbfile)
+        empty1 = db.execute("SELECT COUNT(*) FROM books WHERE search_key = ''").fetchone()[0]
+        db.close()
+        check("backfill: one request fills 500 empty keys", empty0 == 600 and empty1 == 100 and r["total"] == 500, f"{empty0} {empty1} {r.get('total')}")
+        st, r = user.call("GET", "catalog", query="&page=1")
+        db = sqlite3.connect(dbfile)
+        empty2 = db.execute("SELECT COUNT(*) FROM books WHERE search_key = ''").fetchone()[0]
+        key = db.execute("SELECT search_key FROM books WHERE title = 'پر شدنی 7'").fetchone()[0]
+        db.close()
+        check("backfill: catalog requests fill the rest; key is normalised", empty2 == 0 and key == "پر شدنی 7 نویسنده قدیم", f"{empty2} {key!r}")
+        st, r = bulk({"action": "delete", "filter": {"q": "پر شدنی"}})
+        check("bulk filter delete of 600 rows (no files on disk)", r == {"affected": 600, "skipped": 0} and len(ids()) == len(M), str(r))
+    finally:
+        proc.terminate(); proc.wait(5); shutil.rmtree(tmp3, ignore_errors=True)
 
 def _texts(node):
     out = []
@@ -1010,6 +1416,7 @@ def run(base, tmp):
     run_api_books(base, tmp, admin, user)
     run_pdfs(base, tmp, admin, user)
     run_migration7()
+    run_large_catalog()
 
     st, r = anon.call("GET", "nope")
     check("unknown route 404", st == 404)

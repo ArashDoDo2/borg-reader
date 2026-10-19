@@ -161,7 +161,7 @@ function handle_api_route(string $route): bool {
                     $meta['format'] = $format;
                     if (!rename($work, book_path($sha, $format))) fail(500, 'storage', 'Could not store the file.');
                     try {
-                        $book = insert_book($sha, $size, $meta, $owner);
+                        $book = insert_book($sha, $size, $meta, $owner, 'api');
                     } catch (PDOException $e) { // the same file stored by a parallel request
                         $book = one('SELECT * FROM books WHERE sha256 = ?', [$sha]);
                         if (!$book) throw $e;

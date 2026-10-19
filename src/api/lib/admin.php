@@ -21,6 +21,208 @@ function delete_book_everywhere(int $bookId): void {
     gc_book($bookId);
 }
 
+// ---------- Admin book list and bulk actions (migration 8) ----------
+const ADMIN_BULK_MAX = 5000;      // books affected by one admin-bulk call
+const ADMIN_BULK_ACTIONS = ['approve', 'reject', 'set_category', 'clear_category', 'remove_catalog', 'add_catalog', 'delete'];
+
+/**
+ * WHERE parts for admin-books / admin-bulk filters over `books b LEFT JOIN catalog c`. Returns [where, args, qWhere,
+ * qArgs] where q* is the search alone (used for facets). Unknown enum values → 400.
+ */
+function admin_books_filter(array $p): array {
+    [$where, $args] = search_where(scalar_param($p, 'q'));
+    [$qWhere, $qArgs] = [$where, $args];
+    $status = scalar_param($p, 'status') ?: 'any';
+    if (!in_array($status, ['any', 'approved', 'pending', 'rejected', 'none'], true)) fail(400, 'bad_status', 'status must be any, approved, pending, rejected or none.');
+    if ($status === 'none') $where[] = 'c.book_id IS NULL';
+    elseif ($status !== 'any') { $where[] = 'c.status = ?'; $args[] = $status; }
+    $category = scalar_param($p, 'category');
+    if ($category === '__none__') $where[] = "(c.category IS NULL OR c.category = '')";
+    elseif ($category !== '') {
+        if (mb_strlen($category) > 80) fail(400, 'too_long_category', "Field 'category' is too long.");
+        $where[] = 'c.category = ?'; $args[] = $category;
+    }
+    $format = scalar_param($p, 'format');
+    if ($format !== '') {
+        if (!in_array($format, ['epub', 'pdf'], true)) fail(400, 'bad_format', 'format must be "epub" or "pdf".');
+        $where[] = 'b.format = ?'; $args[] = $format;
+    }
+    // uploader: "api" = api-book uploads; a user id = that user's uploads through the app (api uploads excluded,
+    // matching the uploaders facet).
+    $uploader = scalar_param($p, 'uploader');
+    if ($uploader === 'api') $where[] = "b.source = 'api'";
+    elseif ($uploader !== '') {
+        if (!ctype_digit($uploader)) fail(400, 'bad_uploader', 'uploader must be a user id or "api".');
+        $where[] = "b.uploaded_by = ? AND b.source <> 'api'"; $args[] = (int)$uploader;
+    }
+    if (!empty($p['no_cover']) && scalar_param($p, 'no_cover') !== '0') $where[] = 'b.has_cover = 0';
+    return [$where, $args, $qWhere, $qArgs];
+}
+function where_sql(array $where): string { return $where ? 'WHERE ' . implode(' AND ', $where) : ''; }
+
+function admin_books_list(array $p): array {
+    [$where, $args, $qWhere, $qArgs] = admin_books_filter($p);
+    $per = page_param($p, 'per', 50, 100);
+    $page = page_param($p, 'page', 1, 100000);
+    $sort = scalar_param($p, 'sort') ?: 'date';
+    $dir = scalar_param($p, 'dir') ?: (in_array($sort, ['title', 'status'], true) ? 'asc' : 'desc');
+    if (!in_array($dir, ['asc', 'desc'], true)) fail(400, 'bad_dir', 'dir must be asc or desc.');
+    $d = strtoupper($dir);
+    $order = match ($sort) {
+        'date' => "b.created_at $d, b.id $d",
+        'title' => "b.title $d, b.id $d",
+        'size' => "b.size $d, b.id $d",
+        // pending, approved, rejected, not in catalog; newest first within a status
+        'status' => "CASE c.status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 WHEN 'rejected' THEN 2 ELSE 3 END $d, b.created_at DESC, b.id DESC",
+        default => fail(400, 'bad_sort', 'sort must be date, title, size or status.'),
+    };
+    $from = 'FROM books b LEFT JOIN catalog c ON c.book_id = b.id';
+    $w = where_sql($where);
+    $total = (int)one("SELECT COUNT(*) AS n $from $w", $args)['n'];
+    $off = ($page - 1) * $per;
+    $rows = all("SELECT b.*, c.status AS catalog_status, c.category, c.description, su.display_name AS submitter, u.display_name AS uploader_name
+                 $from LEFT JOIN users u ON u.id = b.uploaded_by LEFT JOIN users su ON su.id = c.submitted_by
+                 $w ORDER BY $order LIMIT $per OFFSET $off", $args);
+    $readers = [];
+    if ($rows) {
+        $ids = array_map(fn($r) => (int)$r['id'], $rows);
+        foreach (all('SELECT book_id, COUNT(*) AS n FROM user_books WHERE book_id IN (' . placeholders(count($ids)) . ') GROUP BY book_id', $ids) as $r) {
+            $readers[(int)$r['book_id']] = (int)$r['n'];
+        }
+    }
+    // Facets: for the search (q) only, other filters ignored.
+    $qw = where_sql($qWhere);
+    $status = ['approved' => 0, 'pending' => 0, 'rejected' => 0, 'none' => 0];
+    foreach (all("SELECT c.status AS s, COUNT(*) AS n $from $qw GROUP BY c.status", $qArgs) as $r) {
+        $k = $r['s'] === null ? 'none' : (string)$r['s'];
+        if (isset($status[$k])) $status[$k] += (int)$r['n'];
+    }
+    $cats = all("SELECT c.category AS name, COUNT(*) AS n $from " . where_sql(array_merge($qWhere, ["c.category <> ''"]))
+                . ' GROUP BY c.category ORDER BY n DESC, c.category ASC LIMIT 100', $qArgs);
+    $up = [];
+    foreach (all("SELECT CASE WHEN b.source = 'api' THEN 1 ELSE 0 END AS api, b.uploaded_by AS uid, u.display_name AS name, COUNT(*) AS n
+                  FROM books b LEFT JOIN users u ON u.id = b.uploaded_by $qw GROUP BY CASE WHEN b.source = 'api' THEN 1 ELSE 0 END, b.uploaded_by, u.display_name", $qArgs) as $r) {
+        $key = (int)$r['api'] === 1 ? 'api' : (string)(int)$r['uid'];
+        if (!isset($up[$key])) $up[$key] = ['id' => $key === 'api' ? 'api' : (int)$r['uid'], 'name' => $key === 'api' ? 'API' : (string)($r['name'] ?? ''), 'count' => 0];
+        $up[$key]['count'] += (int)$r['n'];
+    }
+    $up = array_values($up);
+    usort($up, fn($a, $b) => $b['count'] <=> $a['count'] ?: strcmp((string)$a['id'], (string)$b['id']));
+    $formats = ['epub' => 0, 'pdf' => 0];
+    foreach (all("SELECT b.format AS f, COUNT(*) AS n FROM books b $qw GROUP BY b.format", $qArgs) as $r) {
+        $formats[$r['f'] === 'pdf' ? 'pdf' : 'epub'] += (int)$r['n'];
+    }
+    return [
+        'books' => array_map(fn($r) => book_out($r) + [
+            'catalog_status' => $r['catalog_status'], 'category' => (string)($r['category'] ?? ''), 'description' => (string)($r['description'] ?? ''),
+            'submitter' => $r['submitter'], 'uploader_id' => (int)$r['uploaded_by'], 'uploader_name' => $r['uploader_name'],
+            'created_at' => (int)$r['created_at'], 'source' => (string)$r['source'], 'in_libraries' => $readers[(int)$r['id']] ?? 0,
+        ], $rows),
+        'total' => $total, 'page' => $page, 'per' => $per,
+        'facets' => ['status' => $status, 'categories' => array_map(fn($r) => ['name' => (string)$r['name'], 'count' => (int)$r['n']], $cats),
+                     'uploaders' => $up, 'formats' => $formats],
+    ];
+}
+
+/** Run $fn(chunk, "?,?,…") over $ids in chunks of 500 (portable bound-parameter limits). */
+function in_chunks(array $ids, callable $fn): void {
+    foreach (array_chunk($ids, 500) as $chunk) $fn($chunk, placeholders(count($chunk)));
+}
+/** Inside a transaction: delete books rows among $ids that nothing references any more; returns their [id, sha256]. */
+function gc_books_rows(array $ids): array {
+    $gone = [];
+    in_chunks($ids, function ($chunk, $ph) use (&$gone) {
+        $rows = all("SELECT b.id, b.sha256 FROM books b WHERE b.id IN ($ph)
+                     AND NOT EXISTS (SELECT 1 FROM user_books ub WHERE ub.book_id = b.id)
+                     AND NOT EXISTS (SELECT 1 FROM catalog c WHERE c.book_id = b.id)", $chunk);
+        if (!$rows) return;
+        $del = array_map(fn($r) => (int)$r['id'], $rows);
+        q('DELETE FROM books WHERE id IN (' . placeholders(count($del)) . ')', $del);
+        foreach ($rows as $r) $gone[] = [(int)$r['id'], (string)$r['sha256']];
+    });
+    return $gone;
+}
+
+/** POST admin-bulk: one action on up to ADMIN_BULK_MAX books (ids or an admin-books filter), in one transaction. */
+function admin_bulk(array $d, int $adminId): array {
+    $action = scalar_param($d, 'action');
+    if (!in_array($action, ADMIN_BULK_ACTIONS, true)) fail(400, 'bad_action', 'Unknown action.');
+    $category = '';
+    if ($action === 'set_category') $category = str_param($d, 'category', 80);
+    if (array_key_exists('ids', $d)) {
+        $raw = $d['ids'];
+        if (!is_array($raw) || !array_is_list($raw)) fail(400, 'bad_ids', 'ids must be a list of book ids.');
+        if (count($raw) > ADMIN_BULK_MAX) fail(400, 'too_many', 'At most ' . ADMIN_BULK_MAX . ' books per call.');
+        $ids = [];
+        foreach ($raw as $v) {
+            if (!(is_int($v) || (is_string($v) && ctype_digit($v))) || (int)$v <= 0) fail(400, 'bad_ids', 'ids must be a list of book ids.');
+            $ids[(int)$v] = true;
+        }
+        $ids = array_keys($ids);
+    } elseif (isset($d['filter']) && is_array($d['filter'])) {
+        [$where, $args] = admin_books_filter($d['filter']);
+        $w = where_sql($where);
+        $n = (int)one("SELECT COUNT(*) AS n FROM books b LEFT JOIN catalog c ON c.book_id = b.id $w", $args)['n'];
+        if ($n > ADMIN_BULK_MAX) fail(400, 'too_many', "The filter matches $n books; at most " . ADMIN_BULK_MAX . ' per call.');
+        $ids = array_map('intval', array_column(all("SELECT b.id FROM books b LEFT JOIN catalog c ON c.book_id = b.id $w", $args), 'id'));
+    } else {
+        fail(400, 'missing_target', 'Give ids or filter.');
+    }
+    $requested = count($ids);
+    $affected = 0; $files = [];
+    $now = time();
+    db()->beginTransaction();
+    try {
+        $run = function (string $sql, array $before, array $after = []) use ($ids, &$affected) {
+            in_chunks($ids, function ($chunk, $ph) use ($sql, $before, $after, &$affected) {
+                $affected += q(str_replace('{IN}', $ph, $sql), array_merge($before, $chunk, $after))->rowCount();
+            });
+        };
+        switch ($action) {
+            case 'approve':
+            case 'reject':
+                $st = $action === 'approve' ? 'approved' : 'rejected';
+                $run('UPDATE catalog SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE book_id IN ({IN}) AND status <> ?', [$st, $adminId, $now], [$st]);
+                break;
+            case 'set_category':
+                $run('UPDATE catalog SET category = ? WHERE book_id IN ({IN}) AND category <> ?', [$category], [$category]);
+                break;
+            case 'clear_category':
+                $run("UPDATE catalog SET category = '' WHERE book_id IN ({IN}) AND category <> ''", []);
+                break;
+            case 'add_catalog':
+                in_chunks($ids, function ($chunk, $ph) use ($adminId, $now, &$affected) {
+                    $new = all("SELECT b.id FROM books b WHERE b.id IN ($ph) AND NOT EXISTS (SELECT 1 FROM catalog c WHERE c.book_id = b.id)", $chunk);
+                    foreach ($new as $r) {
+                        q('INSERT INTO catalog (book_id, status, description, category, submitted_by, submitted_at, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                          [(int)$r['id'], 'approved', '', '', $adminId, $now, $adminId, $now]);
+                        $affected++;
+                    }
+                });
+                break;
+            case 'remove_catalog':
+                $run('DELETE FROM catalog WHERE book_id IN ({IN})', []);
+                $files = gc_books_rows($ids);
+                break;
+            case 'delete': // book-delete semantics for each book
+                in_chunks($ids, function ($chunk, $ph) use (&$affected) {
+                    $affected += (int)one("SELECT COUNT(*) AS n FROM books WHERE id IN ($ph)", $chunk)['n'];
+                    foreach (['user_books', 'catalog', 'progress', 'annotations'] as $t) q("DELETE FROM $t WHERE book_id IN ($ph)", $chunk);
+                });
+                $files = gc_books_rows($ids);
+                break;
+        }
+        db()->commit();
+    } catch (Throwable $e) {
+        if (db()->inTransaction()) db()->rollBack();
+        throw $e;
+    }
+    foreach ($files as [$id, $sha]) { // files only after the rows are gone for good
+        @unlink(book_path($sha, 'epub')); @unlink(book_path($sha, 'pdf')); @unlink(cover_path($id));
+    }
+    return ['affected' => $affected, 'skipped' => $requested - $affected];
+}
+
 // ---------- v8.4 client error reports ----------
 /** Remove control chars, URL query strings/fragments, e-mails, token-like strings and secrets; trim to $max. */
 function scrub_report(string $s, int $max): string {
@@ -240,6 +442,17 @@ function handle_admin_route(string $route): bool {
             json_out(200, ['books' => array_map(fn($r) => book_out($r) + [
                 'uploader' => $r['uploader'], 'catalog_status' => $r['catalog_status'], 'readers' => (int)$r['readers'], 'created_at' => (int)$r['created_at'],
             ], $rows)]);
+
+        case 'admin-books':
+            method('GET');
+            require_admin();
+            backfill_search_keys();
+            json_out(200, admin_books_list($_GET));
+
+        case 'admin-bulk':
+            method('POST');
+            $s = require_admin(true);
+            json_out(200, admin_bulk(body_json(), (int)$s['id']));
 
         case 'book-delete':
             method('POST');

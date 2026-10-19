@@ -299,7 +299,7 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   library-remove upload-init upload-chunk upload-complete book-file book-cover book-meta book-replace progress annotations
   shelves stats catalog catalog-submit catalog-pending catalog-review catalog-remove catalog-add` (books.php);
   `admin-stats users user-update user-reset-password user-delete invite-revoke catalog-all catalog-update
-  books-all book-delete settings client-error errors errors-clear` (admin.php); `api-tokens api-token-create
+  books-all admin-books admin-bulk book-delete settings client-error errors errors-clear` (admin.php); `api-tokens api-token-create
   api-token-revoke clean-rules api-book` (apibook.php, v8.7; cleanup engine in clean.php).
 - **Config:** `/home/<user>/borg-config/config.php` (outside the web root; `BORG_CONFIG` overrides in tests):
   `db_dsn`, `db_user`, `db_pass`, `setup_key`, optional `storage_dir` (default `~/borg-storage`), `max_book_bytes`,
@@ -317,6 +317,10 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   (name, value TEXT) for settings too long for `settings.value` VARCHAR(500) — the cleanup rules live there as
   `clean_rules`.
   Migration 7 (PDF support) adds `books.format` VARCHAR(8) `NOT NULL DEFAULT 'epub'` (`epub`|`pdf`); existing rows are EPUBs.
+  Migration 8 (large catalogs, ~3k books/year, target 10k rows) adds `books.source` VARCHAR(8) `NOT NULL DEFAULT 'app'`
+  (`app` = upload flow, `api` = `api-book`), `books.search_key` VARCHAR(1000) `NOT NULL DEFAULT ''` and the indexes
+  `books_created` (books.created_at), `books_format` (books.format), `catalog_status`, `catalog_category`,
+  `user_books_book` (user_books.book_id). Existing rows get `source = 'app'` and an empty `search_key`.
 - **Auth:** invite-only. First admin via `setup` (needs `setup_key`, only while no users exist). Session token in an
   HttpOnly/Secure/SameSite=Lax cookie scoped to the app path; DB stores only its SHA-256. Mutating routes need the
   per-session CSRF token in `X-CSRF-Token`; JSON routes reject non-JSON bodies. Login/register/setup are rate limited.
@@ -390,7 +394,7 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   Steps: validate → read OPF metadata (dc:title/creator/language/publisher/date, date `YYYY-MM-DDT…` cut to the date)
   and the cover (EPUB 3 `properties~="cover-image"`, else EPUB 2 `<meta name="cover">`; png/jpeg/webp/gif ≤1.5 MB, else
   skipped) → apply `clean_rules` → validate again → SHA-256 of the **cleaned** file → dedupe → store with
-  `uploaded_by` = key creator. Request fields win over the OPF; title falls back to the file name, then «بدون عنوان».
+  `uploaded_by` = key creator and `source = 'api'`. Request fields win over the OPF; title falls back to the file name, then «بدون عنوان».
   Catalog: a new (or previously `rejected`) entry is `approved` with `reviewed_by` = key creator, or `pending` when the
   key has `require_review`; an existing approved/pending entry keeps its status and gets `category`/`description` when
   sent. `last_used_at` is set on every authenticated request, `uses` counts accepted books. Response 201
@@ -420,6 +424,47 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   zip is rebuilt only when something changed: `mimetype` first and STORED, the rest DEFLATE, entry times kept
   (deterministic → the same original gives the same SHA-256), unchanged entries streamed through temp files. Content
   documents over 16 MB are left untouched. Checked byte-for-byte against the browser code in Chromium on test books.
+- **Search key (migration 8):** `search_norm()` (lib/books.php) folds like the client's `normalizeForSearch` + library
+  search: ي/ى → ی, ك → ک; ZWNJ/ZWJ, LRM/RLM and other bidi marks, BOM, tatweel and harakat (U+064B–065F, U+0670, so
+  also the hamza of «هٔ») removed; Persian and Arabic-Indic digits → 0-9; lower case; whitespace runs → one space.
+  `books.search_key` = `search_norm(title + " " + author + " " + publisher)`, cut to 1000 characters, never empty (a
+  key that folds to nothing is stored as one space; `''` means "not computed yet"). It is written by `insert_book`
+  (upload-complete, api-book) and by `update_book_cols` whenever title/author/publisher change (book-meta,
+  catalog-update, book-replace's metadata copy). `admin-books` and `catalog` (both modes) first fill up to 500 rows
+  whose key is still `''` (rows from before migration 8), in one transaction. A query `q` is folded the same way
+  (first 200 characters, at most 10 distinct words) and every word must occur: `search_key LIKE '%word%' ESCAPE '!'`
+  per word, AND-ed (`%`, `_`, `!` in the word are escaped, so they match literally).
+- **Admin book list (`GET admin-books`, admin):** params `q`; `status` `any` (default) | `approved` | `pending` |
+  `rejected` | `none` (not in the catalog); `category` exact, `__none__` = no category (empty or not in the catalog),
+  ≤80; `format` `epub`|`pdf`; `uploader` = a user id (that user's uploads through the app; `api-book` books are
+  excluded) or `api` (`source = 'api'`); `no_cover=1` (`has_cover = 0`); `sort` `date` (created_at, default) | `title`
+  | `size` | `status` (pending, approved, rejected, not in catalog; newest first inside a status); `dir` `asc`|`desc`
+  (default `desc` for date/size, `asc` for title/status; ties broken by id in the same direction); `page` (1-based,
+  default 1, ≤100000), `per` (1–100, default 50; out-of-range values are clamped). Unknown `status`/`format`/`uploader`/`sort`/
+  `dir` → 400 `bad_<param>`, category > 80 → 400 `too_long_category`. Response `{books: [book_out + catalog_status
+  (null when not in catalog), category ('' when none), description, submitter (name or null), uploader_id,
+  uploader_name, created_at, source, in_libraries (user_books count)], total, page, per, facets: {status: {approved,
+  pending, rejected, none}, categories: [{name, count}] (non-empty categories, count desc, top 100), uploaders: [{id
+  (user id, or "api"), name ("API" for api), count}] (count desc), formats: {epub, pdf}}}`. Facets are computed for
+  `q` only (the other filters are ignored). `books-all` and `catalog-all` are unchanged.
+- **Bulk actions (`POST admin-bulk`, admin, CSRF):** `{action, ids: [book ids] | filter: {admin-books params}, category}`.
+  `ids` (a list of positive ints or digit strings; duplicates count once) wins when both are sent; neither → 400
+  `missing_target`; bad ids → 400 `bad_ids`; unknown action → 400 `bad_action`. At most 5000 books per call
+  (`ADMIN_BULK_MAX`): more ids, or a filter matching more → 400 `too_many`. Everything runs in one transaction; files
+  of garbage-collected books are removed after the commit. Actions: `approve` / `reject` set the status of existing
+  catalog rows that have another status (`reviewed_by`/`reviewed_at` = admin/now); `set_category` (`category` required,
+  trimmed, ≤80) / `clear_category` change existing catalog rows whose category differs; `add_catalog` creates approved
+  rows (description/category empty, `submitted_by` = `reviewed_by` = admin) for books not in the catalog;
+  `remove_catalog` deletes catalog rows, then books in no library are garbage-collected (like `catalog-remove`);
+  `delete` = `book-delete` for each (libraries, catalog, progress, annotations, then the book and its files). Response
+  `{affected, skipped}`: `affected` = rows actually changed/created/deleted (for `delete`: books deleted), `skipped`
+  = the other requested books (unknown id, not in the catalog, already in that state). Nothing is logged.
+- **Catalog paging (`GET catalog` with `page`):** approved books only; params `q` (as above), `category` (exact),
+  `author` (exact `books.author`), `format` `epub`|`pdf`, `sort` `new` (reviewed_at, submitted_at, id — all desc;
+  default) | `title` | `author` (author, title), `page` (default 1, ≤100000), `per` (1–60, default 24). Response `{books (same
+  fields as the unpaged list: book_out + description, category, submitter, in_library), total, page, per, categories:
+  [{name, count}]}` — `categories` are the non-empty categories of approved books matching `q` (other filters
+  ignored), count desc. Bad `sort`/`format` → 400. Without `page` the response is exactly the old full list `{books}`.
 - **Validation:** optional string fields that are present but not a string/number → 400 `bad_<field>`; over the
   length limit → 400 `too_long_<field>`.
 

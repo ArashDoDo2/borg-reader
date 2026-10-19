@@ -37,7 +37,74 @@ function update_book_cols(int $bookId, array $cols): void {
     if (!$cols) return;
     $set = implode(', ', array_map(fn($k) => "$k = ?", array_keys($cols)));
     q("UPDATE books SET $set WHERE id = ?", array_merge(array_values($cols), [$bookId]));
+    if (array_intersect_key($cols, ['title' => 1, 'author' => 1, 'publisher' => 1])) refresh_search_key($bookId);
 }
+
+// ---------- Search (migration 8): one spelling for books.search_key and the query ----------
+const SEARCH_KEY_MAX = 1000;        // books.search_key VARCHAR(1000)
+const SEARCH_BACKFILL_BATCH = 500;  // rows with an empty search_key filled per list request
+/**
+ * Same folding as the client's normalizeForSearch + library search: ي/ى → ی, ك → ک; ZWNJ/ZWJ/bidi marks (LRM, RLM,
+ * embeddings, isolates), BOM, tatweel and harakat removed; Persian/Arabic-Indic digits → 0-9; lower case; whitespace
+ * runs → one space (kept, so a query can be split into words).
+ */
+function search_norm(string $s): string {
+    static $map = null;
+    if ($map === null) {
+        $map = ['ي' => 'ی', 'ى' => 'ی', 'ك' => 'ک'];
+        foreach (['۰۱۲۳۴۵۶۷۸۹', '٠١٢٣٤٥٦٧٨٩'] as $digits) {
+            foreach (mb_str_split($digits) as $i => $d) $map[$d] = (string)$i;
+        }
+    }
+    $s = strtr($s, $map);
+    $s = preg_replace('/[\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}\x{FEFF}\x{0640}\x{064B}-\x{065F}\x{0670}]/u', '', $s) ?? '';
+    $s = mb_strtolower($s, 'UTF-8');
+    return trim(preg_replace('/[\s\x{00A0}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}]+/u', ' ', $s) ?? '');
+}
+/** books.search_key for a title/author/publisher; never '' (an empty key means "not computed yet"). */
+function book_search_key(string $title, string $author, string $publisher): string {
+    $k = rtrim(mb_substr(search_norm("$title $author $publisher"), 0, SEARCH_KEY_MAX));
+    return $k === '' ? ' ' : $k;
+}
+function refresh_search_key(int $bookId): void {
+    $b = one('SELECT title, author, publisher FROM books WHERE id = ?', [$bookId]);
+    if ($b) q('UPDATE books SET search_key = ? WHERE id = ?', [book_search_key((string)$b['title'], (string)$b['author'], (string)$b['publisher']), $bookId]);
+}
+/** Fill up to one batch of rows whose search_key is still empty (rows from before migration 8). Returns rows filled. */
+function backfill_search_keys(int $batch = SEARCH_BACKFILL_BATCH): int {
+    $rows = all("SELECT id, title, author, publisher FROM books WHERE search_key = '' LIMIT " . max(1, $batch));
+    if (!$rows) return 0;
+    db()->beginTransaction();
+    try {
+        $st = db()->prepare('UPDATE books SET search_key = ? WHERE id = ?');
+        foreach ($rows as $b) $st->execute([book_search_key((string)$b['title'], (string)$b['author'], (string)$b['publisher']), (int)$b['id']]);
+        db()->commit();
+    } catch (Throwable $e) {
+        if (db()->inTransaction()) db()->rollBack();
+        throw $e;
+    }
+    return count($rows);
+}
+/** LIKE conditions (AND) matching every word of $q against $col; '!' escapes % _ ! (portable MySQL/SQLite ESCAPE). */
+function search_where(string $q, string $col = 'b.search_key'): array {
+    $words = array_slice(array_values(array_unique(array_filter(explode(' ', search_norm(mb_substr($q, 0, 200))), fn($w) => $w !== ''))), 0, 10);
+    $where = []; $args = [];
+    foreach ($words as $w) {
+        $where[] = "$col LIKE ? ESCAPE '!'";
+        $args[] = '%' . strtr($w, ['!' => '!!', '%' => '!%', '_' => '!_']) . '%';
+    }
+    return [$where, $args];
+}
+/** "?, ?, ?" for $n placeholders. */
+function placeholders(int $n): string { return implode(',', array_fill(0, $n, '?')); }
+/** Positive int request parameter clamped to [1, $max] ($default when absent or not a number). */
+function page_param(array $p, string $k, int $default, int $max = PHP_INT_MAX): int {
+    $v = $p[$k] ?? null;
+    if (!is_scalar($v) || !is_numeric($v)) return $default;
+    return max(1, min($max, (int)$v));
+}
+/** A scalar request parameter as a trimmed string ('' when absent or not scalar). */
+function scalar_param(array $p, string $k): string { return isset($p[$k]) && is_scalar($p[$k]) ? trim((string)$p[$k]) : ''; }
 function user_has_book(int $uid, int $bookId): bool {
     return (bool)one('SELECT 1 AS x FROM user_books WHERE user_id = ? AND book_id = ?', [$uid, $bookId]);
 }
@@ -167,10 +234,13 @@ function store_cover_bytes(int $bookId, string $bin): bool {
     return true;
 }
 /** Insert a books row for a stored file and return it (shared by upload-complete and api-book). */
-function insert_book(string $sha, int $size, array $meta, int $uploadedBy): array {
-    q('INSERT INTO books (sha256, size, title, author, language, publisher, published, has_cover, uploaded_by, created_at, format) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
-      [$sha, $size, $meta['title'] ?? 'بدون عنوان', $meta['author'] ?? '', $meta['language'] ?? '',
-       $meta['publisher'] ?? '', $meta['published'] ?? '', $uploadedBy, time(), ($meta['format'] ?? 'epub') === 'pdf' ? 'pdf' : 'epub']);
+/** $source: 'app' (upload flow) or 'api' (api-book). */
+function insert_book(string $sha, int $size, array $meta, int $uploadedBy, string $source = 'app'): array {
+    $title = (string)($meta['title'] ?? 'بدون عنوان'); $author = (string)($meta['author'] ?? ''); $publisher = (string)($meta['publisher'] ?? '');
+    q('INSERT INTO books (sha256, size, title, author, language, publisher, published, has_cover, uploaded_by, created_at, format, source, search_key) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)',
+      [$sha, $size, $title, $author, $meta['language'] ?? '',
+       $publisher, $meta['published'] ?? '', $uploadedBy, time(), ($meta['format'] ?? 'epub') === 'pdf' ? 'pdf' : 'epub',
+       $source === 'api' ? 'api' : 'app', book_search_key($title, $author, $publisher)]);
     return one('SELECT * FROM books WHERE sha256 = ?', [$sha]);
 }
 
@@ -496,13 +566,18 @@ function handle_books_route(string $route): bool {
         case 'catalog':
             method('GET');
             $s = require_user();
-            $rows = all("SELECT b.*, c.description, c.category, c.submitted_at, u.display_name AS submitter,
-                           (SELECT 1 FROM user_books ub WHERE ub.user_id = ? AND ub.book_id = b.id) AS in_library
-                         FROM catalog c JOIN books b ON b.id = c.book_id LEFT JOIN users u ON u.id = c.submitted_by
-                         WHERE c.status = 'approved' ORDER BY c.reviewed_at DESC, c.submitted_at DESC", [$s['id']]);
-            json_out(200, ['books' => array_map(fn($r) => book_out($r) + [
+            backfill_search_keys();
+            $catOut = fn($r) => book_out($r) + [
                 'description' => $r['description'], 'category' => (string)$r['category'], 'submitter' => $r['submitter'], 'in_library' => (bool)$r['in_library'],
-            ], $rows)]);
+            ];
+            if (!array_key_exists('page', $_GET)) { // unpaged: the full list, exactly as before migration 8
+                $rows = all("SELECT b.*, c.description, c.category, c.submitted_at, u.display_name AS submitter,
+                               (SELECT 1 FROM user_books ub WHERE ub.user_id = ? AND ub.book_id = b.id) AS in_library
+                             FROM catalog c JOIN books b ON b.id = c.book_id LEFT JOIN users u ON u.id = c.submitted_by
+                             WHERE c.status = 'approved' ORDER BY c.reviewed_at DESC, c.submitted_at DESC", [$s['id']]);
+                json_out(200, ['books' => array_map($catOut, $rows)]);
+            }
+            json_out(200, catalog_page($_GET, (int)$s['id'], $catOut));
 
         case 'catalog-submit':
             method('POST');
@@ -560,6 +635,47 @@ function handle_books_route(string $route): bool {
             json_out(200, ['book' => book_out($b)]);
     }
     return false;
+}
+
+/**
+ * GET catalog with `page`: approved books filtered by q (all words, normalised), category (exact), author (exact),
+ * format (epub|pdf); sort new|title|author; per ≤60 (default 24). categories = approved books matching q only.
+ */
+function catalog_page(array $p, int $uid, callable $out): array {
+    $per = page_param($p, 'per', 24, 60);
+    $page = page_param($p, 'page', 1, 100000);
+    [$where, $args] = search_where(scalar_param($p, 'q'));
+    array_unshift($where, "c.status = 'approved'");
+    [$qWhere, $qArgs] = [$where, $args];
+    $category = scalar_param($p, 'category');
+    if ($category !== '') { $where[] = 'c.category = ?'; $args[] = mb_substr($category, 0, 80); }
+    $author = scalar_param($p, 'author');
+    if ($author !== '') { $where[] = 'b.author = ?'; $args[] = mb_substr($author, 0, 300); }
+    $format = scalar_param($p, 'format');
+    if ($format !== '') {
+        if (!in_array($format, ['epub', 'pdf'], true)) fail(400, 'bad_format', 'format must be "epub" or "pdf".');
+        $where[] = 'b.format = ?'; $args[] = $format;
+    }
+    $sort = scalar_param($p, 'sort') ?: 'new';
+    $order = match ($sort) {
+        'new' => 'c.reviewed_at DESC, c.submitted_at DESC, b.id DESC',
+        'title' => 'b.title ASC, b.id ASC',
+        'author' => 'b.author ASC, b.title ASC, b.id ASC',
+        default => fail(400, 'bad_sort', 'sort must be new, title or author.'),
+    };
+    $w = 'WHERE ' . implode(' AND ', $where);
+    $total = (int)one("SELECT COUNT(*) AS n FROM catalog c JOIN books b ON b.id = c.book_id $w", $args)['n'];
+    $off = ($page - 1) * $per;
+    $rows = all("SELECT b.*, c.description, c.category, c.submitted_at, u.display_name AS submitter,
+                   (SELECT 1 FROM user_books ub WHERE ub.user_id = ? AND ub.book_id = b.id) AS in_library
+                 FROM catalog c JOIN books b ON b.id = c.book_id LEFT JOIN users u ON u.id = c.submitted_by
+                 $w ORDER BY $order LIMIT $per OFFSET $off", array_merge([$uid], $args));
+    $cats = all("SELECT c.category AS name, COUNT(*) AS n FROM catalog c JOIN books b ON b.id = c.book_id
+                 WHERE " . implode(' AND ', $qWhere) . " AND c.category <> '' GROUP BY c.category ORDER BY n DESC, c.category ASC LIMIT 500", $qArgs);
+    return [
+        'books' => array_map($out, $rows), 'total' => $total, 'page' => $page, 'per' => $per,
+        'categories' => array_map(fn($r) => ['name' => (string)$r['name'], 'count' => (int)$r['n']], $cats),
+    ];
 }
 
 function annotation_out(array $r): array {

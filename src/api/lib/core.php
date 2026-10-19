@@ -139,6 +139,17 @@ function migrations(): array {
             // Text-based PDFs (magazines) opened directly: 'epub' (all books before this migration) or 'pdf'.
             "ALTER TABLE books ADD COLUMN format VARCHAR(8) NOT NULL DEFAULT 'epub'",
         ],
+        8 => [
+            // Large catalogs (~3k books/year): where a book came from ('app' upload flow | 'api' api-book), a normalised
+            // title+author+publisher for LIKE search (search_norm; '' = not computed yet, filled lazily), list indexes.
+            "ALTER TABLE books ADD COLUMN source VARCHAR(8) NOT NULL DEFAULT 'app'",
+            "ALTER TABLE books ADD COLUMN search_key VARCHAR(1000) NOT NULL DEFAULT ''",
+            "CREATE INDEX books_created ON books (created_at)",
+            "CREATE INDEX books_format ON books (format)",
+            "CREATE INDEX catalog_status ON catalog (status)",
+            "CREATE INDEX catalog_category ON catalog (category)",
+            "CREATE INDEX user_books_book ON user_books (book_id)",
+        ],
     ];
 }
 function schema_version(): int {
