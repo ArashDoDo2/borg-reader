@@ -5082,7 +5082,7 @@
     has_children: "این دسته زیردسته دارد. اول زیردسته‌هایش را حذف کن یا به دستهٔ دیگری منتقل کن.",
     has_children_move: "دسته‌ای که زیردسته دارد نمی‌تواند زیردستهٔ دستهٔ دیگری شود.",
     missing_name: "نام دسته را بنویس.", empty_name: "نام دسته را بنویس.", too_long_name: "نام دسته حداکثر ۸۰ نویسه است.",
-    not_found: "این دسته دیگر وجود ندارد؛ فهرست تازه شد.", bad_parent: "دستهٔ والد پیدا نشد.", bad_move_to: "دستهٔ مقصد معتبر نیست.",
+    not_found: "این دسته دیگر وجود ندارد؛ فهرست تازه شد.", bad_parent: "دستهٔ والد پیدا نشد.", bad_move_to: "دستهٔ مقصد معتبر نیست.", unknown_category: "دستهٔ انتخاب‌شده دیگر وجود ندارد؛ فهرست را تازه کن.",
   };
   function catErrorMessage(err, where) {
     if (!(err instanceof ApiFail)) return apiMessage(err);

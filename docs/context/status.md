@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-20, version **8.9.0** (live at https://parsun.com/borg/).
+Last updated: 2026-10-20, version **8.10.0** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -11,7 +11,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 - Server: shared cPanel host `parsun.com`, user `parsunco`, PHP 8.4, MySQL. Config in
   `/home/parsunco/borg-config/config.php`; book files in `~/borg-storage`; repo clone in
   `/home/parsunco/repositories/borg-reader`.
-- Tests: API 336 checks, e2e 495 checks (Chromium), WebKit e2e (Safari engine, gates the deploy) — all green.
+- Tests: API 401 checks, e2e 537 checks (Chromium), WebKit e2e (Safari engine, gates the deploy) — all green.
 
 ## Version history (what each release added)
 | Version | Highlights |
@@ -54,6 +54,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.8.0 | Text-based PDF magazines open directly in their original layout (pdf.js 4.10.38 legacy, vendored, lazy-loaded): import/sync/catalog/API accept PDFs (migration 7 `books.format`), page view with text layer, zoom/pinch, outline TOC, search, page progress `pdf:N`, taps/swipes/wheel/keys/seek; highlights/notes/TTS/cleanup not for PDFs yet (ADR 0009) |
 | 8.8.1 | Select or drag & drop several EPUB/PDF files at once: imported one after another with a progress toast and one summary (added / duplicate / failed / cleaned); one sync at the end |
 | 8.9.0 | Scale to thousands of books. Admin: sub-tabs with `#admin/<tab>` links (overview, review queue, books, users, invites, API keys, errors, settings), server-paged books table (`admin-books`: search, status/category/format/uploader/no-cover filters, sort, 50/page, filters kept in the URL), bulk actions (`admin-bulk`, ids or the whole filter, confirmation with count), details panel, one-at-a-time review queue (A/R/C, J/K, arrows). Public catalog paged from the server (`catalog?page=&per=`, search/filters/sort server-side, infinite scroll + «بیشتر», book deep link fetches one book by `id`, back keeps loaded pages and position). Migration 8: `books.source`, `books.search_key`, indexes. Old servers fall back to the full lists |
+| 8.10.0 | Two-level categories (category → subcategory), several per book (max 10), admin-managed list (migration 9: `categories`, `catalog_categories`; existing category strings became top-level categories; legacy `catalog.category` mirrors the first top-level name). Public catalog: category navigator (desktop panel, phone drill-down sheet), `cat=ID` filter in the hash, breadcrumb, category links on the book page. Admin: «دسته‌ها» tab (add/rename/move/reorder/delete with move-to), category picker in details/queue (C)/user submission, tree filter and bulk add/remove in the books tab. `api-book` accepts `Parent/Child; Other` and creates missing categories. No per-category icons yet |
 
 ## Open items (not started unless the owner says so)
 0. Text cleanup shipped in 8.3.0. Limits: a phrase split across formatting tags is not matched; the

@@ -836,12 +836,14 @@ async def run(url):
         except TimeoutError: pass
         await H.click('#admBooks tr.adm-row:has-text("کتاب آزمایشی") .adm-c-title'); await H.wait_for_timeout(500)
         check("admin catalog editor opens with the current values", await H.is_visible("#admDetail") and await H.input_value('#admDetailForm [name="title"]') == "کتاب آزمایشی")
-        await H.fill('#admDetailForm [name="category"]', "رمان")
+        # v8.10: a category now exists ("شعر", created by the admin's share above), so the details panel shows the picker
+        await H.fill("#admDetailCats .cp-search", "شعر"); await H.wait_for_timeout(150)
+        await H.click('#admDetailCats .cp-opt:has-text("شعر")')
         await H.fill('#admDetailForm [name="publisher"]', "نشر تست")
         await H.fill('#admDetailForm [name="published"]', "1402")
         await H.click("#admDetailSave"); await H.wait_for_timeout(1500)
         check("admin edit saves category/publisher/date", not await H.is_visible("#admDetail")
-              and await H.locator('#admBooks tr.adm-row:has-text("کتاب آزمایشی") .adm-c-cat:has-text("رمان")').count() == 1)
+              and await H.locator('#admBooks tr.adm-row:has-text("کتاب آزمایشی") .adm-c-cat:has-text("شعر")').count() == 1)
         check("v8.1 admin/upload: no JS errors", len(errsH) == 0, str(errsH[:3]))
         await ctxH.close()
 
@@ -855,8 +857,9 @@ async def run(url):
         await I.click('[data-view="catalog"]'); await I.wait_for_timeout(1500)
         check("catalog lists all shared books", await I.locator("#catalogGrid .book-card").count() == 3)
         # v8.10: the flat category chips are gone; without a category list there is no navigator either
-        check("no flat category chips; no category navigator without a category list", await I.locator("#catalogFilters [data-cat-filter]").count() == 0
-              and not await I.is_visible("#catNav") and not await I.is_visible("#catSheetOpen"))
+        # The admin's share above created the top-level category "شعر" (legacy name → category), so the navigator shows it
+        check("no flat category chips; the category navigator lists the category made from the shared book", await I.locator("#catalogFilters [data-cat-filter]").count() == 0
+              and await I.is_visible("#catNav") and "شعر" in await I.inner_text("#catNav"))
         # Book page
         await I.click('#catalogGrid .book-card:has-text("کتاب سوم")'); await I.wait_for_timeout(800)
         meta = await I.inner_text("#detailMeta") if await I.is_visible("#detailMeta") else ""
@@ -2365,6 +2368,9 @@ async def run(url):
             except Exception:
                 await route.fulfill(response=resp)
         await ctx30.route(lambda u: u.endswith("/api/?r=login") or u.endswith("/api/?r=me"), as_admin30)
+        # This section covers the books tab without a category list (the free-text category flows); v8.10 trees are section 32
+        async def no_cats30(route): await route.fulfill(status=200, content_type="application/json", body='{"categories": []}')
+        await ctx30.route(lambda u: "/api/?r=categories" in u, no_cats30)
         calls30 = lambda r, m=None: [c for c in m30["calls"] if c["r"] == r and (m is None or c["m"] == m)]
         last_books30 = lambda: (calls30("admin-books") or [{"qs": {}}])[-1]["qs"]
         qv30 = lambda qs, k: qs.get(k, [None])[0]
@@ -2650,6 +2656,9 @@ async def run(url):
                 x.append(route.request.url); await route.abort()
             await c.route(lambda u: not u.startswith("http://localhost"), block)
             await c.route(CAT_RE, cat_route)
+            # v8.10: this section covers the catalog without a category list (the real server may have some by now)
+            async def no_cats(route): await route.fulfill(status=200, content_type="application/json", body='{"categories": []}')
+            await c.route(lambda u: "/api/?r=categories" in u, no_cats)
             pg = await c.new_page()
             pg.on("pageerror", lambda er: e.append(str(er)))
             pg.on("console", lambda m: m.type == "error" and e.append(m.text))
