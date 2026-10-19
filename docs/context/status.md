@@ -11,7 +11,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 - Server: shared cPanel host `parsun.com`, user `parsunco`, PHP 8.4, MySQL. Config in
   `/home/parsunco/borg-config/config.php`; book files in `~/borg-storage`; repo clone in
   `/home/parsunco/repositories/borg-reader`.
-- Tests: API 336 checks, e2e ~500 checks (Chromium), WebKit e2e (Safari engine, gates the deploy) — all green.
+- Tests: API 336 checks, e2e 495 checks (Chromium), WebKit e2e (Safari engine, gates the deploy) — all green.
 
 ## Version history (what each release added)
 | Version | Highlights |
