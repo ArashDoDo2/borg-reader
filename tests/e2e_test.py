@@ -119,8 +119,18 @@ async def swipe(cdp, x0, x1, y):
 # v8.2: the reader shows a first-run gesture guide over the page; contexts mark it as seen unless show_guide=True.
 GUIDE_SEEN_JS = "try{localStorage.setItem('borg-guide-seen','1');localStorage.setItem('borg-guide-seen-test','1')}catch(e){}"
 
+async def categories_fallback(ctx):
+    """v8.10: a server built before the `categories` route answers 404 (logged by Chromium as a failed request); answer
+    it the way a server without categories does, so the older sections stay independent of the server version."""
+    async def handle(route):
+        resp = await route.fetch()
+        if resp.status == 404: await route.fulfill(status=200, content_type="application/json", body='{"categories": []}')
+        else: await route.fulfill(response=resp)
+    await ctx.route(lambda u: "/api/?r=categories" in u, handle)
+
 async def new_ctx(browser, url, external, errors, show_guide=False, **kw):
     ctx = await browser.new_context(viewport={"width": 1280, "height": 800}, **kw)
+    await categories_fallback(ctx)
     if not show_guide:
         await ctx.add_init_script(GUIDE_SEEN_JS)
     async def block(route):
@@ -844,13 +854,9 @@ async def run(url):
         lib_before = await I.locator("#bookGrid .book-card").count()
         await I.click('[data-view="catalog"]'); await I.wait_for_timeout(1500)
         check("catalog lists all shared books", await I.locator("#catalogGrid .book-card").count() == 3)
-        chips = await I.locator("#catalogFilters [data-cat-filter]").all_inner_texts()
-        check("category chips built from the catalog", chips == ["همهٔ دسته‌ها", "رمان", "شعر"], str(chips))
-        await I.click('#catalogFilters [data-cat-filter="شعر"]'); await I.wait_for_timeout(300)
-        titles = await I.locator("#catalogGrid .book-card h3").all_inner_texts()
-        check("category chip filters the catalog", titles == ["کتاب سوم"], str(titles))
-        await I.click('#catalogFilters [data-cat-filter=""]'); await I.wait_for_timeout(300)
-        check("'all categories' shows everything again", await I.locator("#catalogGrid .book-card").count() == 3)
+        # v8.10: the flat category chips are gone; without a category list there is no navigator either
+        check("no flat category chips; no category navigator without a category list", await I.locator("#catalogFilters [data-cat-filter]").count() == 0
+              and not await I.is_visible("#catNav") and not await I.is_visible("#catSheetOpen"))
         # Book page
         await I.click('#catalogGrid .book-card:has-text("کتاب سوم")'); await I.wait_for_timeout(800)
         meta = await I.inner_text("#detailMeta") if await I.is_visible("#detailMeta") else ""
@@ -2374,8 +2380,8 @@ async def run(url):
         try: await poll(lambda: _count_gt(Q, "#adminStats .stat", 6), 8000)
         except TimeoutError: pass
         tabs = await Q.locator("#adminTabs [role=tab]").all_inner_texts()
-        check("v8.9 admin: eight sub-tabs, overview first with the stats cards, hash #admin/overview",
-              len(tabs) == 8 and tabs[0].strip() == "نمای کلی" and "صف تأیید" in tabs[1] and "خطاها" in tabs[6]
+        check("v8.9 admin: nine sub-tabs (v8.10 «دسته‌ها»), overview first with the stats cards, hash #admin/overview",
+              len(tabs) == 9 and tabs[0].strip() == "نمای کلی" and "صف تأیید" in tabs[1] and tabs[3].strip() == "دسته‌ها" and "خطاها" in tabs[7]
               and await Q.locator("#adminStats .stat").count() == 7 and await Q.is_visible("#adminShortcuts")
               and await Q.evaluate("location.hash") == "#admin/overview", str(tabs))
         check("v8.9 admin: only the active tab's data is loaded (no books/queue/keys requests on the overview)",
@@ -2638,6 +2644,7 @@ async def run(url):
         async def cat_ctx(width=1280, height=800):
             e, x = [], []
             c = await b.new_context(viewport={"width": width, "height": height}, service_workers="block")
+            await categories_fallback(c)
             await c.add_init_script(GUIDE_SEEN_JS)
             async def block(route):
                 x.append(route.request.url); await route.abort()
@@ -2711,15 +2718,15 @@ async def run(url):
               and await P.is_visible("[data-catalog-reset]") and not await P.is_visible("#catalogEmpty") and not await P.is_visible("#catalogMore"))
         await P.click("[data-catalog-reset]"); await P.wait_for_timeout(700)
         check("v8.9 catalog: reset brings back the first page", await ncards(P) == 24 and await P.input_value("#catalogSearch") == "" and "۱۳۰ کتاب" in await P.inner_text("#catalogCount"))
-        # Category chips from the facets
-        chips = await P.locator("#catalogFilters [data-cat-filter]").all_inner_texts()
-        check("v8.9 catalog: category chips from the server facets (count drawn by CSS)", sorted(chips[1:]) == sorted(CAT_CATS) and chips[0] == "همهٔ دسته‌ها"
-              and await P.get_attribute('#catalogFilters [data-cat-filter="شعر"]', "data-count") == "۴۴", str(chips))
+        # The old free-text category (v8.10: no flat chips; reached from a book page, shown as a removable chip)
+        check("v8.10 catalog: no flat category chips, no navigator without a category list", await P.locator("#catalogFilters [data-cat-filter]").count() == 0
+              and not await P.is_visible("#catNav"))
+        await P.click('#catalogGrid .book-card[data-detail="9130"]'); await P.wait_for_timeout(600)
         n_before = len(cat_reqs())
-        await P.click('#catalogFilters [data-cat-filter="شعر"]'); await P.wait_for_timeout(600)
+        await P.click('#detailMeta [data-meta-cat]'); await P.wait_for_timeout(700)
         creqs = cat_reqs()[n_before:]
-        check("v8.9 catalog: category chip → category param", any("category=" + _quote("شعر") in u and "page=1" in u for u in creqs)
-              and "۴۴ کتاب" in await P.inner_text("#catalogCount") and await P.get_attribute('#catalogFilters [data-cat-filter="شعر"]', "aria-pressed") == "true", str(creqs))
+        check("v8.9 catalog: a book's category link → category param and a removable chip", any("category=" + _quote("شعر") in u and "page=1" in u for u in creqs)
+              and "۴۴ کتاب" in await P.inner_text("#catalogCount") and await P.is_visible("#catalogFilters [data-clear-category]"), str(creqs))
         # Format and sort
         n_before = len(cat_reqs())
         await P.click('#catalogFormat [data-format="pdf"]'); await P.wait_for_timeout(600)
@@ -2731,7 +2738,7 @@ async def run(url):
         await P.select_option("#catalogSort", "title"); await P.wait_for_timeout(600)
         sreqs = cat_reqs()[n_before:]
         check("v8.9 catalog: sort select → sort=title", any("sort=title" in u and "format=pdf" in u for u in sreqs), str(sreqs))
-        await P.click('#catalogFormat [data-format=""]'); await P.click('#catalogFilters [data-cat-filter=""]'); await P.select_option("#catalogSort", "new")
+        await P.click('#catalogFormat [data-format=""]'); await P.click("#catalogFilters [data-clear-category]"); await P.select_option("#catalogSort", "new")
         await P.wait_for_timeout(700)
         # Author filter from a book page
         await P.click('#catalogGrid .book-card >> nth=0'); await P.wait_for_timeout(700)
@@ -2783,11 +2790,11 @@ async def run(url):
         await R.fill("#catalogSearch", "نمونه 12"); await R.wait_for_timeout(150)
         check("v8.9 catalog fallback: search filters locally at once", await ncards(R) == 11 and len(cat_reqs()) == n_before)
         await R.fill("#catalogSearch", "")
-        await R.click('#catalogFilters [data-cat-filter="شعر"]'); await R.click('#catalogFormat [data-format="pdf"]'); await R.wait_for_timeout(200)
+        await R.click('#catalogFormat [data-format="pdf"]'); await R.wait_for_timeout(200)
         fb = await R.eval_on_selector_all("#catalogGrid .book-card", "els => els.map(e => +e.dataset.detail)")
-        check("v8.9 catalog fallback: category and format filtered locally", fb and all((i - 9000) % 3 == 1 and (i - 9000) % 4 == 0 for i in fb)
-              and len(fb) == sum(1 for i in range(1, CAT_N + 1) if i % 3 == 1 and i % 4 == 0), str(fb[:5]))
-        await R.click('#catalogFormat [data-format=""]'); await R.click('#catalogFilters [data-cat-filter=""]')
+        check("v8.9 catalog fallback: format filtered locally", fb and all((i - 9000) % 4 == 0 for i in fb)
+              and len(fb) == sum(1 for i in range(1, CAT_N + 1) if i % 4 == 0), str(fb[:5]))
+        await R.click('#catalogFormat [data-format=""]')
         await R.select_option("#catalogSort", "title"); await R.wait_for_timeout(200)
         titles = await R.locator("#catalogGrid .book-card h3").all_inner_texts()
         check("v8.9 catalog fallback: sort by title locally", len(titles) == CAT_N and titles == sorted(titles, key=lambda t: t), str(titles[:3]))
@@ -2796,6 +2803,426 @@ async def run(url):
         check("v8.9 catalog fallback: book page and similar books from the whole list", await R.inner_text("#detailTitle") == "کتاب نمونه 33" and len(rel) == 6, str(rel))
         check("v8.9 catalog fallback: no JS errors", not errsR and not extR, str((errsR + extR)[:3]))
         await ctxR.close()
+        # 32. v8.10 categories: a two-level list (category → subcategory) kept by the admin, several per book. Public catalog
+        # navigator (≥ 900 px) with a subcategory panel, phone sheet with drill-down, #catalog?cat=ID (back, refresh, deep link),
+        # book page links, similar books by subcategory, admin «دسته‌ها» tab (add, rename, move, reorder, delete), category
+        # picker (details panel, review queue «C», user submission), tree filter and bulk add/remove in the books tab.
+        # categories / catalog / category-* / admin-books / admin-bulk / catalog-* are mocked; login is the invited user with
+        # role "admin" patched into login/me (as in section 30).
+        import json as _j32, time as _t32, re as _re32, tempfile as _tf32
+        from urllib.parse import urlparse as _up32, parse_qs as _pq32
+        shots32 = os.environ.get("BORG_SHOTS")  # optional: a folder for screenshots of the new UI
+        _ns32 = lambda t: _re32.sub(r"\s+", "", t or "")
+        ext32, errs32 = [], []
+        ctx32, C = await new_ctx(b, url, ext32, errs32)
+        dlg32 = []
+        C.on("dialog", lambda d: (dlg32.append(d.message), asyncio.ensure_future(d.accept())))
+        now32 = int(_t32.time())
+        def _c(i, n, p=None, cnt=0, sort=0): return {"id": i, "name": n, "parent_id": p or 0, "sort": sort, "count": cnt, "count_all": cnt + 2}
+        cats32 = [_c(1, "ادبیات", None, 60), _c(11, "شعر", 1, 20), _c(12, "داستان", 1, 20), _c(13, "نمایشنامه", 1, 0),
+                  _c(2, "تاریخ", None, 20), _c(21, "ایران", 2, 20), _c(22, "جهان", 2, 0),
+                  _c(3, "علوم", None, 20), _c(5, "هنر", None, 0), _c(51, "موسیقی", 5), _c(52, "سینما", 5), _c(53, "نقاشی", 5), _c(4, "کودک", None, 0)]
+        def cobj32(i):
+            c = next(x for x in cats32 if x["id"] == i); p = next((x for x in cats32 if x["id"] == c["parent_id"]), None)
+            return {"id": i, "name": c["name"], "parent_id": c["parent_id"], "parent_name": p["name"] if p else ""}
+        BOOKCATS32 = {0: [11], 1: [12, 21], 2: [3]}
+        books32 = [{"id": 7000 + i, "sha256": f"{i:064x}", "size": 50000 + i, "title": f"کتاب دسته {i}", "author": f"نویسنده {i % 4}",
+                    "language": "fa", "publisher": "", "published": "", "has_cover": False, "format": "epub", "description": "", "category": "",
+                    "submitter": "مدیر", "in_library": False, "catalog_status": "approved", "uploader_id": 1, "uploader_name": "مدیر بُرگ",
+                    "created_at": now32 - i * 60, "source": "app", "in_libraries": 0, "categories": [cobj32(x) for x in BOOKCATS32[i % 3]]}
+                   for i in range(1, 61)]
+        pend32 = [{**books32[0], "id": 7901, "title": "صف دسته", "catalog_status": "pending", "submitted_at": now32, "categories": []}]
+        m32 = {"calls": []}
+        def in_cat32(bk, cid):
+            cid = int(cid); return any(c["id"] == cid or c["parent_id"] == cid for c in bk["categories"])
+        def cat_list32(admin=True):
+            out = []
+            for t in [c for c in cats32 if not c["parent_id"]]:
+                out.append(t); out += [c for c in cats32 if c["parent_id"] == t["id"]]
+            return [{k: v for k, v in c.items() if admin or k != "count_all"} for c in out]
+        async def api32(route):
+            req = route.request; qs = {k: v[0] for k, v in _pq32(_up32(req.url).query).items()}; r = qs.get("r", "")
+            body = None
+            if req.method == "POST":
+                try: body = _j32.loads(req.post_data or "null")
+                except Exception: body = None
+            m32["calls"].append({"m": req.method, "r": r, "qs": qs, "body": body, "csrf": req.headers.get("x-csrf-token")})
+            status, data = 200, {"ok": True}
+            if r == "categories": data = {"categories": cat_list32()}
+            elif r in ("catalog", "admin-books"):
+                bs = list(books32)
+                if qs.get("id"): bs = [x for x in bs if str(x["id"]) == qs["id"]]
+                if qs.get("cat") == "none": bs = [x for x in bs if not x["categories"]]
+                elif qs.get("cat"): bs = [x for x in bs if in_cat32(x, qs["cat"])]
+                if qs.get("author"): bs = [x for x in bs if x["author"] == qs["author"]]
+                page, per = int(qs.get("page", 1)), int(qs.get("per", 24))
+                data = {"books": bs[(page - 1) * per: page * per], "total": len(bs), "page": page, "per": per, "categories": []}
+                if r == "admin-books":
+                    data["facets"] = {"status": {"approved": len(bs), "pending": 0, "rejected": 0, "none": 0}, "categories": [], "uploaders": [], "formats": {"epub": 60, "pdf": 0}}
+            elif r == "category-save":
+                name, pid, cid = body.get("name"), body.get("parent_id"), body.get("id")
+                if any(c["name"] == name and c["parent_id"] == pid and c["id"] != cid for c in cats32): status, data = 409, {"error": "duplicate", "message": "Duplicate."}
+                elif cid:
+                    c = next(x for x in cats32 if x["id"] == cid); c["name"] = name; c["parent_id"] = pid; data = {"category": c}
+                else:
+                    c = _c(100 + len(m32["calls"]), name, pid); cats32.append(c); data = {"category": c}
+            elif r == "category-delete":
+                cid = body.get("id")
+                if any(c["parent_id"] == cid for c in cats32): status, data = 409, {"error": "has_children", "message": "Has children."}
+                else:
+                    cats32[:] = [c for c in cats32 if c["id"] != cid]; data = {"moved": 20 if body.get("move_to") else 0, "unlinked": 0 if body.get("move_to") else 20}
+            elif r == "category-order":
+                order = body["ids"]; sub = [c for c in cats32 if c["id"] in order]; rest = [c for c in cats32 if c["id"] not in order]
+                cats32[:] = rest + sorted(sub, key=lambda c: order.index(c["id"]))
+            elif r == "admin-bulk": data = {"affected": len(body.get("ids") or []), "skipped": 0}
+            elif r == "catalog-pending": data = {"books": pend32}
+            elif r == "catalog-submit": data = {"status": "pending"}
+            elif r == "admin-stats": data = {"users": 2, "active_users": 2, "books": 60, "storage_bytes": 1048576, "catalog_approved": 60, "catalog_pending": 1, "open_invites": 0, "client_errors": 0}
+            elif r == "settings": data = {"catalog_requires_approval": True}
+            elif r == "clean-rules": data = {"rules": []}
+            await route.fulfill(status=status, content_type="application/json; charset=utf-8", body=_j32.dumps(data, ensure_ascii=False))
+        MOCK32 = {"categories", "catalog", "admin-books", "category-save", "category-delete", "category-order", "admin-bulk", "catalog-pending",
+                  "catalog-update", "catalog-submit", "admin-stats", "settings", "clean-rules"}
+        def _is32(u):
+            m = _re32.search(r"/api/\?r=([a-z-]+)", u)
+            return bool(m) and m.group(1) in MOCK32
+        await ctx32.route(_is32, api32)
+        async def as_admin32(route):
+            resp = await route.fetch()
+            try:
+                j = await resp.json()
+                if isinstance(j, dict) and j.get("user"): j["user"]["role"] = "admin"
+                await route.fulfill(response=resp, json=j)
+            except Exception:
+                await route.fulfill(response=resp)
+        await ctx32.route(lambda u: u.endswith("/api/?r=login") or u.endswith("/api/?r=me"), as_admin32)
+        calls32 = lambda r, m=None: [c for c in m32["calls"] if c["r"] == r and (m is None or c["m"] == m)]
+        posts32 = lambda r: [c["body"] for c in calls32(r, "POST")]
+        cat_reqs32 = lambda: [c["qs"] for c in calls32("catalog")]
+        async def nposts32(r, n):
+            try: await poll(lambda: asyncio.sleep(0, len(posts32(r)) >= n), 5000)
+            except TimeoutError: pass
+            return posts32(r)
+        async def shot32(name):
+            if shots32: await C.screenshot(path=str(Path(shots32) / name))
+        await C.goto(url); await C.wait_for_timeout(800)
+        h32 = await (await C.request.get(url + "api/?r=health")).json()
+        await C.click("#accountButton"); await C.wait_for_timeout(500)
+        if h32.get("needs_setup"):  # this section run on its own
+            await C.click('[data-auth="setup"]')
+            for k_, v_ in dict(setup_key=SETUP_KEY, name="مدیر بُرگ", email="admin@example.com", password="password1").items(): await C.fill(f'#authForm [name="{k_}"]', v_)
+        else:
+            await C.click('[data-auth="login"]')
+            await C.fill('#authForm [name="email"]', "friend@example.com"); await C.fill('#authForm [name="password"]', "password2")
+        await C.click("#authSubmit")
+        await poll(lambda: C.is_visible('[data-view="catalog"]'), 15000)
+        await C.wait_for_timeout(600)
+        # --- Public catalog, desktop: navigator, panel, hash, back, refresh, deep link ---
+        await C.click('[data-view="catalog"]')
+        try: await poll(lambda: _count_gt(C, "#catNavList [data-cat-top]", 3), 8000)
+        except TimeoutError: pass
+        await C.wait_for_timeout(300)
+        geo = await C.evaluate("""() => { const r = e => { const b = document.querySelector(e).getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, w: b.width, h: b.height }; };
+            return { nav: r('#catNav'), grid: r('#catalogGrid'), sec: r('#viewCatalog'), sw: document.documentElement.scrollWidth }; }""")
+        tops = await C.locator("#catNavList .cat-nav-name").all_inner_texts()
+        check("v8.10 catalog: desktop navigator lists «همهٔ کتاب‌ها» + the top categories with counts, on the right of the grid (RTL)",
+              await C.is_visible("#catNav") and tops[:4] == ["همهٔ کتاب‌ها", "ادبیات", "تاریخ", "علوم"] and "۶۰" in await C.inner_text('#catNavList [data-cat-top="1"]')
+              and geo["nav"]["w"] >= 180 and geo["nav"]["w"] <= 260 and geo["grid"]["r"] <= geo["nav"]["l"] + 1 and abs(geo["nav"]["r"] - geo["sec"]["r"]) <= 2
+              and geo["sw"] <= 1280 and await C.locator('#catNavList [data-cat-open="1"] .cat-chev').count() == 1
+              and await C.locator('#catNavList [data-cat-pick="3"] .cat-chev').count() == 0, f"{tops} {geo}")
+        check("v8.10 catalog: the old flat category chips are gone", await C.locator("#catalogFilters [data-cat-filter]").count() == 0 and not await C.is_visible("#catSheetOpen"))
+        await C.hover('#catNavList [data-cat-open="1"]'); await C.wait_for_timeout(250)
+        pg32 = await C.evaluate("""() => { const p = document.getElementById('catNavPanel').getBoundingClientRect(), n = document.getElementById('catNav').getBoundingClientRect();
+            const it = [...document.querySelectorAll('#catNavPanel .cat-panel-item')].map(e => { const b = e.getBoundingClientRect(); return [Math.round(b.left), Math.round(b.top)]; });
+            return { l: p.left, r: p.right, t: p.top, w: p.width, nl: n.left, nt: n.top, it }; }""")
+        ptxt = await C.inner_text("#catNavPanel") if await C.is_visible("#catNavPanel") else ""
+        check("v8.10 catalog: hovering a top category opens its panel to the left with «همهٔ کتاب‌های ادبیات ›» and the subcategories in two columns",
+              "همهٔ کتاب‌های ادبیات" in ptxt and all(x in ptxt for x in ("شعر", "داستان", "نمایشنامه")) and pg32["r"] <= pg32["nl"] + 8 and pg32["l"] >= 0
+              and abs(pg32["t"] - pg32["nt"]) <= 2 and len(pg32["it"]) == 3 and pg32["it"][0][1] == pg32["it"][1][1] and pg32["it"][0][0] != pg32["it"][1][0]
+              and await C.get_attribute('#catNavList [data-cat-open="1"]', "aria-expanded") == "true", f"{ptxt!r} {pg32}")
+        await shot32("catalog-navigator-1280.png")
+        n0 = len(cat_reqs32())
+        await C.click('#catNavPanel [data-cat-pick="11"]'); await C.wait_for_timeout(600)
+        rq = cat_reqs32()[n0:]
+        crumbs = await C.inner_text("#catCrumbs") if await C.is_visible("#catCrumbs") else ""
+        check("v8.10 catalog: choosing «شعر» sends cat=11 (page 1), puts #catalog?cat=11 in the hash and shows «کتابخانهٔ عمومی › ادبیات › شعر»",
+              any(q.get("cat") == "11" and q.get("page") == "1" for q in rq) and await C.evaluate("location.hash") == "#catalog?cat=11"
+              and _ns32(crumbs).startswith("کتابخانهٔعمومی›ادبیات›شعر") and await C.locator("#catalogGrid .book-card").count() == 20
+              and "۲۰ کتاب" in await C.inner_text("#catalogCount") and not await C.is_visible("#catNavPanel")
+              and await C.get_attribute('#catNavList [data-cat-open="1"]', "aria-current") == "true", f"{rq} {crumbs!r}")
+        await C.hover('#catNavList [data-cat-open="1"]'); await C.wait_for_timeout(200)
+        await C.click("#catNavPanel .cat-panel-all"); await C.wait_for_timeout(600)
+        check("v8.10 catalog: «همهٔ کتاب‌های ادبیات» filters by the top category (cat=1 includes its subcategories)",
+              cat_reqs32()[-1].get("cat") == "1" and await C.evaluate("location.hash") == "#catalog?cat=1" and "۴۰ کتاب" in await C.inner_text("#catalogCount"))
+        await C.hover('#catNavList [data-cat-open="1"]'); await C.wait_for_timeout(200)
+        panel_opened = await C.is_visible("#catNavPanel")
+        await C.mouse.move(60, 760); await C.wait_for_timeout(500)
+        panel_closed = not await C.is_visible("#catNavPanel")
+        await C.hover('#catNavList [data-cat-open="2"]'); await C.wait_for_timeout(200)
+        await C.keyboard.press("Escape"); await C.wait_for_timeout(150)
+        check("v8.10 catalog: the panel closes when the pointer leaves the navigator and with Escape", panel_opened and panel_closed and not await C.is_visible("#catNavPanel"))
+        await C.go_back(); await C.wait_for_timeout(700)
+        check("v8.10 catalog: back returns to the previous category (hash, request, breadcrumb)",
+              await C.evaluate("location.hash") == "#catalog?cat=11" and cat_reqs32()[-1].get("cat") == "11" and await C.is_visible("#catCrumbs")
+              and await C.locator("#catalogGrid .book-card").count() == 20)
+        await C.reload(); await C.wait_for_timeout(600)
+        try: await poll(lambda: _count_gt(C, "#catalogGrid .book-card", 0), 10000)
+        except TimeoutError: pass
+        await C.wait_for_timeout(400)
+        check("v8.10 catalog: refresh keeps the category (request cat=11, breadcrumb, highlighted top)",
+              await C.evaluate("location.hash") == "#catalog?cat=11" and cat_reqs32()[-1].get("cat") == "11" and "شعر" in await C.inner_text("#catCrumbs")
+              and await C.locator("#catalogGrid .book-card").count() == 20 and await C.get_attribute('#catNavList [data-cat-open="1"]', "aria-current") == "true")
+        await C.goto(url + "#catalog?cat=21"); await C.wait_for_timeout(300); await C.reload(); await C.wait_for_timeout(600)
+        try: await poll(lambda: _contains(C, "#catCrumbs", "ایران"), 10000)
+        except TimeoutError: pass
+        check("v8.10 catalog: a deep link #catalog?cat=21 opens the catalog filtered by «تاریخ › ایران»",
+              cat_reqs32()[-1].get("cat") == "21" and "تاریخ" in await C.inner_text("#catCrumbs") and await C.is_visible("#viewCatalog"))
+        await C.click("#catCrumbs .cat-clear"); await C.wait_for_timeout(600)
+        check("v8.10 catalog: «همهٔ دسته‌ها» in the breadcrumb clears the category (hash, request without cat)",
+              await C.evaluate("location.hash") == "#catalog" and "cat" not in cat_reqs32()[-1] and not await C.is_visible("#catCrumbs")
+              and await C.get_attribute('#catNavList [data-cat-pick=""]', "aria-current") == "true")
+        await C.click('#catNavList [data-cat-pick="3"]'); await C.wait_for_timeout(600)
+        check("v8.10 catalog: a top category without subcategories filters at once", cat_reqs32()[-1].get("cat") == "3" and await C.evaluate("location.hash") == "#catalog?cat=3")
+        await C.click('#catNavList [data-cat-pick=""]'); await C.wait_for_timeout(600)
+        # --- Book page: category links, similar books by subcategory ---
+        n0 = len(cat_reqs32())
+        await C.click('#catalogGrid .book-card[data-detail="7004"]'); await C.wait_for_timeout(500)
+        try: await poll(lambda: C.is_visible("#detailRelatedSection"), 5000)
+        except TimeoutError: pass
+        links = await C.locator("#detailMeta [data-meta-catid]").all_inner_texts()
+        rel = [q for q in cat_reqs32()[n0:] if q.get("per") == "6"]
+        check("v8.10 book page: each category is a link «ادبیات › داستان», «تاریخ › ایران»; breadcrumb shows the first one",
+              links == ["ادبیات › داستان", "تاریخ › ایران"] and "داستان" in await C.inner_text("#detailCrumbs") and "ادبیات" in await C.inner_text("#detailCrumbs"), f"{links}")
+        rel_ids = await C.eval_on_selector_all("#detailRelated .book-card", "els => els.map(e => +e.dataset.detail)")
+        check("v8.10 similar books: the same subcategory is asked first (cat=12) and comes first; the author fills the rest",
+              rel[:1] and rel[0].get("cat") == "12" and len(rel_ids) == 6 and 7004 not in rel_ids and all((i - 7000) % 3 == 1 for i in rel_ids[:5])
+              and any(q.get("author") for q in rel[1:]), f"{rel} {rel_ids}")
+        await C.click('#detailMeta [data-meta-catid="21"]'); await C.wait_for_timeout(600)
+        check("v8.10 book page: a category link opens the catalog filtered by it (#catalog?cat=21)",
+              await C.is_visible("#viewCatalog") and await C.evaluate("location.hash") == "#catalog?cat=21" and cat_reqs32()[-1].get("cat") == "21" and "ایران" in await C.inner_text("#catCrumbs"))
+        # --- Phone: «دسته‌ها» sheet with drill-down ---
+        await C.set_viewport_size({"width": 390, "height": 844}); await C.wait_for_timeout(300)
+        await C.click('[data-view="catalog"]'); await C.wait_for_timeout(700)
+        check("v8.10 mobile: no navigator column; a «دسته‌ها» button instead", not await C.is_visible("#catNav") and await C.is_visible("#catSheetOpen")
+              and await C.evaluate("document.documentElement.scrollWidth") <= 390)
+        await C.click("#catSheetOpen"); await C.wait_for_timeout(400)
+        sh = await C.evaluate("() => { const r = document.getElementById('catSheet').getBoundingClientRect(); return { t: r.top, b: r.bottom, l: r.left, r: r.right, vh: innerHeight }; }")
+        lvl0 = await C.locator("#catSheetList .cat-nav-name").all_inner_texts()
+        check("v8.10 mobile: the sheet opens at the bottom with «همهٔ کتاب‌ها» and the top categories (chevron for those with subcategories)",
+              await C.is_visible("#catSheet") and abs(sh["b"] - sh["vh"]) <= 2 and sh["l"] >= -1 and sh["r"] <= 391 and lvl0[:3] == ["همهٔ کتاب‌ها", "ادبیات", "تاریخ"]
+              and await C.locator('#catSheetList [data-cat-drill="1"] .cat-chev').count() == 1 and not await C.is_visible("#catSheetBack"), f"{sh} {lvl0}")
+        await shot32("catalog-sheet-390.png")
+        await C.click('#catSheetList [data-cat-drill="1"]'); await C.wait_for_timeout(200)
+        lvl1 = await C.locator("#catSheetList .cat-nav-name").all_inner_texts()
+        check("v8.10 mobile: drilling into «ادبیات» shows «همهٔ کتاب‌های ادبیات» and its subcategories, with a back arrow",
+              await C.inner_text("#catSheetTitle") == "ادبیات" and lvl1 == ["همهٔ کتاب‌های ادبیات", "شعر", "داستان", "نمایشنامه"] and await C.is_visible("#catSheetBack"), str(lvl1))
+        await shot32("catalog-sheet-drill-390.png")
+        await C.click("#catSheetBack"); await C.wait_for_timeout(150)
+        back_ok = await C.inner_text("#catSheetTitle") == "دسته‌ها" and not await C.is_visible("#catSheetBack")
+        await C.click('#catSheetList [data-cat-drill="1"]'); await C.click('#catSheetList [data-cat-pick="11"]'); await C.wait_for_timeout(600)
+        check("v8.10 mobile: back arrow returns to the top level; picking «شعر» closes the sheet, filters (cat=11, hash) and labels the button",
+              back_ok and not await C.is_visible("#catSheet") and cat_reqs32()[-1].get("cat") == "11" and await C.evaluate("location.hash") == "#catalog?cat=11"
+              and "شعر" in await C.inner_text("#catSheetOpen") and await C.is_visible("#catCrumbs"))
+        cw = await C.evaluate("() => ({ sw: document.documentElement.scrollWidth, cr: document.getElementById('catCrumbs').getBoundingClientRect().right, tb: document.querySelector('.catalog-toolbar').getBoundingClientRect().right })")
+        check("v8.10 mobile 390px: catalog with a category has no horizontal scroll", cw["sw"] <= 390 and cw["cr"] <= 391 and cw["tb"] <= 391, str(cw))
+        await shot32("catalog-filtered-390.png")
+        await C.click("#catSheetOpen"); await C.wait_for_timeout(300)
+        reopen_lvl = await C.inner_text("#catSheetTitle") == "ادبیات" and await C.get_attribute('#catSheetList [data-cat-pick="11"]', "aria-current") == "true"
+        await C.click("#catSheetBack"); await C.click('#catSheetList [data-cat-pick=""]'); await C.wait_for_timeout(500)
+        check("v8.10 mobile: the sheet reopens at the chosen category's level; «همهٔ کتاب‌ها» clears the category",
+              reopen_lvl and await C.evaluate("location.hash") == "#catalog" and not await C.is_visible("#catCrumbs"))
+        await C.set_viewport_size({"width": 1280, "height": 800}); await C.wait_for_timeout(200)
+        # --- Admin «دسته‌ها» tab ---
+        await C.click('[data-view="admin"]'); await C.wait_for_timeout(500)
+        tabs32 = [t.strip() for t in await C.locator("#adminTabs [role=tab]").all_inner_texts()]
+        await C.click('[data-admin-tab="cats"]')
+        try: await poll(lambda: _count_gt(C, "#catTree .cat-top", 3), 6000)
+        except TimeoutError: pass
+        tops_txt = await C.locator("#catTree .cat-top > .cat-row .cat-row-name").all_inner_texts()
+        check("v8.10 admin: «دسته‌ها» tab right after «کتاب‌ها», #admin/cats, a two-level tree with counts (count_all for admins)",
+              tabs32[2:4] == ["کتاب‌ها", "دسته‌ها"] and await C.evaluate("location.hash") == "#admin/cats" and tops_txt[:3] == ["ادبیات", "تاریخ", "علوم"]
+              and await C.locator('#catTree [data-cat-id="1"] .cat-kid').count() == 3 and "۶۲ کتاب" in await C.inner_text('#catTree [data-cat-id="1"] > .cat-row'), f"{tabs32} {tops_txt}")
+        await shot32("admin-categories-1280.png")
+        await C.fill("#catAddTopName", "فلسفه"); await C.press("#catAddTopName", "Enter")
+        sv = await nposts32("category-save", 1)
+        try: await poll(lambda: _contains(C, "#catTree", "فلسفه"), 4000)
+        except TimeoutError: pass
+        check("v8.10 admin: «افزودن دستهٔ اصلی» sends category-save {name, parent_id: 0} with CSRF; the tree shows it",
+              sv[:1] == [{"name": "فلسفه", "parent_id": 0}] and bool(calls32("category-save", "POST")[0]["csrf"]) and "فلسفه" in await C.inner_text("#catTree"), str(sv))
+        await C.fill("#catAddTopName", "ادبیات"); await C.press("#catAddTopName", "Enter")
+        await nposts32("category-save", 2); await C.wait_for_timeout(300)
+        check("v8.10 admin: a duplicate name (409) is explained in Persian", "همین نام" in await C.inner_text("#catAdmError"), await C.inner_text("#catAdmError"))
+        await C.click('#catTree [data-cat-id="2"] > .cat-kids [data-cat-act="addsub"]'); await C.wait_for_timeout(150)
+        await C.fill('#catTree [data-cat-addsub="2"] input', "معاصر"); await C.press('#catTree [data-cat-addsub="2"] input', "Enter")
+        sv = await nposts32("category-save", 3)
+        try: await poll(lambda: _contains(C, '#catTree [data-cat-id="2"]', "معاصر"), 4000)
+        except TimeoutError: pass
+        check("v8.10 admin: «+ زیردسته» adds a subcategory under its parent (parent_id 2)", sv[2:3] == [{"name": "معاصر", "parent_id": 2}]
+              and "معاصر" in await C.inner_text('#catTree [data-cat-id="2"] .cat-kids'), str(sv[2:]))
+        await C.click('#catTree [data-cat-id="11"] [data-cat-act="rename"]'); await C.wait_for_timeout(150)
+        ren_vis = await C.is_visible('#catTree [data-cat-rename="11"] input') and await C.input_value('#catTree [data-cat-rename="11"] input') == "شعر"
+        await C.fill('#catTree [data-cat-rename="11"] input', "شعر و ترانه"); await C.press('#catTree [data-cat-rename="11"] input', "Enter")
+        sv = await nposts32("category-save", 4)
+        try: await poll(lambda: _contains(C, '#catTree [data-cat-id="11"]', "شعر و ترانه"), 4000)
+        except TimeoutError: pass
+        check("v8.10 admin: rename inline (input in the row, Enter) sends {id, name, parent_id}", ren_vis and sv[3:4] == [{"id": 11, "name": "شعر و ترانه", "parent_id": 1}]
+              and not await C.is_visible('#catTree [data-cat-rename="11"]'), str(sv[3:]))
+        await C.select_option('#catTree [data-cat-id="13"] [data-cat-move]', "2")
+        sv = await nposts32("category-save", 5)
+        try: await poll(lambda: _contains(C, '#catTree [data-cat-id="2"] .cat-kids', "نمایشنامه"), 4000)
+        except TimeoutError: pass
+        check("v8.10 admin: «انتقال به…» moves a subcategory to another parent", sv[4:5] == [{"id": 13, "name": "نمایشنامه", "parent_id": 2}]
+              and "نمایشنامه" in await C.inner_text('#catTree [data-cat-id="2"] .cat-kids'), str(sv[4:]))
+        await C.click('#catTree [data-cat-id="1"] > .cat-row [data-cat-act="down"]')
+        od = await nposts32("category-order", 1)
+        try: await poll(lambda: C.evaluate("document.querySelector('#catTree .cat-top').dataset.catId === '2'"), 4000)
+        except TimeoutError: pass
+        await C.click('#catTree [data-cat-id="12"] [data-cat-act="up"]')
+        od = await nposts32("category-order", 2)
+        await C.wait_for_timeout(300)
+        kid_order = await C.evaluate("[...document.querySelectorAll('#catTree [data-cat-id=\"1\"] .cat-kid')].map(e => +e.dataset.catId)")
+        check("v8.10 admin: ↓/↑ reorder through category-order {parent_id, ids} (top level and inside a parent)",
+              len(od) == 2 and od[0]["parent_id"] == 0 and od[0]["ids"][:2] == [2, 1] and len(od[0]["ids"]) == 6
+              and od[1] == {"parent_id": 1, "ids": [12, 11]} and kid_order == [12, 11]
+              and await C.evaluate("document.querySelector('#catTree .cat-top').dataset.catId") == "2", f"{od} {kid_order}")
+        await C.click('#catTree [data-cat-id="3"] > .cat-row [data-cat-act="delete"]'); await C.wait_for_timeout(200)
+        del_open = await C.is_visible("#catDelDialog") and "۲۲ کتاب" in await C.inner_text("#catDelInfo")
+        await C.select_option("#catDelMoveTo", "21"); await C.click("#catDelOk")
+        dl = await nposts32("category-delete", 1)
+        try: await poll(lambda: _contains(C, "#toast", "حذف شد"), 4000)
+        except TimeoutError: pass
+        check("v8.10 admin: delete asks what to do with the books; «منتقل شوند به…» sends {id, move_to} and reports the moved count",
+              del_open and dl[:1] == [{"id": 3, "move_to": 21}] and "۲۰ کتاب" in await C.inner_text("#toast") and not await C.is_visible("#catDelDialog")
+              and await C.locator('#catTree [data-cat-id="3"]').count() == 0, f"{dl} {await C.inner_text('#toast')}")
+        await C.click('#catTree [data-cat-id="22"] [data-cat-act="delete"]'); await C.wait_for_timeout(200)
+        await C.click("#catDelOk")
+        dl = await nposts32("category-delete", 2); await C.wait_for_timeout(300)
+        check("v8.10 admin: «فقط از کتاب‌ها برداشته شود» sends {id} only", dl[1:2] == [{"id": 22}] and "برداشته شد" in await C.inner_text("#toast"), str(dl))
+        await C.click('#catTree [data-cat-id="1"] > .cat-row [data-cat-act="delete"]'); await C.wait_for_timeout(200)
+        await C.click("#catDelOk")
+        dl = await nposts32("category-delete", 3); await C.wait_for_timeout(300)
+        check("v8.10 admin: has_children (409) is explained in the dialog, which stays open",
+              len(dl) == 3 and await C.is_visible("#catDelDialog") and "زیردسته دارد" in await C.inner_text("#catDelError"), await C.inner_text("#catDelError"))
+        await C.click("#catDelClose")
+        # --- Books tab: tree filter, details picker, bulk add/remove ---
+        await C.click('[data-admin-tab="books"]')
+        try: await poll(lambda: _count_gt(C, "#admBooks tr.adm-row", 0), 6000)
+        except TimeoutError: pass
+        opts = await C.locator("#admFCategory option").all_inner_texts()
+        vals = await C.eval_on_selector_all("#admFCategory option", "els => els.map(e => e.value)")
+        check("v8.10 books: the category filter is the tree (parents first, children indented under them), plus «بدون دسته»",
+              vals[:3] == ["", "none", "2"] and opts[1] == "بدون دسته" and opts[2].startswith("تاریخ") and "—" in opts[3] and "—" not in opts[vals.index("1")]
+              and vals.index("2") < vals.index("21") < vals.index("1") < vals.index("12") < vals.index("5") < vals.index("51"), f"{vals} {opts}")
+        await C.select_option("#admFCategory", "1"); await C.wait_for_timeout(500)
+        bq = calls32("admin-books")[-1]["qs"]
+        await C.select_option("#admFCategory", "none"); await C.wait_for_timeout(500)
+        bq2 = calls32("admin-books")[-1]["qs"]
+        h_none = await C.evaluate("location.hash")
+        await C.reload(); await C.wait_for_timeout(600)
+        try: await poll(lambda: _count_gt(C, "#admBooks tr.adm-row, #admBooks tr.adm-empty", 0), 8000)
+        except TimeoutError: pass
+        await C.wait_for_timeout(300)
+        check("v8.10 books: the filter sends cat=ID / cat=none (not category), lives in the hash and survives a refresh",
+              bq.get("cat") == "1" and "category" not in bq and bq2.get("cat") == "none" and "cat=none" in h_none
+              and await C.input_value("#admFCategory") == "none" and calls32("admin-books")[-1]["qs"].get("cat") == "none", f"{bq} {bq2} {h_none}")
+        await C.select_option("#admFCategory", ""); await C.wait_for_timeout(500)
+        # details panel picker
+        await C.locator('#admBooks tr[data-id="7001"] .adm-c-title').click(); await C.wait_for_timeout(300)
+        chips0 = await C.locator("#admDetailCats .cp-chip").all_inner_texts()
+        check("v8.10 details: the category picker replaces the free-text field and shows the book's categories as chips",
+              await C.is_visible("#admDetailCats .cp-search") and not await C.is_visible('#admDetailForm [name="category"]')
+              and [c.replace("×", "").strip() for c in chips0] == ["ادبیات › داستان", "تاریخ › ایران"], str(chips0))
+        await C.fill("#admDetailCats .cp-search", "موس"); await C.wait_for_timeout(100)
+        found = await C.locator("#admDetailCats .cp-opt").all_inner_texts()
+        await C.click('#admDetailCats [data-cp="51"]')
+        await C.fill("#admDetailCats .cp-search", "")
+        await C.click('#admDetailCats [data-cp-del="21"]')
+        grouped = await C.evaluate("[...document.querySelectorAll('#admDetailCats .cp-group')].map(g => [...g.querySelectorAll('[data-cp]')].map(o => +o.dataset.cp))")
+        check("v8.10 picker: search narrows the options (the parent stays as the group head), options are grouped by parent, × removes a chip",
+              [f.strip() for f in found] == ["هنر", "موسیقی"] and grouped[0][0] == 2 and 21 in grouped[0] and [c.replace("×", "").strip() for c in await C.locator("#admDetailCats .cp-chip").all_inner_texts()] == ["ادبیات › داستان", "هنر › موسیقی"],
+              f"{found} {grouped}")
+        await shot32("picker-details-1280.png")
+        await C.click("#admDetailSave")
+        cu = await nposts32("catalog-update", 1)
+        check("v8.10 details: «ذخیره» sends categories:[ids] through catalog-update (no free-text category)",
+              cu[:1] and cu[0]["book_id"] == 7001 and cu[0]["categories"] == [12, 51] and "category" not in cu[0], str(cu))
+        await C.wait_for_timeout(300)
+        await C.locator('#admBooks tr[data-id="7002"] .adm-c-title').click(); await C.wait_for_timeout(300)
+        for _ in range(14):
+            el = C.locator('#admDetailCats .cp-opt[aria-selected="false"]:not([disabled])')
+            if not await el.count(): break
+            await el.first.click()
+        nsel = await C.locator("#admDetailCats .cp-chip").count()
+        dis = await C.locator('#admDetailCats .cp-opt[aria-selected="false"][disabled]').count()
+        free = await C.locator('#admDetailCats .cp-opt[aria-selected="false"]:not([disabled])').count()
+        check("v8.10 picker: at most 10 categories; the rest are disabled with a note", nsel == 10 and dis > 0 and free == 0 and "حداکثر" in await C.inner_text("#admDetailCats .cp-note"),
+              f"{nsel} {dis} {free}")
+        await C.click("#admDetailClose")
+        # bulk add / remove one category
+        await C.locator("#admBooks tr.adm-row").nth(0).locator(".adm-sel").click()
+        await C.locator("#admBooks tr.adm-row").nth(2).locator(".adm-sel").click(modifiers=["Shift"])
+        check("v8.10 bulk: «افزودن دسته…» and «برداشتن دسته…» replace the free-text category actions",
+              await C.is_visible('#admBulkBar [data-bulk="add_category"]') and await C.is_visible('#admBulkBar [data-bulk="remove_category"]')
+              and not await C.is_visible('#admBulkBar [data-bulk="set_category"]') and not await C.is_visible('#admBulkBar [data-bulk="clear_category"]'))
+        await C.click('#admBulkBar [data-bulk="add_category"]'); await C.wait_for_timeout(250)
+        pick_vis = await C.is_visible("#catPickDialog") and "۳ کتاب" in await C.inner_text("#catPickTitle")
+        await C.click('#catPickBox [data-cp="11"]'); await C.click('#catPickBox [data-cp="21"]')
+        one = await C.locator("#catPickBox .cp-chip").count()
+        await C.click("#catPickOk")
+        bk = await nposts32("admin-bulk", 1)
+        check("v8.10 bulk: «افزودن دسته…» picks one category and sends add_category {ids, category_id}",
+              pick_vis and one == 1 and bk[:1] == [{"action": "add_category", "ids": [7001, 7002, 7003], "category_id": 21}], str(bk))
+        await C.wait_for_timeout(500)
+        await C.locator("#admBooks tr.adm-row").nth(1).locator(".adm-sel").click()
+        await C.click('#admBulkBar [data-bulk="remove_category"]'); await C.wait_for_timeout(250)
+        await C.click('#catPickBox [data-cp="12"]'); await C.click("#catPickOk")
+        bk = await nposts32("admin-bulk", 2)
+        check("v8.10 bulk: «برداشتن دسته…» confirms with the name and count, then sends remove_category",
+              bk[1:2] == [{"action": "remove_category", "ids": [7002], "category_id": 12}] and dlg32 and "داستان" in dlg32[-1] and "۱ کتاب" in dlg32[-1], f"{bk} {dlg32[-1:]}")
+        # review queue: C opens the picker
+        await C.click('[data-admin-tab="queue"]')
+        try: await poll(lambda: _contains(C, "#admReview", "صف دسته"), 6000)
+        except TimeoutError: pass
+        await C.keyboard.press("c"); await C.wait_for_timeout(250)
+        c_open = await C.is_visible("#catPickDialog") and await C.locator("#catPickBox .cp-search").count() == 1
+        await C.click('#catPickBox [data-cp="11"]'); await C.click('#catPickBox [data-cp="13"]'); await C.click("#catPickOk")
+        cu = await nposts32("catalog-update", 2)
+        try: await poll(lambda: _contains(C, "#admReview .adm-detail-chips", "نمایشنامه"), 4000)
+        except TimeoutError: pass
+        check("v8.10 queue: C opens the category picker; «ثبت» sends catalog-update {book_id, categories}",
+              c_open and cu[1:2] == [{"book_id": 7901, "categories": [11, 13]}] and "شعر و ترانه" in await C.inner_text("#admReview .adm-detail-chips"), str(cu[1:]))
+        # --- Phone: admin tab, picker dialog ---
+        await C.set_viewport_size({"width": 390, "height": 844}); await C.wait_for_timeout(200)
+        await C.click('[data-admin-tab="cats"]'); await C.wait_for_timeout(400)
+        aw = await C.evaluate("() => ({ sw: document.documentElement.scrollWidth, r: Math.max(...[...document.querySelectorAll('#catTree .cat-row')].map(e => e.getBoundingClientRect().right)) })")
+        check("v8.10 mobile 390px: the categories tab fits (no horizontal scroll)", aw["sw"] <= 390 and aw["r"] <= 391, str(aw))
+        await shot32("admin-categories-390.png")
+        await C.click('[data-admin-tab="queue"]'); await C.wait_for_timeout(400)
+        await C.keyboard.press("c"); await C.wait_for_timeout(350)
+        pd = await C.evaluate("() => { const r = document.getElementById('catPickDialog').getBoundingClientRect(); return { b: r.bottom, l: r.left, r: r.right, vh: innerHeight, sw: document.documentElement.scrollWidth }; }")
+        check("v8.10 mobile: the picker is a bottom sheet that fits the screen", await C.is_visible("#catPickDialog") and abs(pd["b"] - pd["vh"]) <= 2 and pd["l"] >= -1 and pd["r"] <= 391 and pd["sw"] <= 390, str(pd))
+        await shot32("picker-sheet-390.png")
+        await C.click("#catPickClose")
+        await C.set_viewport_size({"width": 1280, "height": 800})
+        # --- The user's suggestion to the public catalog: description + picker ---
+        tmp32 = Path(_tf32.mkdtemp(prefix="borg-e2e-cat-"))
+        await C.click('[data-view="mine"]'); await C.wait_for_timeout(300)
+        await C.set_input_files("#epubInput", make_epub(tmp32 / "cat.epub", "کتاب دسته‌دار", "test-cat-32", "نویسندهٔ دسته"))
+        try: await poll(lambda: _count_gt(C, '#bookGrid .book-card:has-text("کتاب دسته‌دار") .share-book', 0), 25000)
+        except TimeoutError: pass
+        await C.click('#bookGrid .book-card:has-text("کتاب دسته‌دار") .share-book'); await C.wait_for_timeout(400)
+        sub_open = await C.is_visible("#submitDialog") and await C.is_visible("#submitCats .cp-search")
+        await C.fill('#submitForm [name="description"]', "توضیح پیشنهاد")
+        await C.click('#submitCats [data-cp="12"]'); await C.click('#submitCats [data-cp="2"]')
+        await shot32("picker-submit-1280.png")
+        await C.click("#submitOk")
+        cs = await nposts32("catalog-submit", 1)
+        check("v8.10 suggestion: the user's dialog has a description and the picker; it sends categories:[ids]",
+              sub_open and len(cs) == 1 and cs[0]["description"] == "توضیح پیشنهاد" and cs[0]["categories"] == [12, 2] and isinstance(cs[0]["book_id"], int)
+              and "category" not in cs[0] and not await C.is_visible("#submitDialog"), str(cs))
+        errs32 = [e for e in errs32 if "status of 409" not in e]  # the mocked duplicate / has_children answers
+        check("v8.10 categories: no JS errors (besides the two mocked 409 answers), no external requests", not errs32 and not ext32, str((errs32 + ext32)[:3]))
+        await ctx32.close()
         await b.close()
 
 def main():
