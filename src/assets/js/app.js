@@ -2358,6 +2358,8 @@
     $("authForms").hidden = !!user;
     $("accountInfo").hidden = !user;
     if (user) { $("accountName").textContent = user.name; $("accountEmail").textContent = user.email; }
+    if (!user || user.role !== "admin") { hideNewApiToken(); setCleanSyncState(""); }
+    else pullCleanRules();
     renderLibrary();
   }
 
@@ -2373,7 +2375,7 @@
     closeAddMenu();
     if (view === "catalog") { renderCatalog(); loadCatalog(); }
     if (view === "book") { renderBookDetail(); if (!catalogLoaded) loadCatalog(); }
-    if (view === "admin") loadAdmin();
+    if (view === "admin") { hideNewApiToken(); loadAdmin(); }
   }
   document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.addEventListener("click", () => {
     if (t.dataset.view === "catalog") { catalogFilter.author = ""; catalogFilter.category = ""; }
@@ -3019,6 +3021,7 @@
         [fa(stats.client_errors || 0), "خطای کاربران", stats.client_errors ? " stat-errors" : ""],
       ].map(([v, l, c]) => `<div class="stat${c || ""}"><b>${v}</b><span>${l}</span></div>`).join("");
       loadErrors(true);
+      loadApiTokens();
       $("settingApproval").checked = !!settings.catalog_requires_approval;
       $("catalogAdminList").innerHTML = catalogAll.books.filter(b => b.status !== "pending").map(b => `<div class="admin-item">
           <span><strong>${esc(b.title)}</strong> — ${esc(b.author || "")} <span class="status-chip ${b.status === "approved" ? "" : "off"}">${STATUS_FA[b.status] || b.status}</span>${catOf(b) ? ` <span class="status-chip cat-chip">${esc(catOf(b))}</span>` : ""}
@@ -3174,6 +3177,67 @@
     } catch (err) { showToast(apiMessage(err)); }
   });
 
+  // ---------- v8.7 API keys: other programs send books straight to the public catalog (route api-book) ----------
+  // The plaintext key is shown once after creation; the server stores only its hash. Timestamps are Unix seconds.
+  const tsSec = v => { const n = Number(v) || 0; return n > 1e12 ? n / 1000 : n; };
+  function hideNewApiToken() { $("apiTokenNew").hidden = true; $("apiTokenValue").value = ""; }
+  async function loadApiTokens() {
+    let r;
+    try { r = await api("api-tokens"); }
+    catch (err) {
+      $("apiTokenList").innerHTML = `<p class="muted">${esc(err instanceof ApiFail && err.status === 404 ? "این بخش هنوز روی سرور فعال نیست." : apiMessage(err))}</p>`;
+      return;
+    }
+    const tokens = Array.isArray(r && r.tokens) ? r.tokens : [];
+    $("apiTokenList").innerHTML = tokens.map(t => {
+      const name = String(t.name || "بدون نام"), last = tsSec(t.last_used_at), created = tsSec(t.created_at);
+      return `<div class="admin-item api-item${t.revoked ? " revoked" : ""}" data-token="${esc(t.id)}">
+        <span><strong dir="auto">${esc(name)}</strong> <span class="status-chip${t.revoked ? " off" : ""}">${t.revoked ? "لغوشده" : "فعال"}</span>
+          <span class="status-chip cat-chip">${t.require_review ? "منتظر تأیید" : "انتشار مستقیم"}</span><br>
+          <span class="muted small">ساخته‌شده ${created ? fmtDate(created) : "—"} · آخرین استفاده ${last ? fmtDateTime(last) : "هرگز"} · ${faNum(Number(t.uses) || 0)} بار استفاده</span></span>
+        ${t.revoked ? "" : `<button class="secondary-button" type="button" data-token-revoke="${esc(t.id)}" data-name="${esc(name)}">لغو</button>`}</div>`;
+    }).join("") || '<p class="muted">هنوز کلیدی ساخته نشده.</p>';
+  }
+  $("apiTokenForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const name = $("apiTokenName").value.replace(/\s+/g, " ").trim();
+    if (!name) { $("apiTokenError").textContent = "برای کلید یک نام بنویس (مثلاً نام برنامه)."; $("apiTokenName").focus(); return; }
+    $("apiTokenError").textContent = ""; $("apiTokenCreate").disabled = true;
+    try {
+      const r = await api("api-token-create", { method: "POST", body: { name, require_review: $("apiTokenReview").checked } });
+      if (!r || typeof r.token !== "string" || !r.token) throw new ApiFail(500, "bad_response", "پاسخ سرور کلید نداشت.");
+      $("apiTokenValue").value = r.token; $("apiTokenNew").hidden = false;
+      $("apiTokenName").value = ""; $("apiTokenReview").checked = false;
+      $("apiTokenValue").focus(); $("apiTokenValue").select();
+      loadApiTokens();
+    } catch (err) {
+      $("apiTokenError").textContent = apiMessage(err);
+      if (!(err instanceof ApiFail) || err.status >= 500) reportError("api", err, "api-token-create");
+    } finally { $("apiTokenCreate").disabled = false; }
+  });
+  $("apiTokenCopy").addEventListener("click", async () => {
+    const field = $("apiTokenValue");
+    if (!field.value) return;
+    field.focus(); field.select();
+    let ok = false;
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(field.value); ok = true; } } catch (_) {}
+    if (!ok) { try { ok = document.execCommand("copy"); } catch (_) {} }
+    showToast(ok ? "کلید کپی شد." : "کلید انتخاب شد؛ آن را کپی کن.");
+  });
+  $("apiTokenList").addEventListener("click", async e => {
+    const btn = e.target.closest("[data-token-revoke]");
+    if (!btn) return;
+    if (!confirm(`کلید «${btn.dataset.name}» لغو شود؟ برنامه‌ای که از آن استفاده می‌کند دیگر نمی‌تواند کتاب بفرستد.`)) return;
+    btn.disabled = true;
+    try {
+      const id = /^\d+$/.test(btn.dataset.tokenRevoke) ? Number(btn.dataset.tokenRevoke) : btn.dataset.tokenRevoke;
+      await api("api-token-revoke", { method: "POST", body: { id } });
+      showToast("کلید لغو شد.");
+    } catch (err) { showToast(apiMessage(err)); btn.disabled = false; }
+    loadApiTokens();
+  });
+  $("apiCurl").textContent = `curl -H "Authorization: Bearer <کلید>" \\\n  -F "file=@book.epub" \\\n  "${API}?r=api-book"`;
+
   // ======================= v8.3 text cleanup («پاک‌سازی متن») =======================
   // Rules remove only the matched phrase from the EPUB file itself (no original is kept). They apply to every
   // book: on demand (search → preview → apply) and automatically to newly imported books.
@@ -3186,7 +3250,11 @@
     try { const r = JSON.parse(localStorage.getItem(CLEAN_KEY) || "[]"); return Array.isArray(r) ? r.filter(x => x && (x.type === "telegram" || ((x.type === "phrase" || x.type === "line") && typeof x.text === "string"))) : []; }
     catch (_) { return []; }
   }
-  function saveCleanRules(rules) { try { localStorage.setItem(CLEAN_KEY, JSON.stringify(rules)); } catch (_) {} }
+  /** Every local change is mirrored to the server for an admin (v8.7); `fromServer` skips that when adopting server rules. */
+  function saveCleanRules(rules, fromServer) {
+    try { localStorage.setItem(CLEAN_KEY, JSON.stringify(rules)); } catch (_) {}
+    if (!fromServer) scheduleCleanPush();
+  }
   const ruleLabel = r => r.type === "telegram" ? TG_LABEL : r.type === "line" ? `کل خطِ شامل «${r.text}»` : `«${r.text}»`;
   // "line" rules remove the smallest block (paragraph, list item, heading, div…) whose text contains the fixed part,
   // whatever else (e.g. a changing URL) is in it; blocks much longer than the fixed part are left alone.
@@ -3467,6 +3535,7 @@
       : '<li class="muted">هنوز قاعده‌ای نیست.</li>';
     $("cleanPresetTelegram").disabled = rules.some(r => r.type === "telegram");
     $("cleanSearch").disabled = !rules.length || cleanBusy;
+    renderCleanSyncNote();
   }
   function resetCleanResults(status) {
     cleanScan = null; $("cleanResults").innerHTML = ""; $("cleanApplyRow").hidden = true;
@@ -3551,7 +3620,7 @@
     showToast(`${faNum(removed)} مورد حذف شد`);
     renderLibrary();
   }
-  $("cleanOpen").addEventListener("click", () => { renderCleanRules(); $("cleanError").textContent = ""; $("cleanDialog").showModal(); $("cleanPhrase").focus(); });
+  $("cleanOpen").addEventListener("click", () => { if (cleanSync.dirty && isAdmin()) pushCleanRules(); renderCleanRules(); $("cleanError").textContent = ""; $("cleanDialog").showModal(); $("cleanPhrase").focus(); });
   $("cleanClose").addEventListener("click", () => $("cleanDialog").close());
   $("cleanForm").addEventListener("submit", e => {
     e.preventDefault();
@@ -3575,6 +3644,70 @@
   $("cleanResults").addEventListener("change", e => { if (e.target.matches("[data-clean-broad]")) renderCleanResults(); });
   $("cleanSearch").addEventListener("click", () => { runCleanSearch().catch(err => { console.error(err); showToast("جستجو انجام نشد."); }); });
   $("cleanApply").addEventListener("click", () => { runCleanApply().catch(err => { console.error(err); showToast("پاک‌سازی انجام نشد."); }); });
+
+  // ---- v8.7: an admin's cleanup rules are mirrored to the server, which applies them to books sent with an API key ----
+  // Every local change is pushed (debounced) as the full list. On login/start the server list is read: if the local
+  // list is empty it is adopted, otherwise local wins and is pushed when the two differ. Offline: retried on reconnect.
+  const CLEAN_PUSH_MS = 1200;
+  const cleanSync = { state: "", timer: null, dirty: false };
+  const isAdmin = () => !!(account && account.user && account.user.role === "admin");
+  const CLEAN_SYNC_FA = { pending: "در انتظار ذخیره روی سرور", saving: "در حال ذخیره روی سرور…", ok: "روی سرور ذخیره شد",
+    offline: "آفلاین؛ بعداً ذخیره می‌شود", failed: "ذخیره روی سرور انجام نشد", off: "سرور هنوز پشتیبانی نمی‌کند" };
+  const serverRules = rules => rules.map(r => r.type === "telegram" ? { id: String(r.id), type: "telegram" } : { id: String(r.id), type: r.type, text: r.text });
+  function setCleanSyncState(state) { cleanSync.state = state; renderCleanSyncNote(); }
+  function renderCleanSyncNote() {
+    const admin = isAdmin();
+    $("cleanServerNote").hidden = !admin;
+    const chip = $("cleanSyncState");
+    chip.textContent = admin && CLEAN_SYNC_FA[cleanSync.state] ? CLEAN_SYNC_FA[cleanSync.state] : "";
+    chip.hidden = !chip.textContent;
+    chip.dataset.state = cleanSync.state;
+    chip.classList.toggle("off", cleanSync.state === "failed" || cleanSync.state === "off");
+  }
+  function scheduleCleanPush() {
+    if (!isAdmin()) return;
+    cleanSync.dirty = true;
+    clearTimeout(cleanSync.timer);
+    setCleanSyncState(navigator.onLine ? "pending" : "offline");
+    cleanSync.timer = setTimeout(pushCleanRules, CLEAN_PUSH_MS);
+  }
+  async function pushCleanRules() {
+    clearTimeout(cleanSync.timer); cleanSync.timer = null;
+    if (!isAdmin()) return;
+    if (!navigator.onLine) { cleanSync.dirty = true; setCleanSyncState("offline"); return; }
+    cleanSync.dirty = false; setCleanSyncState("saving");
+    try {
+      await api("clean-rules", { method: "POST", body: { rules: serverRules(loadCleanRules()) } });
+      if (cleanSync.state === "saving") setCleanSyncState("ok");
+    } catch (err) {
+      cleanSync.dirty = true;
+      if (!navigator.onLine) { setCleanSyncState("offline"); return; }
+      setCleanSyncState(err instanceof ApiFail && err.status === 404 ? "off" : "failed");
+      reportError("api", err, "clean-rules:push");
+    }
+  }
+  async function pullCleanRules() {
+    if (!isAdmin() || !navigator.onLine) return;
+    let r;
+    try { r = await api("clean-rules"); }
+    catch (err) {
+      if (!navigator.onLine) return;
+      setCleanSyncState(err instanceof ApiFail && err.status === 404 ? "off" : "failed");
+      reportError("api", err, "clean-rules:get");
+      return;
+    }
+    if (!isAdmin()) return;
+    const server = (Array.isArray(r && r.rules) ? r.rules : [])
+      .filter(x => x && (x.type === "telegram" || ((x.type === "phrase" || x.type === "line") && typeof x.text === "string" && x.text.trim())))
+      .map(x => x.type === "telegram" ? { id: String(x.id || newUid()), type: "telegram" } : { id: String(x.id || newUid()), type: x.type, text: x.text.slice(0, 200) });
+    const local = loadCleanRules();
+    if (!local.length && server.length) {
+      saveCleanRules(server, true); cleanSync.dirty = false; setCleanSyncState("ok");
+      if ($("cleanDialog").open && !cleanBusy) { resetCleanResults(""); renderCleanRules(); }
+    } else if (cleanSync.dirty || JSON.stringify(serverRules(local)) !== JSON.stringify(serverRules(server))) pushCleanRules();
+    else setCleanSyncState("ok");
+  }
+  window.addEventListener("online", () => { if (cleanSync.dirty && isAdmin()) pushCleanRules(); });
 
   // ---------- Start ----------
   // ---- Repair titles/authors/covers of books imported by old versions that could not read metadata ----

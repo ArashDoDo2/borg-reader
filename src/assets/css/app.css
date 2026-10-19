@@ -786,3 +786,26 @@ body.dark .reader .icon-button:hover,body.dark .reader .secondary-button:hover{b
  .reader-bottom #bookmarkButton .ico{width:26px;height:26px}
  .topbar .icon-button .ico{width:24px;height:24px}
 }
+
+/* v8.7 API keys (admin) and server-synced cleanup rules */
+.api-intro{margin:0 0 12px;line-height:1.9}
+.api-form{align-items:center}
+.api-form #apiTokenName{flex:1 1 200px}
+.api-form .api-review{flex:0 1 auto}
+.api-new{margin:4px 0 12px;padding:12px;border:1px solid var(--gold);border-radius:12px;background:var(--bg)}
+.api-warn{margin:0 0 8px;font-weight:700;font-size:13px;color:#9b3d23}
+body.dark .api-warn{color:#f0a58c}
+.api-token-value{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:13px;direction:ltr;text-align:left}
+.api-item.revoked{opacity:.55}
+.api-item.revoked strong{text-decoration:line-through}
+.api-guide{margin:14px 0 6px}
+.api-curl{margin:0;padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);font-size:12px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;text-align:left;max-width:100%}
+.clean-server{margin:-4px 0 12px;line-height:1.9}
+.clean-server .status-chip{margin-inline-start:4px;vertical-align:middle}
+@media(max-width:700px){
+ .api-form #apiTokenName{flex:1 1 100%}
+ .api-form .api-review{flex:1 1 100%}
+ .api-form .secondary-button{flex:1 1 100%}
+ .api-new .admin-row .admin-input{flex:1 1 100%}
+ .api-new .admin-row .secondary-button{flex:1 1 100%}
+}

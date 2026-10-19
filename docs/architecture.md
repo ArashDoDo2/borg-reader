@@ -49,7 +49,8 @@ duplicate), `cleanedAt`, and for synced books `cleanPending` (new file not yet s
 
 localStorage: `ketabkhane-reader-preferences` → `{font, lineHeight, fontSize, theme (light/sepia/dark/black/auto),
 align, librarySort, libraryFilter, dailyGoal, margin, para, flow, spread, digits, taps, wake, ttsRate, ttsVoice}`;
-`ketab-theme`; `borg-clean-rules` (v8.3 cleanup rules: `[{id, type: "phrase", text} | {id, type: "telegram"}]`);
+`ketab-theme`; `borg-clean-rules` (v8.3 cleanup rules: `[{id, type: "phrase" | "line", text} | {id, type: "telegram"}]`;
+mirrored to the server for an admin since v8.7, §4a);
 `borg-reading-days`/`-other`/`-pushed` (stats); `borg-device-id`; `borg-debug` (diagnostics only,
 read by the WebKit probe; empty for real users).
 
@@ -129,6 +130,28 @@ matched text is removed and no original is kept (owner's decisions, `docs/contex
 - **Import:** `importFile` runs the saved rules on the new book before it is uploaded (`autoCleanImported`); rules
   that look too broad for that book are skipped silently; the toast then says «… N مورد حذف شد».
 - **Server swap:** see §10 (`book-replace`).
+- **Server copy for the admin (v8.7):** when the logged-in user is an admin, every change to the rules (add, delete,
+  Telegram preset — all go through `saveCleanRules`) POSTs the full list to `clean-rules` as `{rules: [{id, type,
+  text?}]}`, debounced 1.2 s (`scheduleCleanPush` → `pushCleanRules`); the server applies these rules to books sent
+  with an API key. On admin login / app start (`setAccount` → `pullCleanRules`) the client GETs `clean-rules`: if the
+  local list is empty and the server has rules they are adopted (saved with `fromServer`, no push back); if both exist
+  and differ, **local wins** and is pushed. Offline the push is kept (`cleanSync.dirty`) and retried on `online` or
+  when the dialog opens; real failures go to `reportError("api", …, "clean-rules:push|get")`. Limitation: a list
+  emptied on one device while offline is refilled from the server at the next login (empty local = adopt). The dialog
+  shows admins «قانون‌ها برای کتاب‌های ارسالی با API هم روی سرور اعمال می‌شوند» with a state chip (`#cleanSyncState`:
+  pending / saving / saved / offline / failed / not supported when the route answers 404). Non-admins: local only, as before.
+
+## 4c. API keys (admin, v8.7, client side)
+Admin panel block «کلیدهای API» (`#apiBlock`, after «کاربران»). Keys let other programs send books straight to the
+public catalog through the machine route `api-book` (Bearer token, multipart; documented in `docs/api-books.md`;
+the UI never calls it). `loadApiTokens()` (run by `loadAdmin`) GETs `api-tokens` and lists name, created date, last
+use (Persian date/time, «هرگز» when 0), use count, review flag («منتظر تأیید» / «انتشار مستقیم»), status; revoked
+keys are greyed (`.api-item.revoked`) and have no button. «ساخت کلید» POSTs `api-token-create {name,
+require_review}` (name required) and shows the returned plaintext `token` **once** in a read-only field
+(`#apiTokenValue`) with «کپی» (Clipboard API, falling back to select + `execCommand`) and the warning «این کلید فقط
+همین یک بار نمایش داده می‌شود»; the field is cleared when the admin view is opened again or the admin logs out.
+«لغو» asks for confirmation and POSTs `api-token-revoke {id}`. A 404 from `api-tokens` shows «این بخش هنوز روی سرور
+فعال نیست.». A curl example built from the site's API URL is shown under the list.
 
 ## 4b. Reader engine (v8)
 Details and history of each workaround: `docs/context/reader-engine-notes.md`.
@@ -199,6 +222,10 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
 - `tests/webkit_probe.py`: WebKit diagnostics per rendering variant (frame width, what is under the viewer); CI runs it
   only when `webkit_e2e.py` fails.
 - e2e section 18 (v8.4): TOC hrefs that go up a folder (`nav/nav.xhtml` → `../text/c1.xhtml`, NCX in `toc/`).
+- e2e section 27 (v8.7): API keys and admin cleanup-rule sync with Playwright route mocks of `api-tokens`,
+  `api-token-create`, `api-token-revoke` and `clean-rules` (real admin login): adopt server rules when local is empty,
+  debounced POST of the full list on add/delete, key shown once + copy, list/revoked state, revoke call, 390 px fit,
+  nothing sent when logged out, local wins when both differ.
 
 ## 8. Known gaps
 - No WebKit/Safari gate in CI yet; iOS behaviour is verified by the owner on devices after release.
