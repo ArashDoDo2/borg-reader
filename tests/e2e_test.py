@@ -572,9 +572,14 @@ async def run(url):
         await E.click("#closeReader")
         # Catalog search and details
         await E.click('[data-view="catalog"]'); await E.wait_for_timeout(1200)
-        await E.fill("#catalogSearch", "چیزی-که-نیست"); await E.wait_for_timeout(200)
+        # v8.9: a paged server gets the query after a 300 ms debounce, so wait for the result instead of a fixed delay
+        await E.fill("#catalogSearch", "چیزی-که-نیست")
+        try: await poll(lambda: _contains(E, "#catalogGrid", "پیدا نشد"), 5000)
+        except TimeoutError: pass
         check("catalog search filters", await E.locator("#catalogGrid .book-card").count() == 0)
-        await E.fill("#catalogSearch", "آزمایشی"); await E.wait_for_timeout(200)
+        await E.fill("#catalogSearch", "آزمایشی")
+        try: await poll(lambda: _count_gt(E, "#catalogGrid .book-card", 0), 5000)
+        except TimeoutError: pass
         await E.click("#catalogGrid .book-card"); await E.wait_for_timeout(400)
         check("catalog book page opens", await E.is_visible("#viewBook") and await E.inner_text("#detailTitle") == "کتاب آزمایشی")
         await E.click("#detailBack"); await E.wait_for_timeout(300)
@@ -2265,6 +2270,191 @@ async def run(url):
         unexpected = [e for e in errsM if "Metadata extraction failed" not in e]  # the corrupt file is expected to fail
         check("v8.8.1 multi import: no unexpected JS errors", not unexpected, str(unexpected[:3]))
         await ctxM.close()
+        # 31. v8.9 catalog paging: the public catalog is loaded page by page (server mocked: 130 books), search/filters/sort
+        # go to the server, scroll position survives a book page, similar books need no full list, old servers still work
+        import json as _json, re as _re
+        from urllib.parse import urlparse as _up, parse_qs as _pq, quote as _quote
+        CAT_N = 130
+        CAT_CATS = ["رمان", "شعر", "تاریخ"]
+        cat_books = [{"id": 9000 + i, "sha256": f"{i:064x}", "size": 40000 + i, "title": f"کتاب نمونه {i}", "author": f"نویسنده {i % 5}",
+                      "language": "fa", "publisher": "", "published": "", "has_cover": False, "format": "pdf" if i % 4 == 0 else "epub",
+                      "description": f"توضیح {i}", "category": CAT_CATS[i % 3], "submitter": "مدیر", "in_library": False} for i in range(1, CAT_N + 1)]
+        cat_state = {"paged": True, "reqs": []}
+        async def cat_route(route):
+            u = route.request.url
+            cat_state["reqs"].append(u)
+            qs = {k: v[0] for k, v in _pq(_up(u).query).items()}
+            if not cat_state["paged"] or "page" not in qs:
+                body = {"books": cat_books}
+            else:
+                bs = list(cat_books)
+                if qs.get("q"): bs = [x for x in bs if qs["q"] in x["title"]]
+                if qs.get("author"): bs = [x for x in bs if x["author"] == qs["author"]]
+                if qs.get("format"): bs = [x for x in bs if x["format"] == qs["format"]]
+                facets = [{"name": c, "count": sum(1 for x in bs if x["category"] == c)} for c in CAT_CATS]
+                if qs.get("category"): bs = [x for x in bs if x["category"] == qs["category"]]
+                if qs.get("sort") == "title": bs.sort(key=lambda x: x["title"])
+                elif qs.get("sort") == "author": bs.sort(key=lambda x: (x["author"], x["title"]))
+                else: bs.sort(key=lambda x: -x["id"])
+                page, per = int(qs["page"]), min(60, int(qs.get("per", 24)))
+                body = {"books": bs[(page - 1) * per: page * per], "total": len(bs), "page": page, "per": per, "categories": facets}
+            await route.fulfill(status=200, content_type="application/json; charset=utf-8", body=_json.dumps(body, ensure_ascii=False))
+        CAT_RE = _re.compile(r"[?&]r=catalog(&|$)")
+        def cat_reqs(): return [x for x in cat_state["reqs"]]
+        async def cat_ctx(width=1280, height=800):
+            e, x = [], []
+            c = await b.new_context(viewport={"width": width, "height": height}, service_workers="block")
+            await c.add_init_script(GUIDE_SEEN_JS)
+            async def block(route):
+                x.append(route.request.url); await route.abort()
+            await c.route(lambda u: not u.startswith("http://localhost"), block)
+            await c.route(CAT_RE, cat_route)
+            pg = await c.new_page()
+            pg.on("pageerror", lambda er: e.append(str(er)))
+            pg.on("console", lambda m: m.type == "error" and e.append(m.text))
+            await pg.goto(url); await pg.wait_for_timeout(800)
+            await pg.click("#accountButton"); await pg.wait_for_timeout(500)
+            await pg.click('[data-auth="login"]')
+            await pg.fill('#authForm [name="email"]', "admin@example.com"); await pg.fill('#authForm [name="password"]', "password1")
+            await pg.click("#authSubmit")
+            await poll(lambda: pg.is_visible('[data-view="catalog"]'), 15000)
+            await pg.wait_for_timeout(500)
+            return c, pg, e, x
+        async def ncards(pg): return await pg.locator("#catalogGrid .book-card").count()
+        ctxP, P, errsP, extP = await cat_ctx()
+        cat_state["reqs"].clear()
+        await P.click('[data-view="catalog"]')
+        try: await poll(lambda: _count_gt(P, "#catalogGrid .book-card", 0), 10000)
+        except TimeoutError: pass
+        await P.wait_for_timeout(300)
+        first = cat_reqs()[:1]
+        check("v8.9 catalog: first page only (24 of 130)", await ncards(P) == 24 and "۱۳۰ کتاب" in await P.inner_text("#catalogCount"),
+              f"cards={await ncards(P)} count={await P.inner_text('#catalogCount')}")
+        check("v8.9 catalog: first request asks for page 1, 24 per page", bool(first) and "page=1" in first[0] and "per=24" in first[0], str(first))
+        check("v8.9 catalog: «بیشتر» button shown while more books exist", await P.is_visible("#catalogMoreButton") and "بیشتر" in await P.inner_text("#catalogMoreButton"))
+        for _ in range(40):
+            if await ncards(P) >= CAT_N: break
+            await P.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)"); await P.wait_for_timeout(350)
+        ids = await P.eval_on_selector_all("#catalogGrid .book-card", "els => els.map(e => e.dataset.detail)")
+        check("v8.9 catalog: scrolling loads more until all 130, no duplicates", len(ids) == CAT_N and len(set(ids)) == CAT_N, f"{len(ids)} cards, {len(set(ids))} unique")
+        pages = sorted({int(_pq(_up(u).query)["page"][0]) for u in cat_reqs() if "page=" in u})
+        check("v8.9 catalog: pages 1..6 requested once each", pages == [1, 2, 3, 4, 5, 6] and len([u for u in cat_reqs() if "page=" in u]) == 6, str(pages))
+        check("v8.9 catalog: «بیشتر» hidden at the end", not await P.is_visible("#catalogMore"))
+        # Book page and back: position and loaded pages kept
+        card = P.locator('#catalogGrid .book-card[data-detail="9070"]')
+        await card.scroll_into_view_if_needed(); await P.evaluate("window.scrollBy(0, 120)"); await P.wait_for_timeout(300)
+        y0 = await P.evaluate("window.scrollY")
+        n_before = len(cat_reqs())
+        await card.click(); await P.wait_for_timeout(800)
+        check("v8.9 catalog: book page opens from a later page", await P.is_visible("#viewBook") and await P.inner_text("#detailTitle") == "کتاب نمونه 70"
+              and P.url.endswith("#catalog/book/9070"), P.url)
+        try: await poll(lambda: P.is_visible("#detailRelatedSection"), 5000)
+        except TimeoutError: pass
+        rel = await P.locator("#detailRelated .book-card h3").all_inner_texts()
+        rel_reqs = cat_reqs()[n_before:]
+        check("v8.9 similar books: small author page then category, no full list",
+              any("per=6" in u and "author=" + _quote("نویسنده 0") in u for u in rel_reqs) and all("page=" in u for u in rel_reqs)
+              and 0 < len(rel) <= 6 and "کتاب نمونه 70" not in rel, f"{rel} {rel_reqs}")
+        n_before = len(cat_reqs())
+        await P.go_back(); await P.wait_for_timeout(700)
+        y1 = await P.evaluate("window.scrollY")
+        check("v8.9 catalog: back from the book page keeps the loaded books and the scroll position",
+              await P.is_visible("#viewCatalog") and await ncards(P) == CAT_N and abs(y1 - y0) < 60 and len(cat_reqs()) == n_before,
+              f"y {y0}->{y1}, cards={await ncards(P)}, new requests={cat_reqs()[n_before:]}")
+        # Search: debounced, sent to the server
+        await P.evaluate("window.scrollTo(0, 0)")
+        n_before = len(cat_reqs())
+        await P.type("#catalogSearch", "نمونه 12", delay=40); await P.wait_for_timeout(900)
+        qreqs = [u for u in cat_reqs()[n_before:] if "q=" in u]
+        check("v8.9 catalog search: one debounced request with q", len(qreqs) == 1 and "q=" + _quote("نمونه 12") in qreqs[0] and "page=1" in qreqs[0], str(qreqs))
+        check("v8.9 catalog search: results and count from the server", await ncards(P) == 11 and "۱۱ کتاب" in await P.inner_text("#catalogCount"),
+              f"{await ncards(P)} {await P.inner_text('#catalogCount')}")
+        await P.fill("#catalogSearch", "چیزی-که-نیست"); await P.wait_for_timeout(700)
+        check("v8.9 catalog: empty result shows a message and a reset button", await ncards(P) == 0 and "پیدا نشد" in await P.inner_text("#catalogGrid")
+              and await P.is_visible("[data-catalog-reset]") and not await P.is_visible("#catalogEmpty") and not await P.is_visible("#catalogMore"))
+        await P.click("[data-catalog-reset]"); await P.wait_for_timeout(700)
+        check("v8.9 catalog: reset brings back the first page", await ncards(P) == 24 and await P.input_value("#catalogSearch") == "" and "۱۳۰ کتاب" in await P.inner_text("#catalogCount"))
+        # Category chips from the facets
+        chips = await P.locator("#catalogFilters [data-cat-filter]").all_inner_texts()
+        check("v8.9 catalog: category chips from the server facets (count drawn by CSS)", sorted(chips[1:]) == sorted(CAT_CATS) and chips[0] == "همهٔ دسته‌ها"
+              and await P.get_attribute('#catalogFilters [data-cat-filter="شعر"]', "data-count") == "۴۴", str(chips))
+        n_before = len(cat_reqs())
+        await P.click('#catalogFilters [data-cat-filter="شعر"]'); await P.wait_for_timeout(600)
+        creqs = cat_reqs()[n_before:]
+        check("v8.9 catalog: category chip → category param", any("category=" + _quote("شعر") in u and "page=1" in u for u in creqs)
+              and "۴۴ کتاب" in await P.inner_text("#catalogCount") and await P.get_attribute('#catalogFilters [data-cat-filter="شعر"]', "aria-pressed") == "true", str(creqs))
+        # Format and sort
+        n_before = len(cat_reqs())
+        await P.click('#catalogFormat [data-format="pdf"]'); await P.wait_for_timeout(600)
+        freqs = cat_reqs()[n_before:]
+        badges = await P.locator("#catalogGrid .book-card .format-badge").count()
+        check("v8.9 catalog: format filter → format=pdf (combined with the category)", any("format=pdf" in u and "category=" in u for u in freqs)
+              and await ncards(P) > 0 and badges == await ncards(P), f"{freqs} cards={await ncards(P)} badges={badges}")
+        n_before = len(cat_reqs())
+        await P.select_option("#catalogSort", "title"); await P.wait_for_timeout(600)
+        sreqs = cat_reqs()[n_before:]
+        check("v8.9 catalog: sort select → sort=title", any("sort=title" in u and "format=pdf" in u for u in sreqs), str(sreqs))
+        await P.click('#catalogFormat [data-format=""]'); await P.click('#catalogFilters [data-cat-filter=""]'); await P.select_option("#catalogSort", "new")
+        await P.wait_for_timeout(700)
+        # Author filter from a book page
+        await P.click('#catalogGrid .book-card >> nth=0'); await P.wait_for_timeout(700)
+        auth_name = await P.inner_text("#detailAuthor")
+        n_before = len(cat_reqs())
+        await P.click("#detailAuthor"); await P.wait_for_timeout(700)
+        areqs = cat_reqs()[n_before:]
+        check("v8.9 catalog: author link → author param and a removable chip", await P.is_visible("#viewCatalog")
+              and any("author=" + _quote(auth_name) in u and "page=1" in u for u in areqs) and await P.is_visible("#catalogFilters [data-clear-author]")
+              and "۲۶ کتاب" in await P.inner_text("#catalogCount"), f"{auth_name} {areqs}")
+        await P.click("#catalogFilters [data-clear-author]"); await P.wait_for_timeout(600)
+        check("v8.9 catalog: removing the author chip reloads everything", "۱۳۰ کتاب" in await P.inner_text("#catalogCount"))
+        # Mobile: toolbar and grid fit 390 px
+        await P.set_viewport_size({"width": 390, "height": 844}); await P.wait_for_timeout(400)
+        sw = await P.evaluate("document.documentElement.scrollWidth")
+        tb = await P.locator(".catalog-toolbar").bounding_box(); ms = await P.locator("#catalogSort").bounding_box()
+        check("v8.9 catalog: mobile 390px fits (toolbar, sort, cards)", sw <= 391 and tb and tb["x"] >= 0 and tb["x"] + tb["width"] <= 391
+              and ms and ms["x"] >= 0 and ms["x"] + ms["width"] <= 391 and await ncards(P) == 24, f"scrollWidth={sw} toolbar={tb} sort={ms}")
+        for _ in range(20):
+            if await ncards(P) > 24: break
+            await P.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)"); await P.wait_for_timeout(300)
+        check("v8.9 catalog: mobile scrolling loads the next page", await ncards(P) >= 48)
+        check("v8.9 catalog paging: no JS errors", not errsP and not extP, str((errsP + extP)[:3]))
+        await ctxP.close()
+        # Cold deep link to a book that no loaded page holds: the existing whole-list path finds it
+        ctxQ, Q, errsQ, extQ = await cat_ctx()
+        await Q.goto(url + "#catalog/book/9077"); await Q.wait_for_timeout(500)
+        try: await poll(lambda: _contains(Q, "#detailTitle", "کتاب نمونه 77"), 10000); deep = True
+        except TimeoutError: deep = False
+        check("v8.9 catalog: deep link to an unloaded book still opens it", deep and await Q.is_visible("#viewBook"))
+        await Q.click("#detailBack"); await Q.wait_for_timeout(800)
+        check("v8.9 catalog: back from a deep link loads the first page", await Q.is_visible("#viewCatalog") and await ncards(Q) == 24)
+        check("v8.9 catalog deep link: no JS errors", not errsQ and not extQ, str((errsQ + extQ)[:3]))
+        await ctxQ.close()
+        # Server without paging (no `total`): the old full-list behaviour
+        cat_state["paged"] = False
+        ctxR, R, errsR, extR = await cat_ctx()
+        await R.click('[data-view="catalog"]')
+        try: await poll(lambda: _count_gt(R, "#catalogGrid .book-card", 0), 10000)
+        except TimeoutError: pass
+        await R.wait_for_timeout(300)
+        check("v8.9 catalog fallback: whole list shown when the server sends no total", await ncards(R) == CAT_N and not await R.is_visible("#catalogMore")
+              and "۱۳۰ کتاب" in await R.inner_text("#catalogCount"), f"{await ncards(R)}")
+        n_before = len(cat_reqs())
+        await R.fill("#catalogSearch", "نمونه 12"); await R.wait_for_timeout(150)
+        check("v8.9 catalog fallback: search filters locally at once", await ncards(R) == 11 and len(cat_reqs()) == n_before)
+        await R.fill("#catalogSearch", "")
+        await R.click('#catalogFilters [data-cat-filter="شعر"]'); await R.click('#catalogFormat [data-format="pdf"]'); await R.wait_for_timeout(200)
+        fb = await R.eval_on_selector_all("#catalogGrid .book-card", "els => els.map(e => +e.dataset.detail)")
+        check("v8.9 catalog fallback: category and format filtered locally", fb and all((i - 9000) % 3 == 1 and (i - 9000) % 4 == 0 for i in fb)
+              and len(fb) == sum(1 for i in range(1, CAT_N + 1) if i % 3 == 1 and i % 4 == 0), str(fb[:5]))
+        await R.click('#catalogFormat [data-format=""]'); await R.click('#catalogFilters [data-cat-filter=""]')
+        await R.select_option("#catalogSort", "title"); await R.wait_for_timeout(200)
+        titles = await R.locator("#catalogGrid .book-card h3").all_inner_texts()
+        check("v8.9 catalog fallback: sort by title locally", len(titles) == CAT_N and titles == sorted(titles, key=lambda t: t), str(titles[:3]))
+        await R.click('#catalogGrid .book-card:has-text("کتاب نمونه 33")'); await R.wait_for_timeout(800)
+        rel = await R.locator("#detailRelated .book-card h3").all_inner_texts()
+        check("v8.9 catalog fallback: book page and similar books from the whole list", await R.inner_text("#detailTitle") == "کتاب نمونه 33" and len(rel) == 6, str(rel))
+        check("v8.9 catalog fallback: no JS errors", not errsR and not extR, str((errsR + extR)[:3]))
+        await ctxR.close()
         await b.close()
 
 def main():
