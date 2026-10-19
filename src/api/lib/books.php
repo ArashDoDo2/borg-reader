@@ -244,6 +244,197 @@ function insert_book(string $sha, int $size, array $meta, int $uploadedBy, strin
     return one('SELECT * FROM books WHERE sha256 = ?', [$sha]);
 }
 
+// ---------- Catalog categories (migration 9): two levels, several per book ----------
+const CATEGORY_MAX_PER_BOOK = 10;
+
+/**
+ * Every category as id => [id, parent_id, name, sort, pos], in display order: top level by sort, name, id, each followed
+ * by its children (sort, name, id). pos = index in that order. Cached per request; $fresh reloads after a change.
+ */
+function categories_tree(bool $fresh = false): array {
+    static $cache = null;
+    if ($cache !== null && !$fresh) return $cache;
+    $tops = []; $kids = [];
+    foreach (all('SELECT id, parent_id, name, sort FROM categories ORDER BY sort, name, id') as $r) {
+        $c = ['id' => (int)$r['id'], 'parent_id' => (int)$r['parent_id'], 'name' => (string)$r['name'], 'sort' => (int)$r['sort']];
+        if ($c['parent_id'] === 0) $tops[] = $c; else $kids[$c['parent_id']][] = $c;
+    }
+    $out = [];
+    foreach ($tops as $t) {
+        $out[$t['id']] = $t;
+        foreach ($kids[$t['id']] ?? [] as $k) $out[$k['id']] = $k;
+        unset($kids[$t['id']]);
+    }
+    foreach ($kids as $list) foreach ($list as $k) $out[$k['id']] = $k; // orphans (never expected) last
+    $i = 0;
+    foreach ($out as &$c) $c['pos'] = $i++;
+    unset($c);
+    return $cache = $out;
+}
+/** {id, name, parent_id, parent_name} of a categories_tree() entry ('' parent_name for a top-level one). */
+function category_ref(array $c): array {
+    $tree = categories_tree();
+    return ['id' => $c['id'], 'name' => $c['name'], 'parent_id' => $c['parent_id'],
+            'parent_name' => $c['parent_id'] ? (string)($tree[$c['parent_id']]['name'] ?? '') : ''];
+}
+/** book id => [category_ref…] in display order, for the given catalog book ids (books without links are absent). */
+function book_categories(array $bookIds): array {
+    $tree = categories_tree(); $map = [];
+    $bookIds = array_values(array_unique(array_map('intval', $bookIds)));
+    foreach (array_chunk($bookIds, 500) as $chunk) {
+        foreach (all('SELECT catalog_id, category_id FROM catalog_categories WHERE catalog_id IN (' . placeholders(count($chunk)) . ')', $chunk) as $r) {
+            $c = $tree[(int)$r['category_id']] ?? null;
+            if ($c) $map[(int)$r['catalog_id']][] = $c;
+        }
+    }
+    foreach ($map as &$list) {
+        usort($list, fn($a, $b) => $a['pos'] <=> $b['pos']);
+        $list = array_map('category_ref', $list);
+    }
+    unset($list);
+    return $map;
+}
+/** Adds `categories` to book output arrays (keyed by their 'id'). */
+function with_categories(array $books): array {
+    $map = book_categories(array_column($books, 'id'));
+    foreach ($books as &$b) $b['categories'] = $map[$b['id']] ?? [];
+    unset($b);
+    return $books;
+}
+/** catalog.category (legacy) := top-level name of each book's first category, '' when it has none. */
+function sync_legacy_category(array $bookIds): void {
+    $bookIds = array_values(array_unique(array_map('intval', $bookIds)));
+    if (!$bookIds) return;
+    $map = book_categories($bookIds);
+    foreach (array_chunk($bookIds, 500) as $chunk) {
+        foreach (all('SELECT book_id, category FROM catalog WHERE book_id IN (' . placeholders(count($chunk)) . ')', $chunk) as $r) {
+            $first = $map[(int)$r['book_id']][0] ?? null;
+            $want = $first ? ($first['parent_name'] !== '' ? $first['parent_name'] : $first['name']) : '';
+            if ((string)$r['category'] !== $want) q('UPDATE catalog SET category = ? WHERE book_id = ?', [$want, (int)$r['book_id']]);
+        }
+    }
+}
+/** Replace a catalog book's categories (ids already validated) and refresh its legacy column. */
+function set_book_categories(int $bookId, array $catIds): void {
+    q('DELETE FROM catalog_categories WHERE catalog_id = ?', [$bookId]);
+    foreach (array_values(array_unique($catIds)) as $cid) insert_ignore('catalog_categories', ['catalog_id' => $bookId, 'category_id' => (int)$cid]);
+    sync_legacy_category([$bookId]);
+}
+/** Catalog book ids linked to any of the categories. */
+function books_in_categories(array $catIds): array {
+    $out = [];
+    foreach (array_chunk(array_values(array_unique(array_map('intval', $catIds))), 500) as $chunk) {
+        foreach (all('SELECT DISTINCT catalog_id FROM catalog_categories WHERE category_id IN (' . placeholders(count($chunk)) . ')', $chunk) as $r) $out[] = (int)$r['catalog_id'];
+    }
+    return array_values(array_unique($out));
+}
+/** Id of the category $name under $parentId (0 = top level), or 0. */
+function category_find(string $name, int $parentId = 0): int {
+    $r = one('SELECT id FROM categories WHERE parent_id = ? AND name = ?', [$parentId, trim($name)]);
+    return $r ? (int)$r['id'] : 0;
+}
+/** Id of the category $name under $parentId, created (last among its siblings) when missing. */
+function category_find_or_create(string $name, int $parentId = 0): int {
+    $name = trim($name);
+    if ($name === '') fail(400, 'missing_name', "Field 'name' is required.");
+    if (mb_strlen($name) > 80) fail(400, 'too_long_category', "Field 'category' is too long.");
+    $id = category_find($name, $parentId);
+    if ($id) return $id;
+    $sort = (int)one('SELECT COALESCE(MAX(sort), -1) + 1 AS n FROM categories WHERE parent_id = ?', [$parentId])['n'];
+    insert_ignore('categories', ['parent_id' => $parentId, 'name' => $name, 'sort' => $sort, 'created_at' => time()]);
+    categories_tree(true);
+    return category_find($name, $parentId);
+}
+/** Optional `categories` list of existing category ids (max 10, duplicates once); null when the key is absent. */
+function category_ids_param(array $d, string $k = 'categories'): ?array {
+    if (!array_key_exists($k, $d)) return null;
+    $raw = $d[$k];
+    if (!is_array($raw) || !array_is_list($raw)) fail(400, 'bad_categories', 'categories must be a list of category ids.');
+    $ids = [];
+    foreach ($raw as $v) {
+        if (!(is_int($v) || (is_string($v) && ctype_digit($v))) || (int)$v <= 0) fail(400, 'bad_categories', 'categories must be a list of category ids.');
+        $ids[(int)$v] = true;
+    }
+    $ids = array_keys($ids);
+    if (count($ids) > CATEGORY_MAX_PER_BOOK) fail(400, 'too_many_categories', 'At most ' . CATEGORY_MAX_PER_BOOK . ' categories per book.');
+    $tree = categories_tree();
+    foreach ($ids as $id) if (!isset($tree[$id])) fail(400, 'unknown_category', "Category $id does not exist.");
+    return $ids;
+}
+/**
+ * api-book `category`: paths separated by ";" or newlines, each "Parent/Child" or "Parent" ("›" and ">" also separate
+ * levels). Returns [[parent, child|null], …] (deduplicated); 400 too_deep / too_long_category / too_many_categories.
+ */
+function parse_category_paths(string $raw): array {
+    $out = [];
+    foreach (preg_split('/[;\r\n]+/u', $raw) ?: [] as $path) {
+        $segs = array_values(array_filter(array_map(fn($s) => trim(preg_replace('/\s+/u', ' ', $s) ?? $s), preg_split('#[/›>]#u', $path) ?: []), fn($s) => $s !== ''));
+        if (!$segs) continue;
+        if (count($segs) > 2) fail(400, 'too_deep', 'Categories have two levels: "Parent/Child".');
+        foreach ($segs as $s) if (mb_strlen($s) > 80) fail(400, 'too_long_category', "Field 'category' is too long.");
+        $out[implode("\n", $segs)] = [$segs[0], $segs[1] ?? null];
+    }
+    if (count($out) > CATEGORY_MAX_PER_BOOK) fail(400, 'too_many_categories', 'At most ' . CATEGORY_MAX_PER_BOOK . ' categories per book.');
+    return array_values($out);
+}
+/** Category ids for parsed paths, creating missing ones (parent first). */
+function category_ids_for_paths(array $paths): array {
+    $ids = [];
+    foreach ($paths as [$parent, $child]) {
+        $pid = category_find_or_create($parent, 0);
+        $ids[] = $child === null ? $pid : category_find_or_create($child, $pid);
+    }
+    return array_values(array_unique($ids));
+}
+/**
+ * Category filters over a query with `b` = books and `c` = catalog: cat=<id> (a top-level id includes its children),
+ * cat=none (no category), and the legacy category=<name> (any linked category with that name, or catalog.category).
+ */
+function category_where(array $p, array &$where, array &$args, bool $legacyName = true, bool $strictLen = true): void {
+    $cat = scalar_param($p, 'cat');
+    if ($cat === 'none') $where[] = 'NOT EXISTS (SELECT 1 FROM catalog_categories cc WHERE cc.catalog_id = b.id)';
+    elseif ($cat !== '') {
+        if (!ctype_digit($cat) || strlen($cat) > 18) fail(400, 'bad_cat', 'cat must be a category id or "none".');
+        $where[] = 'EXISTS (SELECT 1 FROM catalog_categories cc JOIN categories k ON k.id = cc.category_id WHERE cc.catalog_id = b.id AND (k.id = ? OR k.parent_id = ?))';
+        array_push($args, (int)$cat, (int)$cat);
+    }
+    if (!$legacyName) return;
+    $name = scalar_param($p, 'category');
+    if ($name === '') return;
+    if (mb_strlen($name) > 80) {
+        if ($strictLen) fail(400, 'too_long_category', "Field 'category' is too long.");
+        $name = mb_substr($name, 0, 80);
+    }
+    $where[] = '(c.category = ? OR EXISTS (SELECT 1 FROM catalog_categories cc JOIN categories k ON k.id = cc.category_id WHERE cc.catalog_id = b.id AND k.name = ?))';
+    array_push($args, $name, $name);
+}
+/** category id => distinct catalog books (top level: itself or any child), for catalog rows matching $cond. */
+function category_counts(string $cond): array {
+    $w = $cond !== '' ? "WHERE $cond" : '';
+    $n = [];
+    foreach (all("SELECT cc.category_id AS id, COUNT(DISTINCT cc.catalog_id) AS n FROM catalog_categories cc
+                  JOIN catalog c ON c.book_id = cc.catalog_id $w GROUP BY cc.category_id") as $r) $n[(int)$r['id']] = (int)$r['n'];
+    $top = 'CASE WHEN k.parent_id = 0 THEN k.id ELSE k.parent_id END';
+    foreach (all("SELECT $top AS id, COUNT(DISTINCT cc.catalog_id) AS n FROM catalog_categories cc
+                  JOIN categories k ON k.id = cc.category_id JOIN catalog c ON c.book_id = cc.catalog_id $w GROUP BY $top") as $r) {
+        $tree = categories_tree();
+        if (($tree[(int)$r['id']]['parent_id'] ?? -1) === 0) $n[(int)$r['id']] = (int)$r['n'];
+    }
+    return $n;
+}
+/** GET categories: flat list in display order with approved-book counts (admins also count_all, any status). */
+function categories_list(bool $admin): array {
+    $count = category_counts("c.status = 'approved'");
+    $all = $admin ? category_counts('') : [];
+    $out = [];
+    foreach (categories_tree() as $c) {
+        $o = ['id' => $c['id'], 'name' => $c['name'], 'parent_id' => $c['parent_id'], 'sort' => $c['sort'], 'count' => $count[$c['id']] ?? 0];
+        if ($admin) $o['count_all'] = $all[$c['id']] ?? 0;
+        $out[] = $o;
+    }
+    return $out;
+}
+
 function upload_dir(): string { return storage('uploads'); }
 function cleanup_stale_uploads(): void {
     foreach (all('SELECT id FROM uploads WHERE created_at < ?', [time() - 86400]) as $u) {
@@ -575,9 +766,14 @@ function handle_books_route(string $route): bool {
                                (SELECT 1 FROM user_books ub WHERE ub.user_id = ? AND ub.book_id = b.id) AS in_library
                              FROM catalog c JOIN books b ON b.id = c.book_id LEFT JOIN users u ON u.id = c.submitted_by
                              WHERE c.status = 'approved' ORDER BY c.reviewed_at DESC, c.submitted_at DESC", [$s['id']]);
-                json_out(200, ['books' => array_map($catOut, $rows)]);
+                json_out(200, ['books' => with_categories(array_map($catOut, $rows))]);
             }
             json_out(200, catalog_page($_GET, (int)$s['id'], $catOut));
+
+        case 'categories':
+            method('GET');
+            $s = require_user();
+            json_out(200, ['categories' => categories_list($s['role'] === 'admin')]);
 
         case 'catalog-submit':
             method('POST');
@@ -590,10 +786,19 @@ function handle_books_route(string $route): bool {
             $auto = $s['role'] === 'admin' || !catalog_requires_approval();
             $status = $auto ? 'approved' : 'pending';
             $desc = str_param($d, 'description', 2000, false);
+            // categories: existing ids. Legacy `category` (name): admins find or create a top-level category; for other
+            // users it only matches an existing top-level name (else it is ignored).
+            $catIds = category_ids_param($d);
             $category = (string)opt_str_param($d, 'category', 80);
+            if ($catIds === null) {
+                if ($category === '') $catIds = [];
+                elseif ($s['role'] === 'admin') $catIds = [category_find_or_create($category, 0)];
+                else $catIds = ($cid = category_find($category, 0)) ? [$cid] : [];
+            }
             q('DELETE FROM catalog WHERE book_id = ?', [$bookId]);
             q('INSERT INTO catalog (book_id, status, description, category, submitted_by, submitted_at, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-              [$bookId, $status, $desc, $category, $s['id'], time(), $auto ? $s['id'] : null, $auto ? time() : null]);
+              [$bookId, $status, $desc, '', $s['id'], time(), $auto ? $s['id'] : null, $auto ? time() : null]);
+            set_book_categories($bookId, $catIds);
             json_out(201, ['status' => $status]);
 
         case 'catalog-pending':
@@ -602,9 +807,9 @@ function handle_books_route(string $route): bool {
             $rows = all("SELECT b.*, c.description, c.category, c.submitted_at, u.display_name AS submitter
                          FROM catalog c JOIN books b ON b.id = c.book_id LEFT JOIN users u ON u.id = c.submitted_by
                          WHERE c.status = 'pending' ORDER BY c.submitted_at", []);
-            json_out(200, ['books' => array_map(fn($r) => book_out($r) + [
+            json_out(200, ['books' => with_categories(array_map(fn($r) => book_out($r) + [
                 'description' => $r['description'], 'category' => (string)$r['category'], 'submitter' => $r['submitter'], 'submitted_at' => (int)$r['submitted_at'],
-            ], $rows)]);
+            ], $rows))]);
 
         case 'catalog-review':
             method('POST');
@@ -638,8 +843,9 @@ function handle_books_route(string $route): bool {
 }
 
 /**
- * GET catalog with `page`: approved books filtered by q (all words, normalised), category (exact), author (exact),
- * format (epub|pdf); sort new|title|author; per ≤60 (default 24). categories = approved books matching q only.
+ * GET catalog with `page`: approved books filtered by q (all words, normalised), cat (category id, a top-level id
+ * includes its children; "none" = no category), category (legacy name), author (exact), format (epub|pdf); sort
+ * new|title|author; per ≤60 (default 24). categories = legacy-name facets of approved books matching q only.
  */
 function catalog_page(array $p, int $uid, callable $out): array {
     $per = page_param($p, 'per', 24, 60);
@@ -647,8 +853,7 @@ function catalog_page(array $p, int $uid, callable $out): array {
     [$where, $args] = search_where(scalar_param($p, 'q'));
     array_unshift($where, "c.status = 'approved'");
     [$qWhere, $qArgs] = [$where, $args];
-    $category = scalar_param($p, 'category');
-    if ($category !== '') { $where[] = 'c.category = ?'; $args[] = mb_substr($category, 0, 80); }
+    category_where($p, $where, $args, true, false); // cat=<id>|none, legacy category=<name>
     $author = scalar_param($p, 'author');
     if ($author !== '') { $where[] = 'b.author = ?'; $args[] = mb_substr($author, 0, 300); }
     // A single book (deep link #catalog/book/<id>) without loading the whole catalog.
@@ -679,7 +884,7 @@ function catalog_page(array $p, int $uid, callable $out): array {
     $cats = all("SELECT c.category AS name, COUNT(*) AS n FROM catalog c JOIN books b ON b.id = c.book_id
                  WHERE " . implode(' AND ', $qWhere) . " AND c.category <> '' GROUP BY c.category ORDER BY n DESC, c.category ASC LIMIT 500", $qArgs);
     return [
-        'books' => array_map($out, $rows), 'total' => $total, 'page' => $page, 'per' => $per,
+        'books' => with_categories(array_map($out, $rows)), 'total' => $total, 'page' => $page, 'per' => $per,
         'categories' => array_map(fn($r) => ['name' => (string)$r['name'], 'count' => (int)$r['n']], $cats),
     ];
 }

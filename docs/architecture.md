@@ -381,6 +381,12 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   (`app` = upload flow, `api` = `api-book`), `books.search_key` VARCHAR(1000) `NOT NULL DEFAULT ''` and the indexes
   `books_created` (books.created_at), `books_format` (books.format), `catalog_status`, `catalog_category`,
   `user_books_book` (user_books.book_id). Existing rows get `source = 'app'` and an empty `search_key`.
+  Migration 9 (two-level categories, several per book) adds `categories` (id, `parent_id` `0` = top level, name ≤80,
+  sort, created_at; unique (parent_id, name)) and `catalog_categories` (catalog_id = `catalog.book_id`, category_id;
+  PK both, index on category_id; foreign keys cascade on delete of the catalog row or category and follow
+  `book-replace`'s `UPDATE catalog SET book_id`). Data step (idempotent, `NOT EXISTS`-guarded): `catalog.category` is
+  trimmed, every distinct non-empty value becomes a top-level category and its rows are linked. `catalog.category` is
+  kept as a mirror: always the top-level name of the book's first category (display order), `''` when none.
 - **Auth:** invite-only. First admin via `setup` (needs `setup_key`, only while no users exist). Session token in an
   HttpOnly/Secure/SameSite=Lax cookie scoped to the app path; DB stores only its SHA-256. Mutating routes need the
   per-session CSRF token in `X-CSRF-Token`; JSON routes reject non-JSON bodies. Login/register/setup are rate limited.
@@ -401,7 +407,29 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
 - **Catalog:** user submissions are `pending` until an admin approves; admin submissions are approved directly.
   `catalog-submit` takes optional `category` (≤80, trimmed). `catalog`, `catalog-pending` and `catalog-all` return
   `category` per book. Admin `catalog-update` updates only the keys present among `description`, `title`, `author`,
-  `category`, `publisher`, `published`, `language`; all are validated before anything is written.
+  `category`, `categories`, `publisher`, `published`, `language`; all are validated before anything is written.
+- **Categories (migration 9):** exactly two levels (category → subcategory), at most 10 per book, a fixed list managed
+  by admins. Display order: top level by sort, name, id, each followed by its children (sort, name, id). Every book
+  object of `catalog` (both modes), `catalog-all`, `catalog-pending` and `admin-books` has `categories: [{id, name,
+  parent_id, parent_name ('' for top level)}]` in that order, plus the legacy `category` (mirror, see migration 9).
+  `GET categories` (any user) → `{categories: [{id, name, parent_id, sort, count}]}` flat in display order; `count` =
+  distinct approved catalog books linked to it (a top-level count includes books linked to any child, each book once);
+  admins also get `count_all` (any status). Admin + CSRF: `POST category-save {id?, name, parent_id}` → `{category: {id,
+  name, parent_id, sort, parent_name}}` (create, or rename/move; name 1–80 trimmed → 400 `missing_name`/`too_long_name`;
+  sibling with that name → 409 `duplicate`; parent not 0 or an existing top-level category → 400 `bad_parent`, a
+  subcategory as parent → 400 `too_deep`; a category with children cannot get a parent → 409 `has_children`; unknown id
+  → 404; `parent_id` absent on an update keeps the parent; a new or moved category goes last among its siblings);
+  `POST category-delete {id, move_to?}` → `{moved, unlinked}` (409 `has_children`; `move_to` must be another existing
+  category, else 400 `unknown_category`); `POST category-order {parent_id, ids}` → `{ok}` (sort = position; every id
+  must be a distinct child of parent_id, else 400 `bad_ids`). Renames, moves, order changes and deletes re-sync the
+  legacy column of the affected books. Setting a book's categories: `categories: [ids]` (list of existing ids, ≤10,
+  replaces the set; 400 `bad_categories` / `too_many_categories` / `unknown_category`) in `catalog-update` and
+  `catalog-submit`; the legacy `category` string in `catalog-update` (and an admin's `catalog-submit`) finds or creates
+  a top-level category and replaces the set with it (`''` clears); in a non-admin's `catalog-submit` it only matches an
+  existing top-level name, else it is ignored. `categories` wins when both are sent.
+  Filters (`catalog` paged, `admin-books`, `admin-bulk` filter): `cat=<id>` (a top-level id includes its children's
+  books), `cat=none` (no category; in admin-books also books outside the catalog), anything else → 400 `bad_cat`;
+  the legacy `category=<name>` matches the legacy column or any linked category with that name.
 - **Book fields:** every book object (`book_out`) has `id, sha256, size, title, author, language, publisher, published,
   has_cover, format` (`format`: `"epub"` or `"pdf"`). `upload-init` accepts optional `language` (≤20), `publisher` (≤300), `published` (≤40); the same keys
   sent to `upload-complete` override them (used only when the file is new, not on dedupe).
@@ -446,7 +474,10 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   `POST api-book` (no session, no CSRF): key in `Authorization: Bearer <key>` or `X-Borg-Token`; missing/unknown/revoked
   key, or a key whose creator is no longer an active admin → 401 (`missing_token`/`bad_token`; 30 failures per IP per
   15 min → 429). 60 requests per key per hour (every request counts) → 429. `multipart/form-data`: `file` (required),
-  optional `title` ≤500, `author` ≤300, `language` ≤20, `publisher` ≤300, `published` ≤40, `category` ≤80,
+  optional `title` ≤500, `author` ≤300, `language` ≤20, `publisher` ≤300, `published` ≤40, `category` ≤2000 (one or
+  more paths separated by `;` or newlines, each `Parent/Child` or `Parent`, `›` and `>` also separate levels, spaces
+  trimmed; missing categories are created parent first; 3+ levels → 400 `too_deep`, more than 10 → 400
+  `too_many_categories`, a name over 80 → 400 `too_long_category`; sent on an existing entry it replaces the set),
   `description` ≤2000. Errors: 415 not multipart; 413 `post_too_large` / `file_too_large_for_php` (PHP
   `post_max_size` / `upload_max_filesize`, value named in the message) / `too_large` (`max_book_bytes`); 400
   `missing_file`, `partial_upload`, `empty_file`, `not_epub` (same `validate_epub` as the upload flow), `not_pdf`
@@ -515,11 +546,15 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   catalog rows that have another status (`reviewed_by`/`reviewed_at` = admin/now); `set_category` (`category` required,
   trimmed, ≤80) / `clear_category` change existing catalog rows whose category differs; `add_catalog` creates approved
   rows (description/category empty, `submitted_by` = `reviewed_by` = admin) for books not in the catalog;
+  `add_category` / `remove_category` (`category_id` required, must exist: 400 `missing_category_id` /
+  `bad_category_id` / `unknown_category`) link / unlink one category for catalog books (a book already having it, or
+  already 10, is skipped); since migration 9 `set_category` finds or creates the top-level category and replaces the
+  book's set with it, `clear_category` unlinks all (books already in that state are skipped);
   `remove_catalog` deletes catalog rows, then books in no library are garbage-collected (like `catalog-remove`);
   `delete` = `book-delete` for each (libraries, catalog, progress, annotations, then the book and its files). Response
   `{affected, skipped}`: `affected` = rows actually changed/created/deleted (for `delete`: books deleted), `skipped`
   = the other requested books (unknown id, not in the catalog, already in that state). Nothing is logged.
-- **Catalog paging (`GET catalog` with `page`):** approved books only; params `q` (as above), `category` (exact),
+- **Catalog paging (`GET catalog` with `page`):** approved books only; params `q` (as above), `cat` (see Categories), `category` (legacy name),
   `author` (exact `books.author`), `format` `epub`|`pdf`, `sort` `new` (reviewed_at, submitted_at, id — all desc;
   default) | `title` | `author` (author, title), `page` (default 1, ≤100000), `per` (1–60, default 24). Response `{books (same
   fields as the unpaged list: book_out + description, category, submitter, in_library), total, page, per, categories:

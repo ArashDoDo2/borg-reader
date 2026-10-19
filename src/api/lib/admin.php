@@ -23,7 +23,7 @@ function delete_book_everywhere(int $bookId): void {
 
 // ---------- Admin book list and bulk actions (migration 8) ----------
 const ADMIN_BULK_MAX = 5000;      // books affected by one admin-bulk call
-const ADMIN_BULK_ACTIONS = ['approve', 'reject', 'set_category', 'clear_category', 'remove_catalog', 'add_catalog', 'delete'];
+const ADMIN_BULK_ACTIONS = ['approve', 'reject', 'set_category', 'clear_category', 'add_category', 'remove_category', 'remove_catalog', 'add_catalog', 'delete'];
 
 /**
  * WHERE parts for admin-books / admin-bulk filters over `books b LEFT JOIN catalog c`. Returns [where, args, qWhere,
@@ -36,12 +36,10 @@ function admin_books_filter(array $p): array {
     if (!in_array($status, ['any', 'approved', 'pending', 'rejected', 'none'], true)) fail(400, 'bad_status', 'status must be any, approved, pending, rejected or none.');
     if ($status === 'none') $where[] = 'c.book_id IS NULL';
     elseif ($status !== 'any') { $where[] = 'c.status = ?'; $args[] = $status; }
-    $category = scalar_param($p, 'category');
-    if ($category === '__none__') $where[] = "(c.category IS NULL OR c.category = '')";
-    elseif ($category !== '') {
-        if (mb_strlen($category) > 80) fail(400, 'too_long_category', "Field 'category' is too long.");
-        $where[] = 'c.category = ?'; $args[] = $category;
-    }
+    // cat=<id>|none (migration 9) and the legacy category=<name> (__none__ = no legacy category).
+    $legacyNone = scalar_param($p, 'category') === '__none__';
+    if ($legacyNone) $where[] = "(c.category IS NULL OR c.category = '')";
+    category_where($p, $where, $args, !$legacyNone);
     $format = scalar_param($p, 'format');
     if ($format !== '') {
         if (!in_array($format, ['epub', 'pdf'], true)) fail(400, 'bad_format', 'format must be "epub" or "pdf".');
@@ -113,11 +111,11 @@ function admin_books_list(array $p): array {
         $formats[$r['f'] === 'pdf' ? 'pdf' : 'epub'] += (int)$r['n'];
     }
     return [
-        'books' => array_map(fn($r) => book_out($r) + [
+        'books' => with_categories(array_map(fn($r) => book_out($r) + [
             'catalog_status' => $r['catalog_status'], 'category' => (string)($r['category'] ?? ''), 'description' => (string)($r['description'] ?? ''),
             'submitter' => $r['submitter'], 'uploader_id' => (int)$r['uploaded_by'], 'uploader_name' => $r['uploader_name'],
             'created_at' => (int)$r['created_at'], 'source' => (string)$r['source'], 'in_libraries' => $readers[(int)$r['id']] ?? 0,
-        ], $rows),
+        ], $rows)),
         'total' => $total, 'page' => $page, 'per' => $per,
         'facets' => ['status' => $status, 'categories' => array_map(fn($r) => ['name' => (string)$r['name'], 'count' => (int)$r['n']], $cats),
                      'uploaders' => $up, 'formats' => $formats],
@@ -147,8 +145,15 @@ function gc_books_rows(array $ids): array {
 function admin_bulk(array $d, int $adminId): array {
     $action = scalar_param($d, 'action');
     if (!in_array($action, ADMIN_BULK_ACTIONS, true)) fail(400, 'bad_action', 'Unknown action.');
-    $category = '';
+    $category = ''; $catId = 0;
     if ($action === 'set_category') $category = str_param($d, 'category', 80);
+    if ($action === 'add_category' || $action === 'remove_category') {
+        if (!array_key_exists('category_id', $d)) fail(400, 'missing_category_id', "Field 'category_id' is required.");
+        $v = $d['category_id'];
+        if (!(is_int($v) || (is_string($v) && ctype_digit($v))) || (int)$v <= 0) fail(400, 'bad_category_id', 'category_id must be a category id.');
+        $catId = (int)$v;
+        if (!isset(categories_tree()[$catId])) fail(400, 'unknown_category', "Category $catId does not exist.");
+    }
     if (array_key_exists('ids', $d)) {
         $raw = $d['ids'];
         if (!is_array($raw) || !array_is_list($raw)) fail(400, 'bad_ids', 'ids must be a list of book ids.');
@@ -169,7 +174,7 @@ function admin_bulk(array $d, int $adminId): array {
         fail(400, 'missing_target', 'Give ids or filter.');
     }
     $requested = count($ids);
-    $affected = 0; $files = [];
+    $affected = 0; $files = []; $touched = [];
     $now = time();
     db()->beginTransaction();
     try {
@@ -184,11 +189,46 @@ function admin_bulk(array $d, int $adminId): array {
                 $st = $action === 'approve' ? 'approved' : 'rejected';
                 $run('UPDATE catalog SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE book_id IN ({IN}) AND status <> ?', [$st, $adminId, $now], [$st]);
                 break;
-            case 'set_category':
-                $run('UPDATE catalog SET category = ? WHERE book_id IN ({IN}) AND category <> ?', [$category], [$category]);
-                break;
+            case 'set_category': // legacy name -> find or create a top-level category, replace the set with it
             case 'clear_category':
-                $run("UPDATE catalog SET category = '' WHERE book_id IN ({IN}) AND category <> ''", []);
+                $cid = $action === 'set_category' ? category_find_or_create($category, 0) : 0;
+                in_chunks($ids, function ($chunk, $ph) use ($cid, &$affected, &$touched) {
+                    $rows = all("SELECT book_id, category FROM catalog WHERE book_id IN ($ph)", $chunk);
+                    if (!$rows) return;
+                    $books = array_map(fn($r) => (int)$r['book_id'], $rows);
+                    $links = [];
+                    foreach (all('SELECT catalog_id, category_id FROM catalog_categories WHERE catalog_id IN (' . placeholders(count($books)) . ')', $books) as $l) {
+                        $links[(int)$l['catalog_id']][] = (int)$l['category_id'];
+                    }
+                    foreach ($rows as $r) {
+                        $b = (int)$r['book_id'];
+                        $cur = $links[$b] ?? [];
+                        if ($cid ? $cur === [$cid] : ($cur === [] && (string)$r['category'] === '')) continue;
+                        q('DELETE FROM catalog_categories WHERE catalog_id = ?', [$b]);
+                        if ($cid) q('INSERT INTO catalog_categories (catalog_id, category_id) VALUES (?, ?)', [$b, $cid]);
+                        $affected++; $touched[] = $b;
+                    }
+                });
+                break;
+            case 'add_category': // books in the catalog that lack it and have fewer than the maximum
+                in_chunks($ids, function ($chunk, $ph) use ($catId, &$affected, &$touched) {
+                    $rows = all("SELECT c.book_id FROM catalog c WHERE c.book_id IN ($ph)
+                                 AND NOT EXISTS (SELECT 1 FROM catalog_categories x WHERE x.catalog_id = c.book_id AND x.category_id = ?)
+                                 AND (SELECT COUNT(*) FROM catalog_categories y WHERE y.catalog_id = c.book_id) < " . CATEGORY_MAX_PER_BOOK, array_merge($chunk, [$catId]));
+                    foreach ($rows as $r) {
+                        q('INSERT INTO catalog_categories (catalog_id, category_id) VALUES (?, ?)', [(int)$r['book_id'], $catId]);
+                        $affected++; $touched[] = (int)$r['book_id'];
+                    }
+                });
+                break;
+            case 'remove_category':
+                in_chunks($ids, function ($chunk, $ph) use ($catId, &$affected, &$touched) {
+                    $rows = all("SELECT catalog_id FROM catalog_categories WHERE category_id = ? AND catalog_id IN ($ph)", array_merge([$catId], $chunk));
+                    if (!$rows) return;
+                    $books = array_map(fn($r) => (int)$r['catalog_id'], $rows);
+                    $affected += q('DELETE FROM catalog_categories WHERE category_id = ? AND catalog_id IN (' . placeholders(count($books)) . ')', array_merge([$catId], $books))->rowCount();
+                    array_push($touched, ...$books);
+                });
                 break;
             case 'add_catalog':
                 in_chunks($ids, function ($chunk, $ph) use ($adminId, $now, &$affected) {
@@ -212,6 +252,7 @@ function admin_bulk(array $d, int $adminId): array {
                 $files = gc_books_rows($ids);
                 break;
         }
+        sync_legacy_category($touched);
         db()->commit();
     } catch (Throwable $e) {
         if (db()->inTransaction()) db()->rollBack();
@@ -221,6 +262,114 @@ function admin_bulk(array $d, int $adminId): array {
         @unlink(book_path($sha, 'epub')); @unlink(book_path($sha, 'pdf')); @unlink(cover_path($id));
     }
     return ['affected' => $affected, 'skipped' => $requested - $affected];
+}
+
+// ---------- Catalog categories (migration 9) ----------
+/** An optional id field: 0 when absent, null, '' or 0; else a positive id (400 bad_<k>). */
+function opt_id_param(array $d, string $k): int {
+    $v = $d[$k] ?? null;
+    if ($v === null || $v === '' || $v === 0 || $v === '0') return 0;
+    if (!(is_int($v) || (is_string($v) && ctype_digit($v))) || (int)$v <= 0) fail(400, 'bad_' . $k, "Field '$k' must be an id.");
+    return (int)$v;
+}
+function category_has_children(int $id): bool { return (bool)one('SELECT 1 AS x FROM categories WHERE parent_id = ? LIMIT 1', [$id]); }
+
+/** POST category-save {id?, name, parent_id}: create, rename or move. Returns the saved category. */
+function category_save(array $d): array {
+    $name = str_param($d, 'name', 80);
+    $id = opt_id_param($d, 'id');
+    $tree = categories_tree();
+    $cur = null;
+    if ($id) {
+        $cur = $tree[$id] ?? null;
+        if (!$cur) fail(404, 'not_found', 'Category not found.');
+    }
+    // parent_id absent on an update keeps the current parent.
+    $parent = ($cur && !array_key_exists('parent_id', $d)) ? $cur['parent_id'] : opt_id_param($d, 'parent_id');
+    if ($parent !== 0) {
+        $p = $tree[$parent] ?? null;
+        if (!$p || $parent === $id) fail(400, 'bad_parent', 'parent_id must be 0 or an existing top-level category.');
+        if ($p['parent_id'] !== 0) fail(400, 'too_deep', 'Categories have two levels; a subcategory cannot have children.');
+        if ($id && category_has_children($id)) fail(409, 'has_children', 'A category with subcategories cannot become a subcategory.');
+    }
+    if (one('SELECT id FROM categories WHERE parent_id = ? AND name = ? AND id <> ?', [$parent, $name, $id])) fail(409, 'duplicate', 'A category with this name already exists here.');
+    $sort = $cur && $cur['parent_id'] === $parent ? $cur['sort']
+          : (int)one('SELECT COALESCE(MAX(sort), -1) + 1 AS n FROM categories WHERE parent_id = ?', [$parent])['n'];
+    try {
+        if ($cur) {
+            q('UPDATE categories SET name = ?, parent_id = ?, sort = ? WHERE id = ?', [$name, $parent, $sort, $id]);
+        } else {
+            q('INSERT INTO categories (parent_id, name, sort, created_at) VALUES (?, ?, ?, ?)', [$parent, $name, $sort, time()]);
+            $id = category_find($name, $parent);
+        }
+    } catch (PDOException $e) { // unique (parent_id, name) raced
+        if (category_find($name, $parent) && category_find($name, $parent) !== $id) fail(409, 'duplicate', 'A category with this name already exists here.');
+        throw $e;
+    }
+    $tree = categories_tree(true);
+    if ($cur) { // the top-level name of its books (and of its children's books) may have changed
+        $scope = [$id];
+        foreach ($tree as $c) if ($c['parent_id'] === $id) $scope[] = $c['id'];
+        sync_legacy_category(books_in_categories($scope));
+    }
+    $c = $tree[$id];
+    return ['id' => $c['id'], 'name' => $c['name'], 'parent_id' => $c['parent_id'], 'sort' => $c['sort'],
+            'parent_name' => category_ref($c)['parent_name']];
+}
+
+/** POST category-delete {id, move_to?}: relink its books to move_to (or unlink them), then delete it. */
+function category_delete(array $d): array {
+    $id = int_param($d['id'] ?? '');
+    $tree = categories_tree();
+    if (!isset($tree[$id])) fail(404, 'not_found', 'Category not found.');
+    if (category_has_children($id)) fail(409, 'has_children', 'Delete or move its subcategories first.');
+    $to = opt_id_param($d, 'move_to');
+    if ($to && ($to === $id || !isset($tree[$to]))) fail(400, 'unknown_category', 'move_to must be another existing category.');
+    $books = books_in_categories([$id]);
+    db()->beginTransaction();
+    try {
+        if ($to) foreach ($books as $b) insert_ignore('catalog_categories', ['catalog_id' => $b, 'category_id' => $to]);
+        q('DELETE FROM catalog_categories WHERE category_id = ?', [$id]);
+        q('DELETE FROM categories WHERE id = ?', [$id]);
+        categories_tree(true);
+        sync_legacy_category($books);
+        db()->commit();
+    } catch (Throwable $e) {
+        if (db()->inTransaction()) db()->rollBack();
+        categories_tree(true);
+        throw $e;
+    }
+    return ['moved' => $to ? count($books) : 0, 'unlinked' => $to ? 0 : count($books)];
+}
+
+/** POST category-order {parent_id, ids}: sort = position among those siblings. */
+function category_order(array $d): void {
+    $parent = opt_id_param($d, 'parent_id');
+    $raw = $d['ids'] ?? null;
+    if (!is_array($raw) || !array_is_list($raw) || !$raw) fail(400, 'bad_ids', 'ids must be a non-empty list of category ids.');
+    $tree = categories_tree();
+    $ids = [];
+    foreach ($raw as $v) {
+        if (!(is_int($v) || (is_string($v) && ctype_digit($v)))) fail(400, 'bad_ids', 'ids must be a list of category ids.');
+        $v = (int)$v;
+        if (isset($ids[$v]) || !isset($tree[$v]) || $tree[$v]['parent_id'] !== $parent) fail(400, 'bad_ids', 'ids must be distinct categories under parent_id.');
+        $ids[$v] = true;
+    }
+    db()->beginTransaction();
+    try {
+        $i = 0;
+        foreach (array_keys($ids) as $cid) q('UPDATE categories SET sort = ? WHERE id = ?', [$i++, $cid]);
+        $tree = categories_tree(true);
+        // The first category (and so catalog.category) of the books under these siblings may have changed.
+        $scope = array_keys($ids);
+        if ($parent === 0) foreach ($tree as $c) if ($c['parent_id'] !== 0) $scope[] = $c['id'];
+        sync_legacy_category(books_in_categories($scope));
+        db()->commit();
+    } catch (Throwable $e) {
+        if (db()->inTransaction()) db()->rollBack();
+        categories_tree(true);
+        throw $e;
+    }
 }
 
 // ---------- v8.4 client error reports ----------
@@ -411,9 +560,9 @@ function handle_admin_route(string $route): bool {
             $rows = all('SELECT b.*, c.status, c.description, c.category, c.submitted_at, u.display_name AS submitter
                          FROM catalog c JOIN books b ON b.id = c.book_id LEFT JOIN users u ON u.id = c.submitted_by
                          ORDER BY c.submitted_at DESC');
-            json_out(200, ['books' => array_map(fn($r) => book_out($r) + [
+            json_out(200, ['books' => with_categories(array_map(fn($r) => book_out($r) + [
                 'status' => $r['status'], 'description' => $r['description'], 'category' => (string)$r['category'], 'submitter' => $r['submitter'], 'submitted_at' => (int)$r['submitted_at'],
-            ], $rows)]);
+            ], $rows))]);
 
         case 'catalog-update':
             method('POST');
@@ -424,12 +573,31 @@ function handle_admin_route(string $route): bool {
             // Each field is updated only when its key is present; everything is validated before anything is written.
             $desc = array_key_exists('description', $d) ? str_param($d, 'description', 2000, false) : null;
             $category = opt_str_param($d, 'category', 80);
+            $catIds = category_ids_param($d); // wins over the legacy `category` name when both are sent
             $cols = book_meta_from($d);
             if (array_key_exists('title', $d)) $cols['title'] = str_param($d, 'title', 500);
             if (array_key_exists('author', $d)) $cols['author'] = str_param($d, 'author', 300, false);
             if ($desc !== null) q('UPDATE catalog SET description = ? WHERE book_id = ?', [$desc, $bookId]);
-            if ($category !== null) q('UPDATE catalog SET category = ? WHERE book_id = ?', [$category, $bookId]);
+            if ($catIds !== null) set_book_categories($bookId, $catIds);
+            elseif ($category !== null) set_book_categories($bookId, $category === '' ? [] : [category_find_or_create($category, 0)]);
             update_book_cols($bookId, $cols);
+            json_out(200, ['ok' => true]);
+
+        // ---------- Catalog categories (migration 9) ----------
+        case 'category-save':
+            method('POST');
+            require_admin(true);
+            json_out(200, ['category' => category_save(body_json())]);
+
+        case 'category-delete':
+            method('POST');
+            require_admin(true);
+            json_out(200, category_delete(body_json()));
+
+        case 'category-order':
+            method('POST');
+            require_admin(true);
+            category_order(body_json());
             json_out(200, ['ok' => true]);
 
         case 'books-all':
