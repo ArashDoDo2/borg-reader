@@ -6,6 +6,8 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:"Vazirmatn",Taho
 button,input{font:inherit}
 button,label{ -webkit-tap-highlight-color:transparent}
 button{cursor:pointer}
+/* Base icon styles (Safari / iOS WebKit sizing and fill fixes) */
+.ico{display:inline-block;vertical-align:middle;flex-shrink:0;fill:none;stroke:currentColor;pointer-events:none}
 .topbar{height:74px;display:flex;align-items:center;justify-content:space-between;padding:0 clamp(18px,5vw,72px);border-bottom:1px solid var(--line);background:rgba(255,255,255,.84);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);gap:20px}
 .brand{display:flex;gap:11px;align-items:center;text-decoration:none;color:var(--ink);font-weight:800;font-size:17px;transition:opacity .18s}
 .brand:hover{opacity:.9}
@@ -25,10 +27,10 @@ button{cursor:pointer}
 .primary-button{background:linear-gradient(180deg,#faebd0,#ecd29a);color:#1b382d;border:1px solid rgba(255,255,255,.45);box-shadow:0 6px 18px rgba(8,29,23,.22),inset 0 1px 0 rgba(255,255,255,.6)}
 .primary-button:hover{transform:translateY(-2px);background:linear-gradient(180deg,#fff0d7,#f3daa5);box-shadow:0 10px 24px rgba(8,29,23,.3)}
 .upload-button{padding:13px 26px;font-size:14px;border-radius:14px;gap:10px}
-.upload-button .ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round}
+.upload-button .ico{width:18px;height:18px;min-width:18px;min-height:18px;max-width:18px;max-height:18px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
 .hero-badges{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0 14px}
 .hero-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.1);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,.14);border-radius:20px;padding:5px 12px;font-size:11.5px;color:#e8f2ec;font-weight:500;letter-spacing:-.01em}
-.hero-badge .ico{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;color:#dec285}
+.hero-badge .ico{width:14px;height:14px;min-width:14px;min-height:14px;max-width:14px;max-height:14px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;color:#dec285}
 .secondary-button{background:var(--paper);color:var(--ink);border:1px solid var(--line);box-shadow:0 1px 3px rgba(0,0,0,.03)}
 .privacy-note{font-size:11.5px;color:#bfd5c9;max-width:490px;margin:16px 0 0;line-height:1.75}
 .hero-art{position:relative;width:230px;height:250px;flex:0 0 230px;margin-inline:20px;z-index:1}
@@ -74,6 +76,7 @@ button{cursor:pointer}
 .empty-state h3{margin:0 0 6px;font-size:18px;font-weight:800;color:var(--ink)}
 .empty-state p{color:var(--muted);margin:0 0 20px;font-size:13.5px}
 .empty-drop-btn{padding:12px 22px;font-size:13px;border-radius:12px;background:var(--paper);border:1.5px solid #b5ccbd;box-shadow:0 2px 8px rgba(0,0,0,.04);transition:all .18s ease}
+.empty-drop-btn .ico{width:16px;height:16px;min-width:16px;min-height:16px;max-width:16px;max-height:16px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .empty-drop-btn:hover{background:var(--mint);border-color:var(--green2);color:var(--green);transform:translateY(-1px);box-shadow:0 4px 14px rgba(23,53,42,.08)}
 .reader{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column}
 .hidden{display:none!important}
@@ -193,8 +196,8 @@ body.dark .book-options:hover,body.dark .remove-book:hover{background:rgba(41,61
 .catalog-teaser{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 22px;margin:0 0 22px;border-radius:18px;background:linear-gradient(135deg,rgba(240,245,242,.92) 0%,rgba(228,239,233,.85) 100%);border:1px solid #c4dbcd;box-shadow:0 4px 18px rgba(23,72,60,.06);transition:all .2s ease}
 .catalog-teaser[hidden]{display:none!important}
 .teaser-content{display:flex;align-items:center;gap:16px}
-.teaser-icon{width:46px;height:46px;border-radius:14px;background:var(--green);color:#fff;display:grid;place-items:center;flex-shrink:0;box-shadow:0 4px 12px rgba(23,72,60,.22)}
-.teaser-icon .ico{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.teaser-icon{width:46px;height:46px;min-width:46px;min-height:46px;border-radius:14px;background:var(--green);color:#fff;display:grid;place-items:center;flex-shrink:0;box-shadow:0 4px 12px rgba(23,72,60,.22)}
+.teaser-icon .ico{width:22px;height:22px;min-width:22px;min-height:22px;max-width:22px;max-height:22px;flex-shrink:0;display:block;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .teaser-copy{min-width:0}
 .teaser-title-row{display:flex;align-items:center;gap:10px;margin-bottom:3px}
 .teaser-title{font-size:15px;font-weight:800;color:var(--ink)}
@@ -548,7 +551,7 @@ body.dark .network-status{background:#3a2a24;border-color:#6b4a3c}
 .import-button{background:var(--green2);border-color:var(--green2);color:#fff;white-space:nowrap}
 .import-button:hover{background:var(--green);border-color:var(--green)}
 body.dark .import-button,body.dark .import-button:hover{color:#132019}
-.import-button .ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;flex-shrink:0}
+.import-button .ico{width:18px;height:18px;min-width:18px;min-height:18px;max-width:18px;max-height:18px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
 /* Focus rings and form controls in the green palette (library, catalog, admin, header, dialogs; the reader keeps its own) */
 #app,.topbar,.account-dialog{accent-color:var(--green2)}
 #app :focus-visible,.topbar :focus-visible,.account-dialog :focus-visible{outline:2px solid var(--green2);outline-offset:2px}

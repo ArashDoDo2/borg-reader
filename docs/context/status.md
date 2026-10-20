@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-21, version **8.10.1** (live at https://parsun.com/borg/).
+Last updated: 2026-10-21, version **8.10.2** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -56,6 +56,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.9.0 | Scale to thousands of books. Admin: sub-tabs with `#admin/<tab>` links (overview, review queue, books, users, invites, API keys, errors, settings), server-paged books table (`admin-books`: search, status/category/format/uploader/no-cover filters, sort, 50/page, filters kept in the URL), bulk actions (`admin-bulk`, ids or the whole filter, confirmation with count), details panel, one-at-a-time review queue (A/R/C, J/K, arrows). Public catalog paged from the server (`catalog?page=&per=`, search/filters/sort server-side, infinite scroll + «بیشتر», book deep link fetches one book by `id`, back keeps loaded pages and position). Migration 8: `books.source`, `books.search_key`, indexes. Old servers fall back to the full lists |
 | 8.10.0 | Two-level categories (category → subcategory), several per book (max 10), admin-managed list (migration 9: `categories`, `catalog_categories`; existing category strings became top-level categories; legacy `catalog.category` mirrors the first top-level name). Public catalog: category navigator (desktop panel, phone drill-down sheet), `cat=ID` filter in the hash, breadcrumb, category links on the book page. Admin: «دسته‌ها» tab (add/rename/move/reorder/delete with move-to), category picker in details/queue (C)/user submission, tree filter and bulk add/remove in the books tab. `api-book` accepts `Parent/Child; Other` and creates missing categories. No per-category icons yet |
 | 8.10.1 | Landing polish & public catalog teaser: hero feature badges, dropzone empty state, unauthenticated public catalog callout card, refined book card shadows and micro-interactions |
+| 8.10.2 | Fix iPhone/Safari SVG icon sizing & solid black fill glitch: base `.ico` vector rules, explicit SVG width/height and presentation stroke attributes across all landing & action icons |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);

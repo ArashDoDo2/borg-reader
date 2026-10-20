@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.10.1">
+  <meta name="app-version" content="8.10.2">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -21,7 +21,7 @@
     <div class="top-actions">
       <span id="networkStatus" class="network-status" role="status" hidden>در حال بررسی اتصال…</span>
       <button id="accountButton" class="secondary-button account-button" type="button">ورود</button>
-      <button id="themeToggle" class="icon-button theme-toggle" type="button" aria-label="تغییر حالت شب" title="حالت شب / روز"><svg class="ico ico-moon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 14.6A8.2 8.2 0 0 1 9.4 4a8.2 8.2 0 1 0 10.6 10.6z"/></svg><svg class="ico ico-sun" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg></button>
+      <button id="themeToggle" class="icon-button theme-toggle" type="button" aria-label="تغییر حالت شب" title="حالت شب / روز"><svg class="ico ico-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 14.6A8.2 8.2 0 0 1 9.4 4a8.2 8.2 0 1 0 10.6 10.6z"/></svg><svg class="ico ico-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg></button>
     </div>
   </header>
 
@@ -32,14 +32,14 @@
         <h1>کتاب‌هایت، همیشه همراهت</h1>
         <p>فایل EPUB یا PDF را اضافه کن، در کتاب‌خوان بازش کن و حتی بدون اینترنت ادامه بده.</p>
         <label class="primary-button upload-button">
-          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg>
+          <svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg>
           <span>افزودن کتاب EPUB یا PDF</span>
           <input id="epubInput" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" multiple hidden>
         </label>
         <div class="hero-badges" aria-label="ویژگی‌های بُرگ">
-          <span class="hero-badge"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>مطالعهٔ کاملاً آفلاین</span>
-          <span class="hero-badge"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M6 6h10M6 10h10"/></svg>پشتیبانی EPUB و PDF</span>
-          <span class="hero-badge"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>حفظ حریم خصوصی</span>
+          <span class="hero-badge"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>مطالعهٔ کاملاً آفلاین</span>
+          <span class="hero-badge"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M6 6h10M6 10h10"/></svg>پشتیبانی EPUB و PDF</span>
+          <span class="hero-badge"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>حفظ حریم خصوصی</span>
         </div>
         <p class="privacy-note">کتاب‌ها روی همین دستگاه ذخیره می‌شوند؛ با ورود به حساب، کتاب‌ها و محل مطالعه بین دستگاه‌هایت همگام می‌شوند.</p>
       </div>
@@ -56,7 +56,7 @@
       <div id="catalogTeaser" class="catalog-teaser">
         <div class="teaser-content">
           <div class="teaser-icon" aria-hidden="true">
-            <svg class="ico" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M6 6h10M6 10h10M6 14h6"/></svg>
+            <svg class="ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M6 6h10M6 10h10M6 14h6"/></svg>
           </div>
           <div class="teaser-copy">
             <div class="teaser-title-row">
@@ -83,7 +83,7 @@
             <option value="added">تازه‌ترین افزوده</option><option value="read">آخرین مطالعه</option><option value="title">عنوان</option>
           </select>
           <div id="librarySearchBox" class="search-box lib-search" role="search"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="جستجو در عنوان، نویسنده، ناشر…" autocomplete="off" aria-label="جستجو در کتابخانهٔ من" aria-keyshortcuts="/" enterkeyhint="search"><button id="librarySearchClear" class="lib-search-clear" type="button" aria-label="پاک کردن جستجو" title="پاک کردن جستجو (Esc)" hidden>×</button></div>
-          <label class="secondary-button import-button"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg><span>افزودن<span class="lbl-long"> کتاب</span></span><input id="epubInputSmall" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" multiple hidden></label>
+          <label class="secondary-button import-button"><svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg><span>افزودن<span class="lbl-long"> کتاب</span></span><input id="epubInputSmall" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" multiple hidden></label>
           <button id="cleanOpen" class="secondary-button clean-open" type="button" aria-haspopup="dialog" title="حذف عبارت‌های ناخواسته (مثل لینک کانال) از متن همهٔ کتاب‌ها" aria-label="پاک‌سازی متن"><span>🧹 پاک‌سازی<span class="lbl-long"> متن</span></span></button>
         </div>
       </div>
@@ -103,11 +103,11 @@
       <div id="bookGrid" class="book-grid"></div>
       <p id="storageInfo" class="storage-info" aria-live="polite"></p>
       <div id="emptyState" class="empty-state">
-        <div class="empty-icon"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:36px;height:36px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M12 7v5M9.5 9.5h5"/></svg></div>
+        <div class="empty-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M12 7v5M9.5 9.5h5"/></svg></div>
         <h3>کتابخانه‌ات هنوز خالی است</h3>
         <p>فایل کتاب را بکش و اینجا رها کن، یا با دکمهٔ زیر اضافه کن.</p>
         <label class="secondary-button empty-drop-btn">
-          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round"><path d="M12 5v14M5 12h14"/></svg>
+          <svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg>
           <span>انتخاب فایل EPUB یا PDF</span>
           <input id="emptyEpubInput" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" multiple hidden>
         </label>
@@ -129,7 +129,7 @@
         <div class="catalog-toolbar">
           <p id="catalogCount" class="catalog-count" aria-live="polite"></p>
           <div class="catalog-tools">
-            <button id="catSheetOpen" class="secondary-button cat-sheet-open" type="button" aria-haspopup="dialog" aria-controls="catSheet" hidden><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span id="catSheetOpenLabel">دسته‌ها</span></button>
+            <button id="catSheetOpen" class="secondary-button cat-sheet-open" type="button" aria-haspopup="dialog" aria-controls="catSheet" hidden><svg class="ico" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span id="catSheetOpenLabel">دسته‌ها</span></button>
             <div id="catalogFormat" class="segmented catalog-format" role="group" aria-label="نوع فایل">
               <button type="button" data-format="" aria-pressed="true">همه</button><button type="button" data-format="epub" aria-pressed="false">EPUB</button><button type="button" data-format="pdf" aria-pressed="false">PDF</button>
             </div>
@@ -600,7 +600,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۱۰.۱</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۱۰.۲</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>
