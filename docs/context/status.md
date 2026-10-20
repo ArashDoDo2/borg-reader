@@ -57,15 +57,17 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.10.0 | Two-level categories (category → subcategory), several per book (max 10), admin-managed list (migration 9: `categories`, `catalog_categories`; existing category strings became top-level categories; legacy `catalog.category` mirrors the first top-level name). Public catalog: category navigator (desktop panel, phone drill-down sheet), `cat=ID` filter in the hash, breadcrumb, category links on the book page. Admin: «دسته‌ها» tab (add/rename/move/reorder/delete with move-to), category picker in details/queue (C)/user submission, tree filter and bulk add/remove in the books tab. `api-book` accepts `Parent/Child; Other` and creates missing categories. No per-category icons yet |
 
 ## Open items (not started unless the owner says so)
-0. Text cleanup shipped in 8.3.0. Limits: a phrase split across formatting tags is not matched; the
-   "too broad" override is per rule, not per book; server swap path is covered by API tests, not e2e.
-- Fixed (v8.4.0): TOC hrefs that go up a folder (`../text/c1.xhtml` from `nav/`) failed with "No Section Found".
-2. **Safari tests in CI** (v8.4.0): `tests/webkit_e2e.py` runs in the CI job `webkit` and gates the deploy
-   (open book, text laid out, touch edge taps, TOC, veil, seek bar, back chip). The probe now runs only when it fails.
-3. **Real-device confirmation** still pending from the owner: iPad shows text (8.0.4), iPhone edge taps (8.0.5).
-4. Later candidates (owner chose reading features first): error reporting to the admin, upload progress/resume,
-   performance on very large books, Android app wrapper (needs owner's package name, signing key, Play account).
-5. Ideas deferred on purpose: ratings and comments in the catalog (too few users), "send to Kindle" (needs SMTP).
+1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
+   real-device check on iPhone/iPad of the 8.6–8.10 mobile changes (taps fixed at the root in 8.6.1).
+2. **Known, not fixed:** with margin «زیاد», swipes may not turn pages on phones.
+3. **Server setting (owner):** production health (2026-10-20): PHP 8.4.26, zip/dom on, schema 9, `upload_max_filesize`
+   128M but `post_max_size` 32M. Browser uploads are chunked (2 MB) and unaffected; `api-book` sends the whole file in
+   one request, so books over ~32 MB are rejected until `post_max_size` is raised to 128M (cPanel MultiPHP INI Editor).
+4. Text cleanup limits: a phrase split across formatting tags is not matched; the "too broad" override is per rule,
+   not per book. PDFs: no highlights/notes/TTS/cleanup yet (ADR 0009). Categories: no per-category icons (ADR 0010).
+5. Later candidates: upload resume, performance on very large books, Android app wrapper (needs owner's package name,
+   signing key, Play account).
+6. Ideas deferred on purpose: ratings and comments in the catalog (too few users), "send to Kindle" (needs SMTP).
 
 ## Decisions the owner already made (don't re-ask)
 - One production branch, no staging. Speed matters: ship, keep tests green, fix forward with a new revision.
@@ -75,3 +77,9 @@ Read this first when picking the project up. Technical detail is in `docs/archit
   `~/borg-storage` and the database are included, kept off-server, and that a restore has been tried once.)
 - Product spec stays private (`docs/private/`, git-ignored).
 - Copyright: the public catalog is the site owner's legal responsibility; moderation stays on.
+- Text cleanup edits the EPUB file itself, for all books, no original kept, auto-applied on import; an admin cleanup
+  replaces the catalog file and other users' copies.
+- API upload (8.7): public catalog only, the owner's own program, a few books a day, server-side cleanup.
+- PDFs open directly in their layout, no conversion (ADR 0009). Reading direction is per book, auto + manual (ADR 0008).
+- Scale target: ~2,000–3,000 books a year (8.9 server paging everywhere).
+- Categories: two levels, several per book, admin-managed list, API creates missing ones (ADR 0010).

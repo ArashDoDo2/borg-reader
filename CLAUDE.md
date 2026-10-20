@@ -1,6 +1,6 @@
 # CLAUDE.md — Borg (بُرگ)
 
-Persian-first EPUB reader: an offline-capable PWA (static files, no build step) plus an optional PHP 8 API
+Persian-first EPUB/PDF reader: an offline-capable PWA (static files, no build step) plus an optional PHP 8 API
 for invite-only accounts, cloud sync and a moderated public catalog. Live at https://parsun.com/borg/.
 Current version: see `<meta name="app-version">` in `src/index.html` (8.10.0 when this file was last updated).
 
@@ -18,12 +18,17 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
 ## Layout
 - `src/` — exactly what is deployed to `public_html/borg/`.
   - `index.html`, `assets/js/app.js` (all client logic, one IIFE), `assets/css/`, `assets/fonts/`, `assets/vendor/`
-    (epub.js 0.3.93, JSZip 3.10.1), `service-worker.js`, `offline.html`, `manifest.webmanifest`.
+    (epub.js 0.3.93, JSZip 3.10.1, pdf.js 4.10.38 legacy in `vendor/pdfjs`, lazy-loaded, not precached), `service-worker.js`, `offline.html`, `manifest.webmanifest`.
   - `api/` — PHP API: `index.php` (router), `lib/core.php` (config, DB, migrations, sessions, CSRF, rate limits),
-    `lib/books.php` (upload, library, progress, annotations, shelves, stats, catalog), `lib/admin.php`.
+    `lib/books.php` (upload, library, progress, annotations, shelves, stats, paged catalog, categories), `lib/admin.php`
+    (admin panel routes: admin-books, admin-bulk, categories CRUD, users, invites, API keys, error reports),
+    `lib/apibook.php` (`POST api-book` for the owner's other program, API keys), `lib/clean.php` (server text cleanup,
+    same results as the browser's). External API guide: `docs/api-books.md`.
 - `tests/api_test.py` — API tests (PHP built-in server + SQLite). `tests/e2e_test.py` — Playwright/Chromium
   end-to-end tests. `tests/webkit_e2e.py` — WebKit (Safari engine) checks that gate the deploy in CI (iPad/iPhone/desktop;
-  `--browser chromium` to check its logic locally). `tests/webkit_probe.py` — WebKit diagnostics, run in CI only when those fail. `tests/fixtures/` — sample EPUBs.
+  `--browser chromium` to check its logic locally). E2E gotchas: the server allows 10 logins per e-mail per 15 min, so
+  late sections log in as the invited user (friend@example.com) with role "admin" patched into login/me (see section 30);
+  sections that test the free-text category flows mock `categories` as empty. `tests/webkit_probe.py` — WebKit diagnostics, run in CI only when those fail. `tests/fixtures/` — sample EPUBs.
 - `scripts/cpanel-deploy.sh` (run by `.cpanel.yml`), `scripts/smoke-test.sh`, `scripts/build-zip.sh` (fallback).
 - `.github/workflows/deploy.yml` — CI: tests → deploy through cPanel UAPI → smoke test.
 
