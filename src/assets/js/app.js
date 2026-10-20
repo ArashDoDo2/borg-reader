@@ -3087,6 +3087,8 @@
     $("accountButton").textContent = user ? user.name : "ورود";
     document.querySelector('[data-view="catalog"]').hidden = !user;
     document.querySelector('[data-view="admin"]').hidden = !(user && user.role === "admin");
+    const teaser = $("catalogTeaser");
+    if (teaser) teaser.hidden = !!user;
     if (!user) {
       showView("mine"); syncChip.at = 0; syncChip.failed = false; unpushedProgress.clear(); setSyncStatus("");
       resetCatalog(); previewCache = null;
@@ -3140,6 +3142,7 @@
       catch (_) {}
     }
   });
+  $("teaserLogin")?.addEventListener("click", () => $("accountButton").click());
   $("accountClose").addEventListener("click", () => $("accountDialog").close());
   $("authForm").addEventListener("submit", async e => {
     e.preventDefault();

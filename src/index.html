@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.10.0">
+  <meta name="app-version" content="8.10.1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -32,9 +32,15 @@
         <h1>کتاب‌هایت، همیشه همراهت</h1>
         <p>فایل EPUB یا PDF را اضافه کن، در کتاب‌خوان بازش کن و حتی بدون اینترنت ادامه بده.</p>
         <label class="primary-button upload-button">
-          <span>＋ افزودن کتاب EPUB یا PDF</span>
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg>
+          <span>افزودن کتاب EPUB یا PDF</span>
           <input id="epubInput" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" multiple hidden>
         </label>
+        <div class="hero-badges" aria-label="ویژگی‌های بُرگ">
+          <span class="hero-badge"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>مطالعهٔ کاملاً آفلاین</span>
+          <span class="hero-badge"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M6 6h10M6 10h10"/></svg>پشتیبانی EPUB و PDF</span>
+          <span class="hero-badge"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>حفظ حریم خصوصی</span>
+        </div>
         <p class="privacy-note">کتاب‌ها روی همین دستگاه ذخیره می‌شوند؛ با ورود به حساب، کتاب‌ها و محل مطالعه بین دستگاه‌هایت همگام می‌شوند.</p>
       </div>
       <div class="hero-art" aria-hidden="true">
@@ -47,6 +53,22 @@
     </section>
 
     <section class="library-section">
+      <div id="catalogTeaser" class="catalog-teaser">
+        <div class="teaser-content">
+          <div class="teaser-icon" aria-hidden="true">
+            <svg class="ico" viewBox="0 0 24 24"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M6 6h10M6 10h10M6 14h6"/></svg>
+          </div>
+          <div class="teaser-copy">
+            <div class="teaser-title-row">
+              <strong class="teaser-title">کتابخانهٔ عمومی بُرگ</strong>
+              <span class="teaser-pill">ویژهٔ اعضا</span>
+            </div>
+            <p class="teaser-desc">دسترسی به مجموعه‌ای از کتاب‌های برگزیده در دسته‌های ادبیات، تاریخ، شعر و... با امکان مطالعهٔ آنلاین و افزودن به کتابخانهٔ شخصی.</p>
+          </div>
+        </div>
+        <button id="teaserLogin" class="primary-button teaser-btn" type="button">ورود / استفاده از کد دعوت</button>
+      </div>
+
       <nav class="view-tabs" role="tablist" aria-label="بخش‌ها">
         <button type="button" role="tab" data-view="mine" aria-selected="true">کتابخانهٔ من</button>
         <button type="button" role="tab" data-view="catalog" aria-selected="false" hidden>کتابخانهٔ عمومی</button>
@@ -81,10 +103,14 @@
       <div id="bookGrid" class="book-grid"></div>
       <p id="storageInfo" class="storage-info" aria-live="polite"></p>
       <div id="emptyState" class="empty-state">
-        <div class="empty-icon">▤</div>
+        <div class="empty-icon"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:36px;height:36px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M12 7v5M9.5 9.5h5"/></svg></div>
         <h3>کتابخانه‌ات هنوز خالی است</h3>
-        <p>یک فایل EPUB یا PDF انتخاب کن تا اینجا ظاهر شود.</p>
-        <label class="secondary-button">انتخاب فایل EPUB یا PDF<input id="emptyEpubInput" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" multiple hidden></label>
+        <p>فایل کتاب را بکش و اینجا رها کن، یا با دکمهٔ زیر اضافه کن.</p>
+        <label class="secondary-button empty-drop-btn">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round"><path d="M12 5v14M5 12h14"/></svg>
+          <span>انتخاب فایل EPUB یا PDF</span>
+          <input id="emptyEpubInput" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" multiple hidden>
+        </label>
       </div>
       </div>
       <div id="viewCatalog" class="view" hidden>
@@ -574,7 +600,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۱۰.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۱۰.۱</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>
