@@ -3742,6 +3742,17 @@
     $("catalogFormat").querySelectorAll("[data-format]").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.format === catalogFilter.format)));
     $("catalogSort").value = catalogFilter.sort;
   }
+  function renderCatalogShowcase(books) {
+    const isBrowse = !catalogFiltered() && catalogLoaded && books.length > 3;
+    const sc = $("catalogShowcase");
+    if (sc) {
+      sc.hidden = !isBrowse;
+      if (isBrowse) {
+        const shelf = $("catalogShowcaseShelf");
+        if (shelf) shelf.innerHTML = books.slice(0, 10).map(b => catalogCardHtml(b, false)).join("");
+      }
+    }
+  }
   function renderCatalog() {
     const books = visibleCatalogBooks();
     renderCatalogFilters();
@@ -3750,6 +3761,7 @@
     renderCatalogCount();
     const nothingAtAll = catalogLoaded && (catalogState.mode === "paged" ? catalogState.total === 0 && !catalogFiltered() : catalogBooks.length === 0);
     $("catalogEmpty").hidden = !nothingAtAll;
+    renderCatalogShowcase(books);
     if (catalogLoaded || catalogBooks.length) $("catalogGrid").innerHTML = books.map(b => catalogCardHtml(b, true)).join("");
     if (catalogLoaded && !books.length && !nothingAtAll) {
       $("catalogGrid").innerHTML = '<div class="catalog-noresult"><p class="muted">کتابی با این مشخصات پیدا نشد.</p>'
@@ -3799,6 +3811,18 @@
   }
   let catNavOpenId = 0, catNavTimer = 0, catSheetLevel = 0;
   const finePointer = () => !!(window.matchMedia && matchMedia("(hover: hover) and (pointer: fine)").matches);
+  function renderCatalogQuickBar() {
+    const qb = $("catalogQuickBar");
+    if (!qb) return;
+    const on = catTreeOn() && cats.tops.length > 0;
+    qb.hidden = !on;
+    if (!on) return;
+    const sel = catalogFilter.cat ? Number(catalogFilter.cat) : 0;
+    const cur = sel ? cats.byId.get(sel) : null, curTop = cur ? cur.parent_id || cur.id : 0;
+    $("catalogQuickList").innerHTML = `<button type="button" class="quick-cat-chip" data-cat-pick=""${sel ? "" : ' aria-current="true"'}><span>همهٔ کتاب‌ها</span></button>`
+      + cats.tops.map(t => `<button type="button" class="quick-cat-chip" data-cat-pick="${t.id}"${curTop === t.id ? ' aria-current="true"' : ""}>`
+        + `<span dir="auto">${esc(t.name)}</span><span class="cat-count">${faNum(t.count)}</span></button>`).join("");
+  }
   function renderCatNav() {
     const on = catTreeOn(), sel = catalogFilter.cat ? Number(catalogFilter.cat) : 0;
     const cur = sel ? cats.byId.get(sel) : null, curTop = cur ? cur.parent_id || cur.id : 0;
@@ -3818,6 +3842,7 @@
         }).join("");
       if (catNavOpenId && cats.kids.has(catNavOpenId)) openCatPanel(catNavOpenId); else closeCatPanel();
     } else closeCatPanel();
+    renderCatalogQuickBar();
     const crumbs = $("catCrumbs");
     if (sel) {
       const top = cur && cur.parent_id ? cats.byId.get(cur.parent_id) : null;
@@ -4246,7 +4271,7 @@
     if (e.key === "Escape" && addMenuOpen()) { closeAddMenu(); $("detailAddMore").focus({ preventScroll: true }); }
   });
 
-  $("catalogGrid").addEventListener("click", e => {
+  const onCatalogCardClick = e => {
     if (e.target.closest("[data-catalog-reset]")) {
       $("catalogSearch").value = "";
       const hadCat = !!catalogFilter.cat;
@@ -4258,12 +4283,16 @@
     if (btn) { e.stopPropagation(); addFromCatalog(Number(btn.dataset.catalogAdd), { btn }); return; }
     const card = e.target.closest("[data-detail]");
     if (card) openCatalogBook(Number(card.dataset.detail));
-  });
-  $("catalogGrid").addEventListener("keydown", e => {
+  };
+  const onCatalogCardKeydown = e => {
     if (e.target.closest("[data-catalog-add]")) return;
     const card = e.target.closest("[data-detail]");
     if (card && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openCatalogBook(Number(card.dataset.detail)); }
-  });
+  };
+  $("catalogGrid").addEventListener("click", onCatalogCardClick);
+  $("catalogGrid").addEventListener("keydown", onCatalogCardKeydown);
+  $("catalogShowcaseShelf")?.addEventListener("click", onCatalogCardClick);
+  $("catalogShowcaseShelf")?.addEventListener("keydown", onCatalogCardKeydown);
   async function shareBook(localId) {
     const b = await getBook(localId);
     if (!b || !b.serverId) { showToast("اول باید همگام‌سازی کامل شود."); return; }

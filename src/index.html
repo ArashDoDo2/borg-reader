@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.10.2">
+  <meta name="app-version" content="8.10.3">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -138,6 +138,22 @@
             </select>
           </div>
         </div>
+        <nav id="catalogQuickBar" class="catalog-quick-bar" aria-label="دسته‌های پیشنهادی" hidden>
+          <div id="catalogQuickList" class="catalog-quick-list"></div>
+        </nav>
+        <section id="catalogShowcase" class="catalog-showcase" aria-label="ویترین کتابخانهٔ عمومی" hidden>
+          <div class="catalog-showcase-head">
+            <div class="showcase-title-row">
+              <span class="showcase-badge">ویترین</span>
+              <h3 class="shelf-title">تازه‌ها و برگزیده‌ها</h3>
+            </div>
+            <span class="muted showcase-hint">جدیدترین کتاب‌های اضافه‌شده</span>
+          </div>
+          <div id="catalogShowcaseShelf" class="continue-shelf catalog-showcase-shelf" aria-label="تازه‌های کتابخانه"></div>
+          <div class="showcase-divider">
+            <h3 class="shelf-title">همهٔ کتاب‌ها</h3>
+          </div>
+        </section>
         <div id="catalogGrid" class="book-grid"></div>
         <div id="catalogMore" class="catalog-more" hidden><button id="catalogMoreButton" class="secondary-button" type="button">بیشتر</button></div>
         <p id="catalogEmpty" class="muted" hidden>هنوز کتابی در کتابخانهٔ عمومی نیست.</p>
@@ -600,7 +616,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۱۰.۲</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۱۰.۳</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>
