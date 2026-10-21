@@ -2737,15 +2737,13 @@
             const sorted = list.sort((a, b) => {
               const aName = (a.name || "").replace(/^models\//, "").toLowerCase();
               const bName = (b.name || "").replace(/^models\//, "").toLowerCase();
-              // Flash-Lite has zero thinking delay and responds in < 1 second!
-              const aLite = /lite/i.test(aName) ? 200 : 0;
-              const bLite = /lite/i.test(bName) ? 200 : 0;
+              // Ultra-low-latency models (Lite & Flash 2.0/1.5) respond in < 1 second!
+              const aFast = (/lite/i.test(aName) ? 200 : 0) + (/gemini-2\.0-flash/i.test(aName) ? 180 : 0) + (/gemini-1\.5-flash/i.test(aName) ? 140 : 0);
+              const bFast = (/lite/i.test(bName) ? 200 : 0) + (/gemini-2\.0-flash/i.test(bName) ? 180 : 0) + (/gemini-1\.5-flash/i.test(bName) ? 140 : 0);
               const aClean = /^gemini-\d+(\.\d+)?-(flash|pro)(-lite)?$/.test(aName) ? 100 : 0;
               const bClean = /^gemini-\d+(\.\d+)?-(flash|pro)(-lite)?$/.test(bName) ? 100 : 0;
-              const aScore = aLite + aClean + (/gemini-2\.5/i.test(aName) ? 50 : /gemini-2\.0/i.test(aName) ? 40 : /gemini-1\.5/i.test(aName) ? 30 : /gemini-3/i.test(aName) ? 20 : 10)
-                           + (/flash/i.test(aName) ? 5 : 0);
-              const bScore = bLite + bClean + (/gemini-2\.5/i.test(bName) ? 50 : /gemini-2\.0/i.test(bName) ? 40 : /gemini-1\.5/i.test(bName) ? 30 : /gemini-3/i.test(bName) ? 20 : 10)
-                           + (/flash/i.test(bName) ? 5 : 0);
+              const aScore = aFast + aClean + (/gemini-2\.5/i.test(aName) ? 30 : /gemini-2\.0/i.test(aName) ? 40 : /gemini-1\.5/i.test(aName) ? 35 : 10);
+              const bScore = bFast + bClean + (/gemini-2\.5/i.test(bName) ? 30 : /gemini-2\.0/i.test(bName) ? 40 : /gemini-1\.5/i.test(bName) ? 35 : 10);
               return bScore - aScore;
             });
             return {
@@ -2769,13 +2767,12 @@
     return {
       apiVersion: "v1beta",
       models: [
-        "gemini-2.5-flash-lite",
         "gemini-2.0-flash",
+        "gemini-2.5-flash-lite",
         "gemini-1.5-flash",
         "gemini-3.5-flash-lite",
         "gemini-2.5-flash",
         "gemini-3.8-flash",
-        "gemini-1.5-flash-latest",
         "gemini-1.5-pro",
         "gemini-pro"
       ],
@@ -2810,18 +2807,35 @@
     let s = esc(String(text).trim());
     s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/\*([^\*\n]+?)\*/g, "<em>$1</em>");
+    s = s.replace(/`([^`\n]+?)`/g, "<code>$1</code>");
     const lines = s.split("\n");
     let inList = false;
     const res = [];
     for (const line of lines) {
       const trimmed = line.trim();
+      if (!trimmed) {
+        if (inList) { res.push("</ul>"); inList = false; }
+        continue;
+      }
+      if (/^---+$/.test(trimmed)) {
+        if (inList) { res.push("</ul>"); inList = false; }
+        res.push("<hr class=\"ai-divider\">");
+        continue;
+      }
+      const hMatch = trimmed.match(/^(#{1,4})\s+(.+)/);
+      if (hMatch) {
+        if (inList) { res.push("</ul>"); inList = false; }
+        const level = Math.min(hMatch[1].length + 2, 5);
+        res.push(`<h${level} class="ai-heading">${hMatch[2]}</h${level}>`);
+        continue;
+      }
       const m = trimmed.match(/^[\*\-•]\s+(.*)/);
       if (m) {
         if (!inList) { res.push("<ul>"); inList = true; }
         res.push(`<li>${m[1]}</li>`);
       } else {
         if (inList) { res.push("</ul>"); inList = false; }
-        if (trimmed) res.push(`<p>${trimmed}</p>`);
+        res.push(`<p>${trimmed}</p>`);
       }
     }
     if (inList) res.push("</ul>");
@@ -2854,14 +2868,14 @@
       let candidateVersions = [cfg.apiVersion || "v1beta", (cfg.apiVersion === "v1" ? "v1beta" : "v1")];
       let candidateModels = [];
 
-      // If cached model is a preview or heavy model, prioritize ultra-fast lite models
-      const validCachedModel = cfg.model && !/preview/i.test(cfg.model) ? cfg.model : "";
+      // If cached model is a preview or heavy reasoning model, prioritize ultra-fast models
+      const validCachedModel = cfg.model && !/preview|2\.5-flash$/i.test(cfg.model) ? cfg.model : "";
       if (!validCachedModel || apiKeyOverride) {
         const discovered = await discoverGeminiModels(apiKey);
         candidateVersions = [discovered.apiVersion, discovered.apiVersion === "v1beta" ? "v1" : "v1beta"];
         candidateModels = discovered.models;
       } else {
-        candidateModels = [validCachedModel, "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.8-flash"];
+        candidateModels = [validCachedModel, "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-1.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.8-flash"];
       }
 
       candidateModels = candidateModels.filter((v, i, a) => v && a.indexOf(v) === i);
@@ -3048,10 +3062,14 @@
     closeSettings(false);
     $("aiPanel").hidden = false;
     $("aiToggle").setAttribute("aria-expanded", "true");
-    if (contextText) {
-      aiContextText = contextText;
+    const cleanCtx = typeof contextText === "string" ? contextText.trim() : "";
+    if (cleanCtx) {
+      aiContextText = cleanCtx;
       $("aiContextBadge").hidden = false;
-      $("aiContextText").textContent = `متن انتخابی: «${contextText.slice(0, 60)}…»`;
+      $("aiContextText").textContent = `📌 تمرکز روی متن انتخابی: «${cleanCtx.slice(0, 50)}…»`;
+    } else if (!aiContextText) {
+      $("aiContextBadge").hidden = true;
+      $("aiContextText").textContent = "";
     }
     syncAiUI();
   }
@@ -3073,7 +3091,7 @@
     const ctx = contextOverride || aiContextText || getCurrentSectionText(3500);
     const bookTitle = (currentBook && currentBook.title) || "";
     const chapter = $("chapterLabel")?.textContent || "";
-    const systemPrompt = `شما دستیار هوشمند مطالعه در اپلیکیشن کتاب‌خوان بُرگ هستید. کتاب در حال مطالعه: «${bookTitle}» (فصل/بخش: «${chapter}»). به زبان فارسی صمیمی، شیوا، دقیق و ساختاریافته پاسخ بده. اگر متنی از کتاب در اختیارت قرار گرفته، بر اساس آن پاسخ بده.`;
+    const systemPrompt = `شما دستیار هوشمند مطالعه در اپلیکیشن کتاب‌خوان بُرگ هستید. کتاب در حال مطالعه: «${bookTitle}» (فصل/بخش: «${chapter}»). به زبان فارسی صمیمی، شیوا، دقیق و ساختاریافته پاسخ بده. بدون مقدمه‌چینی اضافی مستقیم به سراغ اصل مطلب برو. اگر متنی از کتاب در اختیارت قرار گرفته، بر اساس آن پاسخ بده.`;
 
     let prompt = "";
     if (ctx) prompt += `متن بخش در حال مطالعه:\n«««\n${ctx}\n»»»\n\n`;
@@ -3119,8 +3137,8 @@
     $("aiContextBadge").hidden = true;
     $("aiContextText").textContent = "";
   });
-  $("aiBtnSummary").addEventListener("click", () => askAiPrompt("لطفاً این فصل را در ۳ الی ۵ نکتهٔ کلیدی و مهم خلاصه کن."));
-  $("aiBtnTakeaways").addEventListener("click", () => askAiPrompt("مهم‌ترین مفاهیم و بینش‌های این بخش را با توضیح مختصر بنویس."));
+  $("aiBtnSummary").addEventListener("click", () => askAiPrompt("لطفاً این فصل را مستقیم و در ۳ الی ۵ نکتهٔ کلیدی و موجز خلاصه کن."));
+  $("aiBtnTakeaways").addEventListener("click", () => askAiPrompt("مهم‌ترین مفاهیم و بینش‌های این بخش را در چند نکتهٔ کوتاه بنویس."));
   $("aiBtnQuestions").addEventListener("click", () => askAiPrompt("۳ پرسش عمیق و تفکربرانگیز از مباحث این بخش برای سنجش درک مطلب طرح کن."));
   $("aiPromptForm").addEventListener("submit", e => {
     e.preventDefault();

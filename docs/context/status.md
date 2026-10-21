@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-22, version **8.13.6** (live at https://parsun.com/borg/).
+Last updated: 2026-10-22, version **8.13.7** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -69,6 +69,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.4 | Filter out TTS/Audio models: exclude `gemini-2.5-flash-preview-tts` and audio models from text generation, prioritize `gemini-2.5-flash` / `gemini-3.8-flash`, and continue to next model on modality mismatch 400 |
 | 8.13.5 | 10x faster AI response: disable thinking budget (`thinkingBudget: 0`) and enable SSE token streaming (`streamGenerateContent`) for real-time word-by-word summaries |
 | 8.13.6 | Prioritize `gemini-2.5-flash-lite` (default thinking: off) for sub-second responses, extract text across delta/parts while discarding internal thought tokens, and bypass stale cached preview models |
+| 8.13.7 | Prioritize `gemini-2.0-flash` / `gemini-2.5-flash-lite` over heavy reasoning models, fix context badge hiding and clear label, render markdown headings (`###`) and dividers cleanly, and sharpen summary prompts |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
