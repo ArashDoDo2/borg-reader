@@ -2729,16 +2729,20 @@
           const list = (data.models || []).filter(m => {
             if (!Array.isArray(m.supportedGenerationMethods) || !m.supportedGenerationMethods.includes("generateContent")) return false;
             const name = (m.name || "").toLowerCase();
-            if (/(-tts|tts|audio|speech|embed|imagen|medlm)/i.test(name)) return false;
+            // Exclude specialized modalities: audio, tts, speech, image, video, embedding
+            if (/(-tts|tts|audio|speech|embed|imagen|image|photo|video|medlm|realtime)/i.test(name)) return false;
             return true;
           });
           if (list.length > 0) {
             const sorted = list.sort((a, b) => {
-              const aName = (a.name || "").toLowerCase();
-              const bName = (b.name || "").toLowerCase();
-              const aScore = (/gemini-2\.5/i.test(aName) ? 50 : /gemini-3/i.test(aName) ? 40 : /gemini-2\.0/i.test(aName) ? 30 : /gemini-1\.5/i.test(aName) ? 20 : 10)
+              const aName = (a.name || "").replace(/^models\//, "").toLowerCase();
+              const bName = (b.name || "").replace(/^models\//, "").toLowerCase();
+              // Clean models like gemini-2.5-flash or gemini-1.5-flash get huge preference
+              const aClean = /^gemini-\d+(\.\d+)?-(flash|pro)$/.test(aName) ? 100 : 0;
+              const bClean = /^gemini-\d+(\.\d+)?-(flash|pro)$/.test(bName) ? 100 : 0;
+              const aScore = aClean + (/gemini-2\.5/i.test(aName) ? 50 : /gemini-2\.0/i.test(aName) ? 40 : /gemini-1\.5/i.test(aName) ? 30 : /gemini-3/i.test(aName) ? 20 : 10)
                            + (/flash/i.test(aName) ? 5 : 0);
-              const bScore = (/gemini-2\.5/i.test(bName) ? 50 : /gemini-3/i.test(bName) ? 40 : /gemini-2\.0/i.test(bName) ? 30 : /gemini-1\.5/i.test(bName) ? 20 : 10)
+              const bScore = bClean + (/gemini-2\.5/i.test(bName) ? 50 : /gemini-2\.0/i.test(bName) ? 40 : /gemini-1\.5/i.test(bName) ? 30 : /gemini-3/i.test(bName) ? 20 : 10)
                            + (/flash/i.test(bName) ? 5 : 0);
               return bScore - aScore;
             });
@@ -2764,9 +2768,9 @@
       apiVersion: "v1beta",
       models: [
         "gemini-2.5-flash",
-        "gemini-3.8-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash",
+        "gemini-3.8-flash",
         "gemini-1.5-flash-latest",
         "gemini-1.5-flash-001",
         "gemini-1.5-flash-002",
@@ -2827,7 +2831,7 @@
         candidateVersions = [discovered.apiVersion, discovered.apiVersion === "v1beta" ? "v1" : "v1beta"];
         candidateModels = discovered.models;
       } else {
-        candidateModels = [cfg.model, "gemini-2.5-flash", "gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
+        candidateModels = [cfg.model, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-3.8-flash"];
       }
 
       candidateModels = candidateModels.filter((v, i, a) => v && a.indexOf(v) === i);
@@ -2873,7 +2877,11 @@
             if (lastErrDetail && /api key not valid|key expired|permission_denied/i.test(lastErrDetail)) {
               break;
             }
-            if (resp.status === 403 || resp.status === 429) {
+            if (resp.status === 403) {
+              break;
+            }
+            // If 429 is due to a specific model having limit: 0, continue to next model!
+            if (resp.status === 429 && !lastErrDetail.includes("limit: 0")) {
               break;
             }
             // For model-specific 400 (e.g. AUDIO modality) or 404, continue to next candidate model!
@@ -2884,7 +2892,10 @@
             }
           }
         }
-        if (lastResp && (lastResp.status === 403 || lastResp.status === 429)) {
+        if (lastResp && lastResp.status === 403) {
+          break;
+        }
+        if (lastResp && lastResp.status === 429 && !lastErrDetail.includes("limit: 0")) {
           break;
         }
       }
