@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-21, version **8.13.1** (live at https://parsun.com/borg/).
+Last updated: 2026-10-21, version **8.13.2** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -64,6 +64,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.12.0 | AI Reading Companion (BYOK): landing page showcase & onboarding guide, 100% private client-side integration for Google Gemini & OpenAI, selection bar AI explanation & translation, chapter summary, key insights, and interactive book Q&A |
 | 8.13.0 | Admin URL book importer («دریافت با لینک»): direct server-side download and processing for EPUB/PDF links, SSRF-safe manual redirect & IP validation, automatic OPF metadata extraction, text cleanup, category & public catalog curation |
 | 8.13.1 | Fix Gemini API 404 error: update model endpoint to stable production models (`gemini-1.5-flash`, `gemini-2.0-flash`, `gemini-1.5-pro`) with automatic fallback and dual header/query authentication |
+| 8.13.2 | Clarify AI guide copy: remove rigid prefix references (`AIzaSy...`) in instructions and input placeholder |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
