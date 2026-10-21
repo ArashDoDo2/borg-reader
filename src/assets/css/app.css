@@ -767,7 +767,7 @@ body.dark .reader .icon-button:hover,body.dark .reader .secondary-button:hover{b
 .note-popup-actions .text-button{min-height:40px}
 @media(max-width:700px){
  /* Toolbar: icon-only back button, flat 44px icon buttons, the title gets the freed space with the chapter under it. */
- .reader-toolbar{height:auto;min-height:0;gap:0;padding:calc(5px + env(safe-area-inset-top)) max(4px,env(safe-area-inset-right)) 5px max(4px,env(safe-area-inset-left))}
+ .reader-toolbar{height:auto;min-height:0;gap:0;padding:calc(4px + env(safe-area-inset-top)) max(4px,env(safe-area-inset-right)) 4px max(4px,env(safe-area-inset-left))}
  .reader-toolbar>.icon-button,.reader-tools>.icon-button,.reader-toolbar>.close-reader{min-width:44px;width:44px;height:44px;padding:0;border:0;border-radius:12px;background:transparent;color:var(--ink);font-size:inherit}
  .reader-toolbar>.icon-button:hover,.reader-tools>.icon-button:hover,.reader-toolbar>.close-reader:hover{background:transparent}
  .reader-toolbar>.icon-button:active,.reader-tools>.icon-button:active,.reader-toolbar>.close-reader:active,.reader-toolbar>.icon-button[aria-expanded="true"],.reader-tools>.icon-button[aria-expanded="true"]{background:var(--mint);color:var(--green2)}
@@ -776,8 +776,8 @@ body.dark .reader .icon-button:hover,body.dark .reader .secondary-button:hover{b
  .close-reader-label,.bookmark-label{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
  .reader-tools{gap:0;flex-shrink:0}
  .reader-heading{flex:1 1 auto;padding:0 6px;text-align:right}
- .reader-heading .reader-title{font-size:14px;line-height:1.45;flex:none}
- .reader-chapter{display:block}
+ .reader-heading .reader-title{font-size:13.5px;line-height:1.35;flex:none}
+ .reader-chapter{display:block;font-size:10.5px;line-height:1.25}
  /* Page-nav row: taps, swipes and the seek bar cover it on phones; it stays in the DOM for screen readers and
     reappears if a keyboard user tabs into it. The chapter title moved to the toolbar. */
  .page-nav{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
@@ -789,12 +789,12 @@ body.dark .reader .icon-button:hover,body.dark .reader .secondary-button:hover{b
  .reader-bottom,.preview-banner{margin-left:calc(-1 * max(8px,env(safe-area-inset-left)));margin-right:calc(-1 * max(8px,env(safe-area-inset-right)))}
  .preview-banner{margin-top:6px;border-radius:0;border-width:0 0 1px}
  /* Bottom bar: full-width seek bar, one info line, star icon for the bookmark. */
- .reader-bottom{display:block;position:relative;height:auto;min-height:0;padding:2px max(12px,env(safe-area-inset-right)) env(safe-area-inset-bottom) max(12px,env(safe-area-inset-left));background:var(--paper);border-top:1px solid var(--line)}
+ .reader-bottom{display:block;position:relative;height:auto;min-height:0;padding:2px max(10px,env(safe-area-inset-right)) max(2px,env(safe-area-inset-bottom)) max(10px,env(safe-area-inset-left));background:var(--paper);border-top:1px solid var(--line)}
  .reader-bottom #timeLeft{display:none}
  .reader-seek{display:flex;flex-wrap:wrap;gap:0}
- .reader-seek input[type=range]{flex:1 1 100%;height:30px}
- .seek-info{flex:1 1 0;min-width:0;max-width:none;height:42px;line-height:42px;font-size:11.5px;padding-inline-end:50px}
- .reader-bottom #bookmarkButton{position:absolute;bottom:env(safe-area-inset-bottom);inset-inline-end:max(2px,env(safe-area-inset-left));width:44px;height:44px;padding:0;border:0;background:transparent;border-radius:12px}
+ .reader-seek input[type=range]{flex:1 1 100%;height:22px;margin:1px 0}
+ .seek-info{flex:1 1 0;min-width:0;max-width:none;height:26px;line-height:26px;font-size:11px;padding-inline-end:46px}
+ .reader-bottom #bookmarkButton{position:absolute;bottom:calc(max(2px,env(safe-area-inset-bottom)) + 2px);inset-inline-end:max(2px,env(safe-area-inset-left));width:44px;height:44px;padding:0;border:0;background:transparent;border-radius:12px}
  .reader-bottom #bookmarkButton .ico{width:23px;height:23px}
  .reader-bottom #bookmarkButton:active{background:var(--mint)}
  /* Floating bars and popups sit above the bottom bar, full width, with 40px+ targets. */

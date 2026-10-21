@@ -94,7 +94,7 @@
   window.addEventListener("online", () => flushErrors(false));
   if (errQueue.length) errTimer = setTimeout(() => { errTimer = null; flushErrors(false); }, 5000);
   const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100, theme: "light", align: "justify", librarySort: "added", libraryFilter: "all", dailyGoal: 20,
-    margin: "m", para: "m", flow: "paginated", spread: "auto", digits: false, taps: true, wheel: true, wake: true, ttsRate: 1, ttsVoice: "" };
+    margin: "m", para: "m", flow: "paginated", spread: "auto", digits: false, taps: true, wheel: true, wake: true, autoImmersive: false, ttsRate: 1, ttsVoice: "" };
   const READER_THEMES = { light: ["#fffdf7", "#252923"], sepia: ["#f4ecd8", "#5b4636"], dark: ["#1f2623", "#e6ece7"], black: ["#000000", "#d4d4d4"] };
   const darkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
   function effectiveTheme() {
@@ -160,7 +160,7 @@
     pressed("[data-spread]", "spread", readerPrefs.spread || "auto");
     syncBookDirUI();
     const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
-    chk("prefDigits", readerPrefs.digits); chk("prefTaps", readerPrefs.taps !== false); chk("prefWheel", readerPrefs.wheel !== false); chk("prefWake", readerPrefs.wake !== false);
+    chk("prefDigits", readerPrefs.digits); chk("prefTaps", readerPrefs.taps !== false); chk("prefWheel", readerPrefs.wheel !== false); chk("prefWake", readerPrefs.wake !== false); chk("prefAutoImmersive", !!readerPrefs.autoImmersive);
     // v8.8 PDF: dark/black themes invert the page images (optional), fit and zoom controls.
     reader.classList.toggle("pdf-invert", (theme === "dark" || theme === "black") && readerPrefs.pdfInvert !== false);
     pressed("[data-pdffit]", "pdffit", pdfFitMode());
@@ -1889,6 +1889,9 @@
     // The viewer changed size without a window resize, so re-paginate explicitly.
     requestAnimationFrame(() => { try { if (rendition) rendition.resize(); } catch (_) {} if (pdf) pdfRender(); });
   }
+  function checkAutoImmersive() {
+    if (readerPrefs.autoImmersive && readerOpen()) setImmersive(true);
+  }
   function handleReaderKey(e) {
     if (!readerOpen() || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey) return;
     const tag = (e.target && e.target.tagName) || "";
@@ -1948,6 +1951,7 @@
       if (pdf && pdfCanPanX()) return; // a zoomed PDF page is being panned, not turned
       // Finger moving right turns to the next page in an RTL book, like a Persian paper book.
       if (dx > 0) goLeft(); else goRight();
+      checkAutoImmersive();
     }
   }
   // Mouse wheel / trackpad turns pages in paginated mode. Deltas are summed (trackpads send dozens of tiny events)
@@ -1995,8 +1999,8 @@
     const edges = readerPrefs.taps !== false && (!!pdf || readerPrefs.flow !== "scrolled");
     const middle = () => { if (pdf) pdfMiddleTap(); else setImmersive(!$("reader").classList.contains("immersive")); };
     if (!edges) middle();
-    else if (ratio < EDGE_ZONE) goLeft();
-    else if (ratio > 1 - EDGE_ZONE) goRight();
+    else if (ratio < EDGE_ZONE) { goLeft(); checkAutoImmersive(); }
+    else if (ratio > 1 - EDGE_ZONE) { goRight(); checkAutoImmersive(); }
     else middle();
   }
   $("tocToggle").addEventListener("click", () => { if ($("reader").classList.contains("toc-open")) closeToc(true); else openToc(); });
@@ -2204,6 +2208,9 @@
   $("prefTaps").addEventListener("change", e => setPref("taps", e.target.checked));
   $("prefWheel").addEventListener("change", e => setPref("wheel", e.target.checked));
   $("prefWake").addEventListener("change", e => { setPref("wake", e.target.checked); updateWakeLock(); });
+  $("prefAutoImmersive").addEventListener("change", e => setPref("autoImmersive", e.target.checked));
+  const enterImm = $("enterImmersive");
+  if (enterImm) enterImm.addEventListener("click", () => { closeSettings(false); setImmersive(true); });
   if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener("change", () => { if (readerPrefs.theme === "auto") applyReaderStyles(); });
 
   // ---- Keep the screen on while reading ----
@@ -2655,8 +2662,8 @@
   }
   $("fontUp").addEventListener("click", () => setFontSize(fontSize + 10));
   $("fontDown").addEventListener("click", () => setFontSize(fontSize - 10));
-  $("prevPage").addEventListener("click", goBack);
-  $("nextPage").addEventListener("click", goForward);
+  $("prevPage").addEventListener("click", () => { goBack(); checkAutoImmersive(); });
+  $("nextPage").addEventListener("click", () => { goForward(); checkAutoImmersive(); });
   $("closeReader").addEventListener("click", closeReader);
   // ======================= Bookmarks, highlights, notes (v7.2) =======================
   const HL_COLORS = { yellow: "#ffe066", green: "#9be3b4", pink: "#f7a8c8" };
