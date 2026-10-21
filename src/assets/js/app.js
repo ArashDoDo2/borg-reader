@@ -2737,38 +2737,51 @@
     if (!navigator.onLine) throw new Error("اتصال به اینترنت برقرار نیست.");
 
     if (provider === "gemini") {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
       const fullPrompt = systemMsg ? `${systemMsg}\n\nمتن یا درخواست:\n${prompt}` : prompt;
-      let resp;
-      try {
-        resp = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: fullPrompt }] }],
-            generationConfig: { temperature: 0.3 }
-          })
-        });
-      } catch (e) {
-        const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
-        resp = await fetch(fallbackUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: fullPrompt }] }],
-            generationConfig: { temperature: 0.3 }
-          })
-        });
+      const requestBody = JSON.stringify({
+        contents: [{ parts: [{ text: fullPrompt }] }],
+        generationConfig: { temperature: 0.3 }
+      });
+      const models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"];
+      let lastResp = null;
+      let lastErr = null;
+
+      for (const model of models) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+          const resp = await fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-goog-api-key": apiKey
+            },
+            body: requestBody
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!text) throw new Error("پاسخی از هوش مصنوعی دریافت نشد.");
+            return text;
+          }
+          lastResp = resp;
+          if (resp.status !== 404) {
+            break;
+          }
+        } catch (e) {
+          lastErr = e;
+          if (e.message && !e.message.includes("fetch")) {
+            throw e;
+          }
+        }
       }
-      if (!resp.ok) {
-        if (resp.status === 400 || resp.status === 403) throw new Error("کلید نامعتبر است یا در Google AI Studio فعال نیست.");
-        if (resp.status === 429) throw new Error("محدودیت تعداد درخواست در دقیقه رخ داد؛ لطفاً چند لحظه صبر کنید.");
-        throw new Error(`خطای پاسخ Google Gemini (${resp.status})`);
+
+      if (lastResp) {
+        if (lastResp.status === 400 || lastResp.status === 403) throw new Error("کلید نامعتبر است یا در Google AI Studio فعال نیست.");
+        if (lastResp.status === 429) throw new Error("محدودیت تعداد درخواست در دقیقه رخ داد؛ لطفاً چند لحظه صبر کنید.");
+        if (lastResp.status === 404) throw new Error("مدل هوش مصنوعی در حساب شما یافت نشد (۴۰۴).");
+        throw new Error(`خطای پاسخ Google Gemini (${lastResp.status})`);
       }
-      const data = await resp.json();
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error("پاسخی از هوش مصنوعی دریافت نشد.");
-      return text;
+      throw lastErr || new Error("امکان برقراری ارتباط با سرویس هوش مصنوعی وجود ندارد.");
     } else {
       const url = "https://api.openai.com/v1/chat/completions";
       const messages = [];
