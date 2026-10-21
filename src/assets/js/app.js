@@ -94,8 +94,8 @@
   window.addEventListener("online", () => flushErrors(false));
   if (errQueue.length) errTimer = setTimeout(() => { errTimer = null; flushErrors(false); }, 5000);
   const defaultReaderPrefs = { font: "vazirmatn", lineHeight: "1.9", fontSize: 100, theme: "light", align: "justify", librarySort: "added", libraryFilter: "all", dailyGoal: 20,
-    margin: "m", para: "m", flow: "paginated", spread: "auto", digits: false, taps: true, wheel: true, wake: true, autoImmersive: false, ttsRate: 1, ttsVoice: "" };
-  const READER_THEMES = { light: ["#fffdf7", "#252923"], sepia: ["#f4ecd8", "#5b4636"], dark: ["#1f2623", "#e6ece7"], black: ["#000000", "#d4d4d4"] };
+    margin: "m", para: "m", flow: "paginated", spread: "auto", digits: false, taps: true, wheel: true, wake: true, autoImmersive: false, ttsRate: 1, ttsVoice: "", weight: "400", brightness: 100 };
+  const READER_THEMES = { light: ["#fffdf7", "#252923"], mint: ["#e9f0e8", "#1e3027"], sepia: ["#f4ecd8", "#5b4636"], amber: ["#231a12", "#e2cdb7"], dark: ["#1f2623", "#e6ece7"], black: ["#000000", "#d4d4d4"] };
   const darkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
   function effectiveTheme() {
     if (readerPrefs.theme === "auto") return darkQuery && darkQuery.matches ? "dark" : "light";
@@ -147,10 +147,23 @@
       default: return '"Vazirmatn", Tahoma, Arial, sans-serif';
     }
   }
+  function applyDimmer(val) {
+    const dimmer = document.getElementById("screenDimmer");
+    if (!dimmer) return;
+    const b = Math.min(100, Math.max(25, Number(val) || 100));
+    if (b >= 100) {
+      dimmer.style.opacity = "0";
+      dimmer.style.display = "none";
+    } else {
+      dimmer.style.display = "block";
+      const opacity = ((100 - b) / 75) * 0.65;
+      dimmer.style.opacity = opacity.toFixed(3);
+    }
+  }
   function syncSettingsUI() {
     const theme = effectiveTheme();
     const reader = document.getElementById("reader");
-    reader.classList.remove("theme-light", "theme-sepia", "theme-dark", "theme-black");
+    reader.classList.remove("theme-light", "theme-mint", "theme-sepia", "theme-amber", "theme-dark", "theme-black");
     reader.classList.add("theme-" + theme);
     document.querySelectorAll("[data-theme]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.theme === (readerPrefs.theme || "light"))));
     const pressed = (sel, attr, val) => document.querySelectorAll(sel).forEach(b => b.setAttribute("aria-pressed", String(b.dataset[attr] === val)));
@@ -158,11 +171,12 @@
     pressed("[data-para]", "para", readerPrefs.para || "m");
     pressed("[data-flow]", "flow", readerPrefs.flow || "paginated");
     pressed("[data-spread]", "spread", readerPrefs.spread || "auto");
+    pressed("[data-weight]", "weight", readerPrefs.weight || "400");
     syncBookDirUI();
     const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
     chk("prefDigits", readerPrefs.digits); chk("prefTaps", readerPrefs.taps !== false); chk("prefWheel", readerPrefs.wheel !== false); chk("prefWake", readerPrefs.wake !== false); chk("prefAutoImmersive", !!readerPrefs.autoImmersive);
     // v8.8 PDF: dark/black themes invert the page images (optional), fit and zoom controls.
-    reader.classList.toggle("pdf-invert", (theme === "dark" || theme === "black") && readerPrefs.pdfInvert !== false);
+    reader.classList.toggle("pdf-invert", (theme === "dark" || theme === "black" || theme === "amber") && readerPrefs.pdfInvert !== false);
     pressed("[data-pdffit]", "pdffit", pdfFitMode());
     chk("prefPdfInvert", readerPrefs.pdfInvert !== false);
     const zl = document.getElementById("pdfZoomLabel");
@@ -172,6 +186,12 @@
     document.querySelectorAll("[data-align]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.align === readerPrefs.align)));
     const label = document.getElementById("fontSizeLabel");
     if (label) label.textContent = `${fontSize.toLocaleString("fa-IR")}٪`;
+    const brightness = Math.min(100, Math.max(25, Number(readerPrefs.brightness) || 100));
+    const bInput = document.getElementById("readerBrightness");
+    if (bInput) bInput.value = brightness;
+    const bLabel = document.getElementById("readerBrightnessLabel");
+    if (bLabel) bLabel.textContent = `${brightness.toLocaleString("fa-IR")}٪`;
+    applyDimmer(brightness);
   }
   function applyReaderStyles() {
     syncSettingsUI();
@@ -180,13 +200,16 @@
     const paraGap = { s: "0 0 .35em", m: "0 0 1em", l: "0 0 1.7em" }[readerPrefs.para] || "0 0 1em";
     const lineHeight = readerPrefs.lineHeight || "1.9";
     const align = readerPrefs.align === "right" ? "start" : "justify"; // "start" = right in RTL books, left in LTR ones
+    const fontWeight = readerPrefs.weight || "400";
+    const isLightTone = effectiveTheme() === "light" || effectiveTheme() === "mint" || effectiveTheme() === "sepia";
+    const linkColor = isLightTone ? (effectiveTheme() === "mint" ? "#246e4c" : "#397a67") : (effectiveTheme() === "amber" ? "#e09d58" : "#8fd1b5");
     rendition.themes.default({
-      body: Object.assign({ "font-family": selectedFontStack(), "line-height": lineHeight, "color": ink, "background": background }, DEBUG.noDir ? {} : { "direction": bookDir }),
-      p: { "text-align": align, "margin": paraGap, "line-height": lineHeight },
+      body: Object.assign({ "font-family": selectedFontStack(), "font-weight": fontWeight, "line-height": lineHeight, "color": ink, "background": background }, DEBUG.noDir ? {} : { "direction": bookDir }),
+      p: { "text-align": align, "margin": paraGap, "line-height": lineHeight, "font-weight": fontWeight },
       img: { "cursor": "zoom-in" },
       "img.borg-blockimg": { "display": "block", "margin-left": "auto", "margin-right": "auto" },
       "h1,h2,h3,h4": { "line-height": "1.7", "margin": "0 0 1em" },
-      a: { "color": effectiveTheme() === "light" || effectiveTheme() === "sepia" ? "#397a67" : "#8fd1b5" }
+      a: { "color": linkColor }
     });
     rendition.themes.fontSize(`${fontSize}%`);
   }
@@ -1188,6 +1211,7 @@
     openToken++; hideOpening();
     bookDir = "rtl";
     updatePageNavDirection();
+    applyDimmer(100);
     $("reader").classList.remove("toc-open", "immersive", "book-ltr");
     closeSettings(false);
     closeSearch(false);
@@ -2655,6 +2679,18 @@
   });
   document.querySelectorAll("[data-theme]").forEach(b => b.addEventListener("click", () => { readerPrefs.theme = b.dataset.theme; saveReaderPrefs(); applyReaderStyles(); }));
   document.querySelectorAll("[data-align]").forEach(b => b.addEventListener("click", () => { readerPrefs.align = b.dataset.align; saveReaderPrefs(); applyReaderStyles(); }));
+  document.querySelectorAll("[data-weight]").forEach(b => b.addEventListener("click", () => { readerPrefs.weight = b.dataset.weight; saveReaderPrefs(); applyReaderStyles(); }));
+  const bSlider = $("readerBrightness");
+  if (bSlider) {
+    bSlider.addEventListener("input", e => {
+      const val = Number(e.target.value);
+      readerPrefs.brightness = val;
+      const bLabel = $("readerBrightnessLabel");
+      if (bLabel) bLabel.textContent = `${val.toLocaleString("fa-IR")}٪`;
+      applyDimmer(val);
+    });
+    bSlider.addEventListener("change", () => saveReaderPrefs());
+  }
   $("librarySort").value = readerPrefs.librarySort;
   $("librarySort").addEventListener("change", e => { readerPrefs.librarySort = e.target.value; saveReaderPrefs(); renderLibrary(); });
   $("themeToggle").addEventListener("click", () => {

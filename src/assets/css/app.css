@@ -167,7 +167,21 @@ body.dark .book-options:hover,body.dark .remove-book:hover{background:rgba(41,61
 .segmented button{border:0;background:var(--paper);color:var(--ink);padding:8px 12px;font-size:12px;min-height:38px}
 .segmented button+button{border-right:1px solid var(--line)}
 .segmented button[aria-pressed="true"]{background:var(--green2);color:#fff}
+.setting-row-stack{flex-direction:column;align-items:stretch;gap:6px}
+.setting-row-stack>span{align-self:flex-start}
+.theme-palette{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.theme-palette button{border:0;background:var(--paper);color:var(--ink);padding:7px 4px;font-size:11.5px;min-height:36px;text-align:center}
+.theme-palette button+button{border-right:1px solid var(--line)}
+.theme-palette button:nth-child(5){border-right:0}
+.theme-palette button:nth-child(n+5){border-top:1px solid var(--line)}
+.theme-palette button[data-theme="auto"]{grid-column:span 2}
+.dimmer-control{display:flex;align-items:center;gap:10px;flex:1;max-width:170px}
+.dimmer-control input[type="range"]{flex:1;height:6px;border-radius:4px;accent-color:var(--green2);cursor:pointer;background:var(--line)}
+.dimmer-control output{min-width:38px;text-align:left;font-weight:700;font-size:12px;color:var(--ink)}
+.screen-dimmer{position:absolute;inset:0;background:#000;pointer-events:none;z-index:28;opacity:0;transition:opacity .15s ease;display:none}
 .reader.theme-sepia{--reader-bg:#f4ecd8;--reader-ink:#5b4636}
+.reader.theme-amber{--reader-bg:#231a12;--reader-ink:#e2cdb7}
+.reader.theme-mint{--reader-bg:#e9f0e8;--reader-ink:#1e3027}
 .reader.theme-dark{--reader-bg:#1f2623;--reader-ink:#e6ece7}
 .sort-select{height:45px;border-radius:13px;max-width:150px}
 .continue-section{margin:0 0 30px}
@@ -748,10 +762,12 @@ body.dark .import-button,body.dark .import-button:hover{color:#132019}
 /* Reader themes also colour the chrome around the page (toolbar, bars, sheets, drawer) so a dark page is not framed in white. */
 .reader.theme-dark{color-scheme:dark;--bg:#171e1b;--paper:#1f2623;--ink:#e6ece7;--muted:#9fada5;--line:#33413a;--green:#b9d7c7;--green2:#9bc9ae;--mint:#29382f;--shadow:0 18px 45px #0004}
 .reader.theme-black{color-scheme:dark;--bg:#000;--paper:#0d0f0e;--ink:#d4d4d4;--muted:#8e9691;--line:#252b28;--green:#b9d7c7;--green2:#8fc2a6;--mint:#18231d;--shadow:none}
+.reader.theme-amber{color-scheme:dark;--bg:#1a130c;--paper:#231a12;--ink:#e2cdb7;--muted:#9e8a75;--line:#3a2c1f;--green:#d9a566;--green2:#b87d3b;--mint:#362618;--shadow:0 18px 45px #0006}
 body:not(.dark) .reader.theme-sepia{--bg:#eee4cd;--paper:#f8f0de;--ink:#4a3a2c;--muted:#8a7660;--line:#e0d0b0;--mint:#ece0c3;--green2:#3d6b55}
-body.dark .reader .segmented button[aria-pressed="true"],.reader.theme-dark .segmented button[aria-pressed="true"],.reader.theme-black .segmented button[aria-pressed="true"],
-body.dark #ttsToggle[aria-pressed="true"],.reader.theme-dark #ttsToggle[aria-pressed="true"],.reader.theme-black #ttsToggle[aria-pressed="true"]{color:#10201a}
-.reader.theme-dark .icon-button:hover,.reader.theme-dark .secondary-button:hover,.reader.theme-black .icon-button:hover,.reader.theme-black .secondary-button:hover,
+body:not(.dark) .reader.theme-mint{--bg:#dee7dd;--paper:#eef4ed;--ink:#1e3027;--muted:#617b6e;--line:#c8d8c7;--mint:#cde0cc;--green2:#2d7a5b}
+body.dark .reader .segmented button[aria-pressed="true"],.reader.theme-dark .segmented button[aria-pressed="true"],.reader.theme-black .segmented button[aria-pressed="true"],.reader.theme-amber .segmented button[aria-pressed="true"],
+body.dark #ttsToggle[aria-pressed="true"],.reader.theme-dark #ttsToggle[aria-pressed="true"],.reader.theme-black #ttsToggle[aria-pressed="true"],.reader.theme-amber #ttsToggle[aria-pressed="true"]{color:#10201a}
+.reader.theme-dark .icon-button:hover,.reader.theme-dark .secondary-button:hover,.reader.theme-black .icon-button:hover,.reader.theme-black .secondary-button:hover,.reader.theme-amber .icon-button:hover,.reader.theme-amber .secondary-button:hover,
 body.dark .reader .icon-button:hover,body.dark .reader .secondary-button:hover{background:var(--mint);border-color:var(--line)}
 /* Safe areas (viewport-fit=cover): nothing under the notch / home indicator / rounded corners in landscape. */
 .reader-toolbar{height:calc(70px + env(safe-area-inset-top));padding-top:env(safe-area-inset-top);padding-left:max(20px,env(safe-area-inset-left));padding-right:max(20px,env(safe-area-inset-right))}
@@ -896,9 +912,13 @@ body.dark .api-warn{color:#f0a58c}
 /* Themes: sepia tints the white paper; dark/black invert the page (optional, «وارونه شود»), the chrome follows the theme. */
 .reader.theme-sepia .pdf-page{background:#f4ecd8}
 .reader.theme-sepia .pdf-page canvas{mix-blend-mode:multiply}
+.reader.theme-mint .pdf-page{background:#e9f0e8}
+.reader.theme-mint .pdf-page canvas{mix-blend-mode:multiply}
 .reader.pdf-invert .pdf-page{background:#000}
 .reader.pdf-invert .pdf-page canvas{filter:invert(1) hue-rotate(180deg)}
-.reader.theme-dark .pdf-page,.reader.theme-black .pdf-page{box-shadow:0 1px 6px rgba(0,0,0,.6)}
+.reader.theme-amber.pdf-invert .pdf-page{background:#231a12}
+.reader.theme-amber.pdf-invert .pdf-page canvas{filter:invert(1) sepia(0.65) hue-rotate(-20deg)}
+.reader.theme-dark .pdf-page,.reader.theme-black .pdf-page,.reader.theme-amber .pdf-page{box-shadow:0 1px 6px rgba(0,0,0,.6)}
 /* pdf.js text layer (from pdfjs-dist 4.10.38 web/pdf_viewer.css, Apache-2.0): invisible text over the canvas for selection. */
 .textLayer{position:absolute;text-align:initial;inset:0;overflow:clip;opacity:1;line-height:1;-webkit-text-size-adjust:none;text-size-adjust:none;forced-color-adjust:none;transform-origin:0 0;caret-color:CanvasText;z-index:0}
 .textLayer :is(span,br){color:transparent;position:absolute;white-space:pre;cursor:text;transform-origin:0% 0%}

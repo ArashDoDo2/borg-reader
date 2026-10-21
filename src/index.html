@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.10.5">
+  <meta name="app-version" content="8.11.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -367,14 +367,23 @@
         <div class="setting-row" data-epub-only><span>تراز متن</span>
           <div class="segmented" role="group" aria-label="تراز متن"><button type="button" data-align="justify">دوطرفه</button><button type="button" data-align="right">راست‌چین</button></div>
         </div>
+        <div class="setting-row" data-epub-only><span>ضخامت قلم</span>
+          <div class="segmented" role="group" aria-label="ضخامت قلم"><button type="button" data-weight="400">معمولی</button><button type="button" data-weight="550">متوسط</button><button type="button" data-weight="700">توپر</button></div>
+        </div>
         <div class="setting-row" data-pdf-only><span>بزرگ‌نمایی</span>
           <div class="stepper"><button id="pdfZoomOut" class="icon-button" type="button" aria-label="کوچک کردن صفحه">−</button><output id="pdfZoomLabel" aria-live="polite">۱۰۰٪</output><button id="pdfZoomIn" class="icon-button" type="button" aria-label="بزرگ کردن صفحه">+</button></div>
         </div>
         <div class="setting-row" data-pdf-only><span>جای‌گیری صفحه</span>
           <div class="segmented" role="group" aria-label="جای‌گیری صفحهٔ PDF"><button type="button" data-pdffit="page">اندازهٔ صفحه</button><button type="button" data-pdffit="width">عرض صفحه</button></div>
         </div>
-        <div class="setting-row"><span>رنگ صفحه</span>
-          <div class="segmented" role="group" aria-label="رنگ صفحه"><button type="button" data-theme="light">روشن</button><button type="button" data-theme="sepia">کرم</button><button type="button" data-theme="dark">تیره</button><button type="button" data-theme="black">مشکی</button><button type="button" data-theme="auto">خودکار</button></div>
+        <div class="setting-row setting-row-stack"><span>رنگ صفحه</span>
+          <div class="segmented theme-palette" role="group" aria-label="رنگ صفحه"><button type="button" data-theme="light">روشن</button><button type="button" data-theme="mint">نعنایی</button><button type="button" data-theme="sepia">کرم</button><button type="button" data-theme="amber">کهربایی</button><button type="button" data-theme="dark">تیره</button><button type="button" data-theme="black">مشکی</button><button type="button" data-theme="auto">خودکار</button></div>
+        </div>
+        <div class="setting-row"><span>روشنایی صفحه</span>
+          <div class="dimmer-control">
+            <input id="readerBrightness" type="range" min="25" max="100" value="100" step="5" aria-label="روشنایی صفحه">
+            <output id="readerBrightnessLabel" aria-live="polite">۱۰۰٪</output>
+          </div>
         </div>
         <div class="setting-row" data-epub-only><span>حاشیه</span>
           <div class="segmented" role="group" aria-label="حاشیه"><button type="button" data-margin="s">کم</button><button type="button" data-margin="m">معمولی</button><button type="button" data-margin="l">زیاد</button></div>
@@ -392,7 +401,7 @@
           <div class="segmented" role="group" aria-label="جهت خواندن این کتاب"><button type="button" data-bookdir="auto">خودکار</button><button type="button" data-bookdir="rtl">راست‌به‌چپ</button><button type="button" data-bookdir="ltr">چپ‌به‌راست</button></div>
         </div>
         <label class="setting-check" data-epub-only><input id="prefDigits" type="checkbox"> اعداد متن به فارسی نمایش داده شوند</label>
-        <label class="setting-check" data-pdf-only><input id="prefPdfInvert" type="checkbox"> در رنگ تیره و مشکی، رنگ صفحه‌های PDF وارونه شود</label>
+        <label class="setting-check" data-pdf-only><input id="prefPdfInvert" type="checkbox"> در رنگ تیره، کهربایی و مشکی، رنگ صفحه‌های PDF وارونه شود</label>
         <label class="setting-check"><input id="prefTaps" type="checkbox"> ورق زدن با لمس لبه‌های صفحه</label>
         <label class="setting-check"><input id="prefWheel" type="checkbox"> ورق زدن با چرخ موس</label>
         <label class="setting-check"><input id="prefWake" type="checkbox"> صفحه هنگام خواندن خاموش نشود</label>
@@ -401,6 +410,7 @@
         <button id="showGuide" class="text-button show-guide" type="button">نمایش راهنمای ورق زدن</button>
       </div>
     </div>
+    <div id="screenDimmer" class="screen-dimmer" aria-hidden="true"></div>
     <div class="reader-layout">
       <div id="tocBackdrop" class="toc-backdrop" aria-hidden="true"></div>
       <aside id="tocPanel" class="toc-panel" aria-label="فهرست کتاب" tabindex="-1">
@@ -618,7 +628,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۱۰.۵</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۱۱.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>
