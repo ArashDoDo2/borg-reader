@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-21, version **8.10.4** (live at https://parsun.com/borg/).
+Last updated: 2026-10-21, version **8.10.5** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -59,6 +59,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.10.2 | Fix iPhone/Safari SVG icon sizing & solid black fill glitch: base `.ico` vector rules, explicit SVG width/height and presentation stroke attributes across all landing & action icons |
 | 8.10.3 | 1,000+ books catalog UX: curated horizontal showcase shelf («تازه‌ها و برگزیده‌ها») for browsing without filter, and instant-filter quick category pill bar |
 | 8.10.4 | Mobile/iPhone reading experience optimization: streamlined compact reader bottom bar (-24px vertical height), direct fullscreen button and auto-immersive option («پنهان کردن خودکار نوارها هنگام ورق زدن») in Aa settings panel |
+| 8.10.5 | Sync page-nav direction and button labels/arrows with book reading direction: in English (LTR) books, «← قبلی» is on the left and «بعدی →» on the right, matching edge margin taps |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);

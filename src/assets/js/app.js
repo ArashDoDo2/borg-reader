@@ -1026,6 +1026,7 @@
     bookDir = await resolveBookDir(record, () => detectBookDirection(bookInstance));
     if (token !== openToken) return;
     $("bookSeek").dir = bookIsRtl() ? "rtl" : "ltr"; // RTL books fill the seek bar from the right
+    updatePageNavDirection();
     patchTextWidth(DEBUG.tw || "rects"); // Safari/iPad fix: stock measurement inflates RTL column width to ~500k px → blank page
     rendition = bookInstance.renderTo("viewer", {
       width: "100%", height: "100%", flow: readerPrefs.flow === "scrolled" ? "scrolled-doc" : "paginated",
@@ -1185,7 +1186,9 @@
       } catch (_) {}
     }
     openToken++; hideOpening();
-    $("reader").classList.remove("toc-open", "immersive");
+    bookDir = "rtl";
+    updatePageNavDirection();
+    $("reader").classList.remove("toc-open", "immersive", "book-ltr");
     closeSettings(false);
     closeSearch(false);
     clearJumps(); closeGuide(false);
@@ -1767,6 +1770,7 @@
     bookDir = await resolveBookDir(record, () => detectPdfDirection(st));
     if (token !== openToken || pdf !== st) return;
     $("bookSeek").dir = bookIsRtl() ? "rtl" : "ltr";
+    updatePageNavDirection();
     $("bookSeek").disabled = st.pages < 2;
     syncSettingsUI();
     lastTurnAt = 0; markActivity(); updateWakeLock();
@@ -1839,6 +1843,21 @@
     } catch (_) {}
   }
   function bookIsRtl() { return bookDir === "rtl"; }
+  function updatePageNavDirection() {
+    const rtl = bookIsRtl();
+    $("reader").classList.toggle("book-ltr", !rtl);
+    const nav = document.querySelector(".page-nav");
+    if (nav) nav.dir = rtl ? "rtl" : "ltr";
+    const prev = $("prevPage"), next = $("nextPage");
+    if (prev) {
+      prev.textContent = rtl ? "→ قبلی" : "← قبلی";
+      prev.setAttribute("aria-label", rtl ? "صفحهٔ قبل (کلید راست)" : "صفحهٔ قبل (کلید چپ)");
+    }
+    if (next) {
+      next.textContent = rtl ? "بعدی ←" : "بعدی →";
+      next.setAttribute("aria-label", rtl ? "صفحهٔ بعد (کلید چپ)" : "صفحهٔ بعد (کلید راست)");
+    }
+  }
   // A book's declared page-progression-direction wins. Otherwise look at the actual text of the first chapters:
   // the language tag is unreliable (Persian books tagged "en" exist). Image-only books fall back to the tag, then RTL.
   const DIR_DETECT_V = 1; // bump when detectBookDirection() changes, so cached directions are re-detected
@@ -2177,6 +2196,7 @@
   function syncBookDirUI() {
     const v = (currentBook && currentBook.dirOverride) || "auto";
     document.querySelectorAll("[data-bookdir]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.bookdir === v)));
+    updatePageNavDirection();
   }
   function setBookDir(value) {
     if (!currentBook || (!rendition && !pdf)) return;

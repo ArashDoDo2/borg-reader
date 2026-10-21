@@ -776,6 +776,7 @@ body.dark .reader .icon-button:hover,body.dark .reader .secondary-button:hover{b
  .close-reader-label,.bookmark-label{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
  .reader-tools{gap:0;flex-shrink:0}
  .reader-heading{flex:1 1 auto;padding:0 6px;text-align:right}
+ .reader.book-ltr .reader-heading{text-align:left}
  .reader-heading .reader-title{font-size:13.5px;line-height:1.35;flex:none}
  .reader-chapter{display:block;font-size:10.5px;line-height:1.25}
  /* Page-nav row: taps, swipes and the seek bar cover it on phones; it stays in the DOM for screen readers and
