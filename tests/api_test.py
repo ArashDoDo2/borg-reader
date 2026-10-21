@@ -1725,6 +1725,7 @@ def run(base, tmp):
     run_errors(base, admin, user)
     run_api_books(base, tmp, admin, user)
     run_pdfs(base, tmp, admin, user)
+    run_admin_import_url(base, admin, user)
     run_migration7()
     run_migration9()
     run_large_catalog()
@@ -1734,6 +1735,29 @@ def run(base, tmp):
     check("unknown route 404", st == 404)
     st, r = anon.call("GET", "login")
     check("wrong method 405", st == 405)
+
+def run_admin_import_url(base, admin, user):
+    anon = Client(base)
+    st, r = anon.call("POST", "admin-import-url", {"url": "https://example.com/book.epub"})
+    check("admin-import-url anonymous -> 401", st == 401)
+
+    st, r = user.call("POST", "admin-import-url", {"url": "https://example.com/book.epub"})
+    check("admin-import-url non-admin -> 403", st == 403)
+
+    st, r = admin.call("POST", "admin-import-url", {"url": ""})
+    check("admin-import-url empty url -> 400", st == 400 and r.get("error") == "missing_url")
+
+    st, r = admin.call("POST", "admin-import-url", {"url": "ftp://example.com/book.epub"})
+    check("admin-import-url invalid scheme -> 400", st == 400 and r.get("error") == "invalid_scheme")
+
+    st, r = admin.call("POST", "admin-import-url", {"url": "http://127.0.0.1/book.epub"})
+    check("admin-import-url SSRF loopback rejected -> 400", st == 400 and r.get("error") == "forbidden_host")
+
+    st, r = admin.call("POST", "admin-import-url", {"url": "http://localhost/book.epub"})
+    check("admin-import-url SSRF localhost rejected -> 400", st == 400 and r.get("error") == "forbidden_host")
+
+    st, r = admin.call("POST", "admin-import-url", {"url": "http://169.254.169.254/latest/meta-data"})
+    check("admin-import-url SSRF metadata ip rejected -> 400", st == 400 and r.get("error") == "forbidden_host")
 
 def main():
     gh = os.environ.get("GITHUB_ACTIONS")

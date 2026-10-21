@@ -231,6 +231,7 @@
           <div id="adminStats" class="admin-stats"></div>
           <div class="admin-block"><h3>میان‌برها</h3>
             <div id="adminShortcuts" class="adm-shortcuts">
+              <button type="button" class="secondary-button" id="admShortcutImportUrl">دریافت کتاب از لینک (URL)</button>
               <button type="button" class="secondary-button" data-adm-go="queue">بررسی صف تأیید <span class="adm-badge" data-sc="pending" hidden></span></button>
               <button type="button" class="secondary-button" data-adm-go="books" data-adm-filter="category=__none__">کتاب‌های بدون دسته</button>
               <button type="button" class="secondary-button" data-adm-go="books" data-adm-filter="no_cover=1">کتاب‌های بدون جلد</button>
@@ -252,6 +253,7 @@
         <section id="admPanel-books" class="adm-panel" role="tabpanel" aria-labelledby="admTab-books" data-admin-panel="books" hidden>
           <div class="adm-toolbar">
             <div class="search-box adm-search" role="search"><span aria-hidden="true">⌕</span><input id="admBookSearch" type="search" placeholder="جستجو در عنوان، نویسنده، ناشر…" autocomplete="off" aria-label="جستجو در کتاب‌های سرور" enterkeyhint="search"></div>
+            <button id="admImportUrlOpen" class="secondary-button adm-import-url-open" type="button"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg> دریافت با لینک</button>
             <button id="admFiltersOpen" class="secondary-button adm-filters-open" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="admFilters">فیلترها <span id="admFilterCount" class="adm-badge" hidden></span></button>
           </div>
           <div id="admFiltersBackdrop" class="adm-backdrop" hidden></div>
@@ -670,6 +672,58 @@
       <button id="submitOk" class="primary-button" type="submit">ارسال برای کتابخانهٔ عمومی</button>
     </form>
   </dialog>
+  <dialog id="admImportUrlDialog" class="account-dialog adm-url-dialog" aria-labelledby="admImportUrlTitle">
+    <button id="admImportUrlClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <h2 id="admImportUrlTitle">دریافت و افزودن کتاب از لینک</h2>
+    <p class="muted small">نشانی مستقیم فایل EPUB یا PDF را وارد کنید تا سرور خودکار آن را دریافت کرده و به کتابخانه اضافه کند.</p>
+    <form id="admImportUrlForm" class="auth-form" novalidate>
+      <label>
+        <span>نشانی مستقیم کتاب (لینک فایل EPUB یا PDF)</span>
+        <input id="admImportUrlInput" name="url" type="url" dir="ltr" required placeholder="https://example.com/book.epub" autocomplete="off" spellcheck="false">
+      </label>
+      <label>
+        <span>عنوان اختیاری (پیش‌فرض: خودکار از فایل)</span>
+        <input id="admImportUrlTitleInput" name="title" maxlength="500" placeholder="مثلاً: آموزش جامع گیت" autocomplete="off" dir="auto">
+      </label>
+      <label>
+        <span>نویسنده اختیاری</span>
+        <input id="admImportUrlAuthorInput" name="author" maxlength="300" placeholder="مثلاً: اسکات چاکن" autocomplete="off" dir="auto">
+      </label>
+      <label>
+        <span>توضیح یا معرفی کوتاه (اختیاری)</span>
+        <textarea id="admImportUrlDesc" name="description" maxlength="2000" rows="2" dir="auto" placeholder="توضیح کوتاه دربارهٔ کتاب…"></textarea>
+      </label>
+      <div class="cp-field">
+        <span class="cp-label">دسته‌ها (اختیاری، حداکثر ۱۰)</span>
+        <div id="admImportUrlCats"></div>
+      </div>
+      <label class="adm-field">
+        <span>وضعیت در کتابخانهٔ عمومی</span>
+        <select id="admImportUrlStatus" class="admin-input">
+          <option value="approved" selected>تأییدشده و عمومی (توصیه می‌شود)</option>
+          <option value="pending">در انتظار بررسی</option>
+          <option value="none">فقط ذخیره در سرور (غیرعمومی)</option>
+        </select>
+      </label>
+      <label class="admin-toggle">
+        <input id="admImportUrlAddUser" type="checkbox" checked>
+        افزودن به کتابخانهٔ شخصی من
+      </label>
+      <label class="admin-toggle">
+        <input id="admImportUrlClean" type="checkbox" checked>
+        اعمال قوانین پاک‌سازی متن (تبلیغات، امضاها، فاصله‌ها)
+      </label>
+      <p id="admImportUrlError" class="form-error" role="alert" hidden></p>
+      <div id="admImportUrlProgress" class="adm-url-progress" role="status" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span id="admImportUrlProgressText">در حال دریافت و پردازش کتاب روی سرور… لطفاً شکیبا باشید.</span>
+      </div>
+      <div class="adm-url-actions">
+        <button id="admImportUrlSubmit" class="primary-button" type="submit">دانلود و افزودن</button>
+        <button id="admImportUrlCancel" class="secondary-button" type="button">انصراف</button>
+      </div>
+    </form>
+  </dialog>
   <dialog id="aiGuideDialog" class="account-dialog ai-guide-dialog" aria-labelledby="aiGuideTitle">
     <button id="aiGuideClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
     <h2 id="aiGuideTitle">✨ دستیار هوش مصنوعی با کلید اختصاصی</h2>
@@ -715,7 +769,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۱۲.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۱۳.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

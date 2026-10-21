@@ -5206,6 +5206,102 @@
   $("admCatClose").addEventListener("click", () => $("admCatDialog").close());
   $("admCatDialog").addEventListener("close", () => { if (admCatResolve) { const r = admCatResolve; admCatResolve = null; r(null); } });
 
+  // ---------- Admin: Import book directly from URL (v8.13.0) ----------
+  let admImportCatsPicker = null;
+  function getAdmImportCatsPicker() {
+    if (!admImportCatsPicker && $("admImportUrlCats")) {
+      admImportCatsPicker = makeCatPicker($("admImportUrlCats"), { label: "دسته‌های کتاب" });
+    }
+    return admImportCatsPicker;
+  }
+  function openAdmImportUrlDialog() {
+    loadCategories();
+    $("admImportUrlInput").value = "";
+    $("admImportUrlTitleInput").value = "";
+    $("admImportUrlAuthorInput").value = "";
+    $("admImportUrlDesc").value = "";
+    const cp = getAdmImportCatsPicker();
+    if (cp) cp.set([]);
+    $("admImportUrlStatus").value = "approved";
+    $("admImportUrlAddUser").checked = true;
+    $("admImportUrlClean").checked = true;
+    $("admImportUrlError").hidden = true;
+    $("admImportUrlError").textContent = "";
+    $("admImportUrlProgress").hidden = true;
+    $("admImportUrlSubmit").disabled = false;
+    $("admImportUrlDialog").showModal();
+    $("admImportUrlInput").focus();
+  }
+  function closeAdmImportUrlDialog() {
+    $("admImportUrlDialog").close();
+  }
+  $("admImportUrlOpen")?.addEventListener("click", openAdmImportUrlDialog);
+  $("admShortcutImportUrl")?.addEventListener("click", openAdmImportUrlDialog);
+  $("admImportUrlClose")?.addEventListener("click", closeAdmImportUrlDialog);
+  $("admImportUrlCancel")?.addEventListener("click", closeAdmImportUrlDialog);
+
+  $("admImportUrlForm")?.addEventListener("submit", async e => {
+    e.preventDefault();
+    const url = $("admImportUrlInput").value.trim();
+    if (!url) {
+      $("admImportUrlError").textContent = "لطفاً نشانی اینترنتی کتاب را وارد کنید.";
+      $("admImportUrlError").hidden = false;
+      $("admImportUrlInput").focus();
+      return;
+    }
+    if (!/^https?:\/\//i.test(url)) {
+      $("admImportUrlError").textContent = "نشانی باید با http:// یا https:// شروع شود.";
+      $("admImportUrlError").hidden = false;
+      $("admImportUrlInput").focus();
+      return;
+    }
+    $("admImportUrlError").hidden = true;
+    $("admImportUrlProgress").hidden = false;
+    $("admImportUrlSubmit").disabled = true;
+
+    const title = $("admImportUrlTitleInput").value.trim();
+    const author = $("admImportUrlAuthorInput").value.trim();
+    const description = $("admImportUrlDesc").value.trim();
+    const cp = getAdmImportCatsPicker();
+    const categories = cp ? cp.get() : [];
+    const status = $("admImportUrlStatus").value;
+    const add_to_library = $("admImportUrlAddUser").checked;
+    const clean = $("admImportUrlClean").checked;
+
+    try {
+      const res = await api("admin-import-url", {
+        method: "POST",
+        body: {
+          url,
+          title: title || undefined,
+          author: author || undefined,
+          description: description || undefined,
+          categories: categories.length ? categories : undefined,
+          status,
+          add_to_library,
+          clean,
+        },
+      });
+
+      closeAdmImportUrlDialog();
+      const bookTitle = res.book?.title || "کتاب";
+      showToast(res.duplicate ? `کتاب «${bookTitle}» قبلاً در سرور موجود بود و به‌روزرسانی شد.` : `کتاب «${bookTitle}» با موفقیت دریافت و اضافه شد.`);
+      catalogLoaded = false;
+      loadAdminStats();
+      if (adm.tab === "books") {
+        await loadAdminBooks();
+      } else if (add_to_library) {
+        renderLibrary();
+      }
+    } catch (err) {
+      $("admImportUrlError").textContent = apiMessage(err);
+      $("admImportUrlError").hidden = false;
+    } finally {
+      $("admImportUrlProgress").hidden = true;
+      $("admImportUrlSubmit").disabled = false;
+    }
+  });
+
   // ---- Book details: side panel (desktop) / bottom sheet (phones) ----
   function admFindBook(id) { return adm.books.find(x => x.id === id) || adm.queue.list.find(x => x.id === id) || null; }
   function admOpenDetail(id) {

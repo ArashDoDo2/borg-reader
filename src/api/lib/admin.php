@@ -416,6 +416,219 @@ function cap_client_errors(): void {
     if ($edge) q('DELETE FROM client_errors WHERE last_seen < ? OR (last_seen = ? AND id <= ?)', [$edge['last_seen'], $edge['last_seen'], $edge['id']]);
 }
 
+// ---------- Admin: import book directly from URL (EPUB / PDF) ----------
+function validate_safe_download_url(string $url): string {
+    $parts = parse_url($url);
+    if (!$parts || empty($parts['host'])) fail(400, 'invalid_url', 'نشانی واردشده نامعتبر است.');
+    $scheme = strtolower($parts['scheme'] ?? '');
+    if ($scheme !== 'http' && $scheme !== 'https') fail(400, 'invalid_scheme', 'فقط پیوندهای http و https پشتیبانی می‌شوند.');
+    if (isset($parts['port']) && !in_array((int)$parts['port'], [80, 443, 8080, 8443], true)) {
+        fail(400, 'forbidden_port', 'پورت مشخص‌شده مجاز نیست.');
+    }
+    $host = strtolower($parts['host']);
+    if ($host === 'localhost' || str_ends_with($host, '.localhost') || str_ends_with($host, '.local') || str_ends_with($host, '.internal')) {
+        fail(400, 'forbidden_host', 'دانلود از شبکه داخلی مجاز نیست.');
+    }
+    $ips = [];
+    if (filter_var($host, FILTER_VALIDATE_IP)) {
+        $ips[] = $host;
+    } else {
+        $records = @dns_get_record($host, DNS_A);
+        if ($records) {
+            foreach ($records as $r) {
+                if (!empty($r['ip'])) $ips[] = $r['ip'];
+            }
+        }
+        if (!$ips) {
+            $ip = @gethostbyname($host);
+            if ($ip && $ip !== $host) $ips[] = $ip;
+        }
+    }
+    if (!$ips) fail(400, 'resolve_failed', 'آدرس سرور یافت نشد یا دامنه در دسترس نیست.');
+    foreach ($ips as $ip) {
+        if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            fail(400, 'forbidden_host', 'دانلود از آدرس‌های شبکه داخلی یا نامعتبر مجاز نیست.');
+        }
+        if ($ip === '127.0.0.1' || $ip === '0.0.0.0' || str_starts_with($ip, '127.') || str_starts_with($ip, '169.254.')) {
+            fail(400, 'forbidden_host', 'دانلود از این نشانی مجاز نیست.');
+        }
+    }
+    return $url;
+}
+
+function download_book_from_url(string $url, string $destPath, int $maxBytes, int $timeout = 45): array {
+    $curUrl = validate_safe_download_url($url);
+    $redirects = 0;
+    $maxRedirects = 5;
+    $finalUrl = $curUrl;
+
+    if (extension_loaded('curl')) {
+        while ($redirects <= $maxRedirects) {
+            $fp = @fopen($destPath, 'wb');
+            if (!$fp) fail(500, 'storage', 'امکان ذخیره فایل موقت در سرور وجود ندارد.');
+
+            $ch = curl_init($curUrl);
+            curl_setopt_array($ch, [
+                CURLOPT_FILE => $fp,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_TIMEOUT => $timeout,
+                CURLOPT_CONNECTTIMEOUT => 15,
+                CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 BorgReader/8.13',
+                CURLOPT_HTTPHEADER => ['Accept: application/epub+zip, application/octet-stream, */*'],
+                CURLOPT_SSL_VERIFYPEER => true,
+                CURLOPT_SSL_VERIFYHOST => 2,
+                CURLOPT_NOPROGRESS => false,
+                CURLOPT_PROGRESSFUNCTION => function ($resource, $downloadSize, $downloaded) use ($maxBytes) {
+                    return ($downloaded > $maxBytes) ? 1 : 0;
+                },
+            ]);
+
+            $ok = curl_exec($ch);
+            $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlErr = curl_errno($ch);
+            $curlMsg = curl_error($ch);
+            fclose($fp);
+
+            if ($curlErr === CURLE_ABORTED_BY_CALLBACK) {
+                curl_close($ch);
+                @unlink($destPath);
+                fail(413, 'too_large', 'حجم فایل بیشتر از سقف مجاز سرور است (بیش از ' . round($maxBytes / 1048576) . ' مگابایت).');
+            }
+
+            if ($curlErr !== 0) {
+                curl_close($ch);
+                @unlink($destPath);
+                if ($curlErr === CURLE_OPERATION_TIMEDOUT) {
+                    fail(504, 'download_timeout', 'زمان دریافت فایل به پایان رسید (سرور مبدا پاسخ نداد).');
+                }
+                fail(502, 'download_failed', 'خطا در برقراری ارتباط با سرور فایل: ' . $curlMsg);
+            }
+
+            if ($httpCode >= 301 && $httpCode <= 308) {
+                $redirectUrl = (string)curl_getinfo($ch, CURLINFO_REDIRECT_URL);
+                curl_close($ch);
+                @unlink($destPath);
+                if ($redirectUrl === '') fail(502, 'bad_redirect', 'تغییر مسیر نامعتبر از سرور مبدا.');
+                if (!preg_match('#^https?://#i', $redirectUrl)) {
+                    $p = parse_url($curUrl);
+                    $base = $p['scheme'] . '://' . $p['host'] . (isset($p['port']) ? ':' . $p['port'] : '');
+                    if (str_starts_with($redirectUrl, '/')) {
+                        $redirectUrl = $base . $redirectUrl;
+                    } else {
+                        $dir = dirname($p['path'] ?? '/');
+                        $redirectUrl = $base . ($dir === '/' ? '' : $dir) . '/' . $redirectUrl;
+                    }
+                }
+                $curUrl = validate_safe_download_url($redirectUrl);
+                $finalUrl = $curUrl;
+                $redirects++;
+                continue;
+            }
+
+            curl_close($ch);
+
+            if ($httpCode < 200 || $httpCode >= 300) {
+                @unlink($destPath);
+                fail(502, 'http_error', 'سرور مبدا کد وضعیت خطای ' . $httpCode . ' برگرداند.');
+            }
+
+            $size = (int)filesize($destPath);
+            if ($size <= 0) {
+                @unlink($destPath);
+                fail(400, 'empty_file', 'فایل دریافت‌شده خالی است.');
+            }
+            if ($size > $maxBytes) {
+                @unlink($destPath);
+                fail(413, 'too_large', 'حجم فایل بیشتر از سقف مجاز سرور است.');
+            }
+
+            return ['size' => $size, 'final_url' => $finalUrl];
+        }
+        @unlink($destPath);
+        fail(502, 'too_many_redirects', 'تعداد هدایت‌های تغییر مسیر بیش از ۵ بار است.');
+    } else {
+        // Stream fallback
+        while ($redirects <= $maxRedirects) {
+            $ctx = stream_context_create([
+                'http' => [
+                    'method' => 'GET',
+                    'timeout' => $timeout,
+                    'follow_location' => 0,
+                    'user_agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 BorgReader/8.13',
+                    'header' => "Accept: application/epub+zip, application/octet-stream, */*\r\n",
+                    'ignore_errors' => true,
+                ],
+                'ssl' => [
+                    'verify_peer' => true,
+                    'verify_peer_name' => true,
+                ],
+            ]);
+
+            $in = @fopen($curUrl, 'rb', false, $ctx);
+            if (!$in) fail(502, 'download_failed', 'اتصال به سرور فایل برقرار نشد.');
+
+            $headers = $http_response_header ?? [];
+            $statusLine = $headers[0] ?? '';
+            preg_match('#HTTP/\S+\s+(\d+)#', $statusLine, $sm);
+            $httpCode = isset($sm[1]) ? (int)$sm[1] : 200;
+
+            if ($httpCode >= 301 && $httpCode <= 308) {
+                $location = '';
+                foreach ($headers as $h) {
+                    if (stripos($h, 'Location:') === 0) {
+                        $location = trim(substr($h, 9));
+                        break;
+                    }
+                }
+                fclose($in);
+                if ($location === '') fail(502, 'bad_redirect', 'تغییر مسیر نامعتبر از سرور مبدا.');
+                if (!preg_match('#^https?://#i', $location)) {
+                    $p = parse_url($curUrl);
+                    $base = $p['scheme'] . '://' . $p['host'] . (isset($p['port']) ? ':' . $p['port'] : '');
+                    if (str_starts_with($location, '/')) {
+                        $location = $base . $location;
+                    } else {
+                        $dir = dirname($p['path'] ?? '/');
+                        $location = $base . ($dir === '/' ? '' : $dir) . '/' . $location;
+                    }
+                }
+                $curUrl = validate_safe_download_url($location);
+                $finalUrl = $curUrl;
+                $redirects++;
+                continue;
+            }
+
+            if ($httpCode < 200 || $httpCode >= 300) {
+                fclose($in);
+                fail(502, 'http_error', 'سرور مبدا کد وضعیت خطای ' . $httpCode . ' برگرداند.');
+            }
+
+            $out = @fopen($destPath, 'wb');
+            if (!$out) { fclose($in); fail(500, 'storage', 'امکان ذخیره فایل موقت در سرور وجود ندارد.'); }
+
+            $bytes = 0;
+            while (!feof($in)) {
+                $chunk = fread($in, 65536);
+                if ($chunk === false) break;
+                $bytes += strlen($chunk);
+                if ($bytes > $maxBytes) {
+                    fclose($in); fclose($out); @unlink($destPath);
+                    fail(413, 'too_large', 'حجم فایل بیشتر از سقف مجاز سرور است.');
+                }
+                fwrite($out, $chunk);
+            }
+            fclose($in);
+            fclose($out);
+
+            $size = (int)filesize($destPath);
+            if ($size <= 0) { @unlink($destPath); fail(400, 'empty_file', 'فایل دریافت‌شده خالی است.'); }
+            return ['size' => $size, 'final_url' => $finalUrl];
+        }
+        @unlink($destPath);
+        fail(502, 'too_many_redirects', 'تعداد هدایت‌های تغییر مسیر بیش از ۵ بار است.');
+    }
+}
+
 function handle_admin_route(string $route): bool {
     global $method;
     switch ($route) {
@@ -627,6 +840,121 @@ function handle_admin_route(string $route): bool {
             require_admin(true);
             delete_book_everywhere(int_param(body_json()['book_id'] ?? ''));
             json_out(200, ['ok' => true]);
+
+        case 'admin-import-url':
+            method('POST');
+            $s = require_admin(true);
+            $d = body_json();
+            $url = trim(str_param($d, 'url', 2048));
+            if ($url === '') fail(400, 'missing_url', 'نشانی اینترنتی کتاب الزامی است.');
+
+            $userTitle = opt_str_param($d, 'title', 500);
+            $userAuthor = opt_str_param($d, 'author', 300);
+            $desc = opt_str_param($d, 'description', 2000);
+            $catIds = category_ids_param($d);
+            $legacyCat = opt_str_param($d, 'category', 80);
+            if ($catIds === null && $legacyCat !== null && $legacyCat !== '') {
+                $catIds = [category_find_or_create($legacyCat, 0)];
+            }
+            $status = scalar_param($d, 'status') ?: 'approved';
+            if (!in_array($status, ['approved', 'pending', 'none'], true)) {
+                fail(400, 'bad_status', 'وضعیت نامعتبر است.');
+            }
+            $addToLibrary = !isset($d['add_to_library']) || !empty($d['add_to_library']);
+            $autoClean = !isset($d['clean']) || !empty($d['clean']);
+
+            $maxBytes = (int)config()['max_book_bytes'];
+            $work = upload_dir() . '/url-' . bin2hex(random_bytes(12)) . '.book';
+
+            try {
+                $dl = download_book_from_url($url, $work, $maxBytes, 45);
+                $format = detect_book_format($work, '', 400);
+
+                if ($format === 'pdf') {
+                    $opf = pdf_info_meta($work) + ['language' => '', 'publisher' => '', 'published' => '', 'cover' => null];
+                    $clean = ['removed' => 0, 'status' => 'not-applicable', 'skipped' => []];
+                } else {
+                    $opf = epub_opf_meta($work);
+                    $clean = $autoClean ? clean_epub_file($work, stored_clean_rules()) : ['removed' => 0, 'status' => 'skipped', 'skipped' => []];
+                    validate_epub($work);
+                }
+
+                clearstatcache(true, $work);
+                $sha = hash_file('sha256', $work);
+                $size = (int)filesize($work);
+                $book = one('SELECT * FROM books WHERE sha256 = ?', [$sha]);
+                $duplicate = (bool)$book;
+
+                if (!$book) {
+                    $urlPath = parse_url($dl['final_url'] ?? $url, PHP_URL_PATH) ?? '';
+                    $rawFilename = urldecode(basename($urlPath));
+                    $fileTitle = clean_meta_text(preg_replace('/\.(epub|pdf)$/i', '', $rawFilename) ?? '', 500);
+
+                    $title = $userTitle !== null && $userTitle !== ''
+                        ? $userTitle
+                        : ($opf['title'] !== '' ? $opf['title'] : ($fileTitle !== '' ? $fileTitle : 'بدون عنوان'));
+                    $author = $userAuthor !== null && $userAuthor !== ''
+                        ? $userAuthor
+                        : ($opf['author'] !== '' ? $opf['author'] : '');
+
+                    $meta = [
+                        'title' => $title,
+                        'author' => $author,
+                        'language' => $opf['language'] ?? '',
+                        'publisher' => $opf['publisher'] ?? '',
+                        'published' => $opf['published'] ?? '',
+                        'format' => $format,
+                    ];
+
+                    if (!rename($work, book_path($sha, $format))) fail(500, 'storage', 'امکان ذخیره فایل کتاب در سرور وجود ندارد.');
+                    try {
+                        $book = insert_book($sha, $size, $meta, (int)$s['id'], 'admin');
+                    } catch (PDOException $e) {
+                        $book = one('SELECT * FROM books WHERE sha256 = ?', [$sha]);
+                        if (!$book) throw $e;
+                        $duplicate = true;
+                    }
+                }
+
+                $bookId = (int)$book['id'];
+
+                if ((int)$book['has_cover'] !== 1 && !empty($opf['cover']) && store_cover_bytes($bookId, $opf['cover'])) {
+                    q('UPDATE books SET has_cover = 1 WHERE id = ?', [$bookId]);
+                    $book['has_cover'] = 1;
+                }
+
+                if ($addToLibrary) {
+                    insert_ignore('user_books', ['user_id' => $s['id'], 'book_id' => $bookId, 'added_at' => time()]);
+                }
+
+                if ($status !== 'none') {
+                    $cur = one('SELECT status FROM catalog WHERE book_id = ?', [$bookId]);
+                    if (!$cur || $cur['status'] === 'rejected') {
+                        q('DELETE FROM catalog WHERE book_id = ?', [$bookId]);
+                        q('INSERT INTO catalog (book_id, status, description, category, submitted_by, submitted_at, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                          [$bookId, $status, (string)$desc, '', (int)$s['id'], time(), $status === 'approved' ? (int)$s['id'] : null, $status === 'approved' ? time() : null]);
+                        if ($catIds) set_book_categories($bookId, $catIds);
+                    } else {
+                        if ($status === 'approved' && $cur['status'] === 'pending') {
+                            q('UPDATE catalog SET status = ?, reviewed_by = ?, reviewed_at = ? WHERE book_id = ?', ['approved', (int)$s['id'], time(), $bookId]);
+                        }
+                        if ($catIds) set_book_categories($bookId, $catIds);
+                    }
+                }
+
+                $freshBook = one('SELECT b.*, c.status AS catalog_status FROM books b LEFT JOIN catalog c ON c.book_id = b.id WHERE b.id = ?', [$bookId]);
+                $resp = [
+                    'ok' => true,
+                    'book' => book_out($freshBook) + ['catalog_status' => $freshBook['catalog_status'] ?? 'none'],
+                    'duplicate' => $duplicate,
+                    'cleaned' => $clean['removed'] ?? 0,
+                    'cleanup' => $clean['status'] ?? 'unknown',
+                ];
+            } finally {
+                @unlink($work);
+                @unlink("$work.clean");
+            }
+            json_out(201, $resp);
 
         case 'settings':
             if ($method === 'POST') {
