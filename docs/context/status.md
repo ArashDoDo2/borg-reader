@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-22, version **8.13.3** (live at https://parsun.com/borg/).
+Last updated: 2026-10-22, version **8.13.4** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -66,6 +66,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.1 | Fix Gemini API 404 error: update model endpoint to stable production models (`gemini-1.5-flash`, `gemini-2.0-flash`, `gemini-1.5-pro`) with automatic fallback and dual header/query authentication |
 | 8.13.2 | Clarify AI guide copy: remove rigid prefix references (`AIzaSy...`) in instructions and input placeholder |
 | 8.13.3 | Dynamic Gemini model discovery: auto-query `ListModels` on active Google AI Studio project, sort/select best active model (`flash`/`gemini`), cache working model, and report exact Google API diagnostic messages on error |
+| 8.13.4 | Filter out TTS/Audio models: exclude `gemini-2.5-flash-preview-tts` and audio models from text generation, prioritize `gemini-2.5-flash` / `gemini-3.8-flash`, and continue to next model on modality mismatch 400 |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);

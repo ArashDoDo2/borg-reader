@@ -2726,21 +2726,21 @@
         });
         if (resp.ok) {
           const data = await resp.json();
-          const list = (data.models || []).filter(m =>
-            Array.isArray(m.supportedGenerationMethods) &&
-            m.supportedGenerationMethods.includes("generateContent")
-          );
+          const list = (data.models || []).filter(m => {
+            if (!Array.isArray(m.supportedGenerationMethods) || !m.supportedGenerationMethods.includes("generateContent")) return false;
+            const name = (m.name || "").toLowerCase();
+            if (/(-tts|tts|audio|speech|embed|imagen|medlm)/i.test(name)) return false;
+            return true;
+          });
           if (list.length > 0) {
             const sorted = list.sort((a, b) => {
-              const aName = a.name || "";
-              const bName = b.name || "";
-              const aFlash = /flash/i.test(aName) ? 1 : 0;
-              const bFlash = /flash/i.test(bName) ? 1 : 0;
-              if (aFlash !== bFlash) return bFlash - aFlash;
-              const aGemini = /gemini/i.test(aName) ? 1 : 0;
-              const bGemini = /gemini/i.test(bName) ? 1 : 0;
-              if (aGemini !== bGemini) return bGemini - aGemini;
-              return 0;
+              const aName = (a.name || "").toLowerCase();
+              const bName = (b.name || "").toLowerCase();
+              const aScore = (/gemini-2\.5/i.test(aName) ? 50 : /gemini-3/i.test(aName) ? 40 : /gemini-2\.0/i.test(aName) ? 30 : /gemini-1\.5/i.test(aName) ? 20 : 10)
+                           + (/flash/i.test(aName) ? 5 : 0);
+              const bScore = (/gemini-2\.5/i.test(bName) ? 50 : /gemini-3/i.test(bName) ? 40 : /gemini-2\.0/i.test(bName) ? 30 : /gemini-1\.5/i.test(bName) ? 20 : 10)
+                           + (/flash/i.test(bName) ? 5 : 0);
+              return bScore - aScore;
             });
             return {
               apiVersion: ver,
@@ -2763,8 +2763,8 @@
     return {
       apiVersion: "v1beta",
       models: [
-        "gemini-3.8-flash",
         "gemini-2.5-flash",
+        "gemini-3.8-flash",
         "gemini-2.0-flash",
         "gemini-1.5-flash",
         "gemini-1.5-flash-latest",
@@ -2827,7 +2827,7 @@
         candidateVersions = [discovered.apiVersion, discovered.apiVersion === "v1beta" ? "v1" : "v1beta"];
         candidateModels = discovered.models;
       } else {
-        candidateModels = [cfg.model, "gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
+        candidateModels = [cfg.model, "gemini-2.5-flash", "gemini-3.8-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
       }
 
       candidateModels = candidateModels.filter((v, i, a) => v && a.indexOf(v) === i);
@@ -2869,9 +2869,14 @@
               }
             } catch (_) {}
 
-            if (resp.status === 400 || resp.status === 403 || resp.status === 429) {
+            // If API key is completely invalid or project has no permission, break immediately
+            if (lastErrDetail && /api key not valid|key expired|permission_denied/i.test(lastErrDetail)) {
               break;
             }
+            if (resp.status === 403 || resp.status === 429) {
+              break;
+            }
+            // For model-specific 400 (e.g. AUDIO modality) or 404, continue to next candidate model!
           } catch (e) {
             lastErr = e;
             if (e.message && !e.message.includes("fetch")) {
@@ -2879,7 +2884,7 @@
             }
           }
         }
-        if (lastResp && (lastResp.status === 400 || lastResp.status === 403 || lastResp.status === 429)) {
+        if (lastResp && (lastResp.status === 403 || lastResp.status === 429)) {
           break;
         }
       }
