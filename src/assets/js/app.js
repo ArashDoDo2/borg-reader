@@ -2809,7 +2809,7 @@
     return res.join("");
   }
 
-  async function callAi(prompt, systemMsg = "", apiKeyOverride = "", providerOverride = "") {
+  async function callAi(prompt, systemMsg = "", apiKeyOverride = "", providerOverride = "", onChunk = null) {
     const cfg = getAiConfig();
     const apiKey = (apiKeyOverride || cfg.apiKey || "").trim();
     const provider = providerOverride || cfg.provider || "gemini";
@@ -2818,10 +2818,19 @@
 
     if (provider === "gemini") {
       const fullPrompt = systemMsg ? `${systemMsg}\n\nمتن یا درخواست:\n${prompt}` : prompt;
-      const requestBody = JSON.stringify({
-        contents: [{ parts: [{ text: fullPrompt }] }],
-        generationConfig: { temperature: 0.3 }
-      });
+      function buildGeminiBody(withThinkingZero = true) {
+        const genConfig = {
+          temperature: 0.2,
+          maxOutputTokens: 1200
+        };
+        if (withThinkingZero) {
+          genConfig.thinkingConfig = { thinkingBudget: 0 };
+        }
+        return JSON.stringify({
+          contents: [{ parts: [{ text: fullPrompt }] }],
+          generationConfig: genConfig
+        });
+      }
 
       let candidateVersions = [cfg.apiVersion || "v1beta", (cfg.apiVersion === "v1" ? "v1beta" : "v1")];
       let candidateModels = [];
@@ -2839,57 +2848,104 @@
       let lastResp = null;
       let lastErr = null;
       let lastErrDetail = "";
+      const isStream = typeof onChunk === "function";
 
       for (const ver of candidateVersions) {
         for (const model of candidateModels) {
-          try {
-            const modelPath = formatGeminiModelPath(model);
-            const url = `https://generativelanguage.googleapis.com/${ver}/${modelPath}:generateContent?key=${encodeURIComponent(apiKey)}`;
-            const resp = await fetch(url, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-goog-api-key": apiKey
-              },
-              body: requestBody
-            });
+          const modelPath = formatGeminiModelPath(model);
+          const method = isStream ? "streamGenerateContent" : "generateContent";
+          const streamParam = isStream ? "&alt=sse" : "";
+          const url = `https://generativelanguage.googleapis.com/${ver}/${modelPath}:${method}?key=${encodeURIComponent(apiKey)}${streamParam}`;
 
-            if (resp.ok) {
-              const data = await resp.json();
-              const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (!text) throw new Error("پاسخی از هوش مصنوعی دریافت نشد.");
-              const cleanModel = model.replace(/^models\//, "");
-              if (cfg.model !== cleanModel || cfg.apiVersion !== ver) {
-                saveAiConfig({ model: cleanModel, apiVersion: ver });
-              }
-              return text;
-            }
-
-            lastResp = resp;
+          for (const withThinkingZero of [true, false]) {
             try {
-              const errData = await resp.json();
-              if (errData?.error?.message) {
-                lastErrDetail = errData.error.message;
-              }
-            } catch (_) {}
+              const resp = await fetch(url, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-goog-api-key": apiKey
+                },
+                body: buildGeminiBody(withThinkingZero)
+              });
 
-            // If API key is completely invalid or project has no permission, break immediately
-            if (lastErrDetail && /api key not valid|key expired|permission_denied/i.test(lastErrDetail)) {
+              if (resp.ok) {
+                if (isStream && resp.body) {
+                  const reader = resp.body.getReader();
+                  const decoder = new TextDecoder("utf-8");
+                  let buffer = "";
+                  let accumulatedText = "";
+
+                  while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split("\n");
+                    buffer = lines.pop() || "";
+                    for (const line of lines) {
+                      const trimmed = line.trim();
+                      if (trimmed.startsWith("data: ")) {
+                        const jsonStr = trimmed.slice(6).trim();
+                        if (jsonStr) {
+                          try {
+                            const parsed = JSON.parse(jsonStr);
+                            const chunk = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+                            if (chunk) {
+                              accumulatedText += chunk;
+                              onChunk(accumulatedText);
+                            }
+                          } catch (_) {}
+                        }
+                      }
+                    }
+                  }
+                  if (accumulatedText) {
+                    const cleanModel = model.replace(/^models\//, "");
+                    if (cfg.model !== cleanModel || cfg.apiVersion !== ver) {
+                      saveAiConfig({ model: cleanModel, apiVersion: ver });
+                    }
+                    return accumulatedText;
+                  }
+                }
+
+                const data = await resp.json();
+                const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (!text) throw new Error("پاسخی از هوش مصنوعی دریافت نشد.");
+                const cleanModel = model.replace(/^models\//, "");
+                if (cfg.model !== cleanModel || cfg.apiVersion !== ver) {
+                  saveAiConfig({ model: cleanModel, apiVersion: ver });
+                }
+                return text;
+              }
+
+              lastResp = resp;
+              try {
+                const errData = await resp.json();
+                if (errData?.error?.message) {
+                  lastErrDetail = errData.error.message;
+                }
+              } catch (_) {}
+
+              if (withThinkingZero && lastErrDetail && /thinking/i.test(lastErrDetail)) {
+                continue;
+              }
+              break;
+            } catch (e) {
+              lastErr = e;
+              if (e.message && !e.message.includes("fetch")) {
+                throw e;
+              }
               break;
             }
-            if (resp.status === 403) {
-              break;
-            }
-            // If 429 is due to a specific model having limit: 0, continue to next model!
-            if (resp.status === 429 && !lastErrDetail.includes("limit: 0")) {
-              break;
-            }
-            // For model-specific 400 (e.g. AUDIO modality) or 404, continue to next candidate model!
-          } catch (e) {
-            lastErr = e;
-            if (e.message && !e.message.includes("fetch")) {
-              throw e;
-            }
+          }
+
+          if (lastErrDetail && /api key not valid|key expired|permission_denied/i.test(lastErrDetail)) {
+            break;
+          }
+          if (lastResp && lastResp.status === 403) {
+            break;
+          }
+          if (lastResp && lastResp.status === 429 && !lastErrDetail.includes("limit: 0")) {
+            break;
           }
         }
         if (lastResp && lastResp.status === 403) {
@@ -3003,7 +3059,9 @@
     aiBusy = true;
     $("aiResponse").innerHTML = '<div class="ai-loading-dots">در حال اندیشیدن <span></span><span></span><span></span></div>';
     try {
-      const reply = await callAi(prompt, systemPrompt);
+      const reply = await callAi(prompt, systemPrompt, "", "", textChunk => {
+        $("aiResponse").innerHTML = formatAiMarkdown(textChunk);
+      });
       $("aiResponse").innerHTML = formatAiMarkdown(reply);
     } catch (err) {
       $("aiResponse").innerHTML = `<p style="color:#b3261e">❌ ${esc(err.message || "خطا در پردازش هوش مصنوعی")}</p>`;
