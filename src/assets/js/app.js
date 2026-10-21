@@ -2729,7 +2729,7 @@
           const list = (data.models || []).filter(m => {
             if (!Array.isArray(m.supportedGenerationMethods) || !m.supportedGenerationMethods.includes("generateContent")) return false;
             const name = (m.name || "").toLowerCase();
-            // Exclude specialized modalities: audio, tts, speech, image, video, embedding
+            // Exclude specialized non-text modalities
             if (/(-tts|tts|audio|speech|embed|imagen|image|photo|video|medlm|realtime)/i.test(name)) return false;
             return true;
           });
@@ -2737,12 +2737,14 @@
             const sorted = list.sort((a, b) => {
               const aName = (a.name || "").replace(/^models\//, "").toLowerCase();
               const bName = (b.name || "").replace(/^models\//, "").toLowerCase();
-              // Clean models like gemini-2.5-flash or gemini-1.5-flash get huge preference
-              const aClean = /^gemini-\d+(\.\d+)?-(flash|pro)$/.test(aName) ? 100 : 0;
-              const bClean = /^gemini-\d+(\.\d+)?-(flash|pro)$/.test(bName) ? 100 : 0;
-              const aScore = aClean + (/gemini-2\.5/i.test(aName) ? 50 : /gemini-2\.0/i.test(aName) ? 40 : /gemini-1\.5/i.test(aName) ? 30 : /gemini-3/i.test(aName) ? 20 : 10)
+              // Flash-Lite has zero thinking delay and responds in < 1 second!
+              const aLite = /lite/i.test(aName) ? 200 : 0;
+              const bLite = /lite/i.test(bName) ? 200 : 0;
+              const aClean = /^gemini-\d+(\.\d+)?-(flash|pro)(-lite)?$/.test(aName) ? 100 : 0;
+              const bClean = /^gemini-\d+(\.\d+)?-(flash|pro)(-lite)?$/.test(bName) ? 100 : 0;
+              const aScore = aLite + aClean + (/gemini-2\.5/i.test(aName) ? 50 : /gemini-2\.0/i.test(aName) ? 40 : /gemini-1\.5/i.test(aName) ? 30 : /gemini-3/i.test(aName) ? 20 : 10)
                            + (/flash/i.test(aName) ? 5 : 0);
-              const bScore = bClean + (/gemini-2\.5/i.test(bName) ? 50 : /gemini-2\.0/i.test(bName) ? 40 : /gemini-1\.5/i.test(bName) ? 30 : /gemini-3/i.test(bName) ? 20 : 10)
+              const bScore = bLite + bClean + (/gemini-2\.5/i.test(bName) ? 50 : /gemini-2\.0/i.test(bName) ? 40 : /gemini-1\.5/i.test(bName) ? 30 : /gemini-3/i.test(bName) ? 20 : 10)
                            + (/flash/i.test(bName) ? 5 : 0);
               return bScore - aScore;
             });
@@ -2767,19 +2769,36 @@
     return {
       apiVersion: "v1beta",
       models: [
-        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
         "gemini-2.0-flash",
         "gemini-1.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash",
         "gemini-3.8-flash",
         "gemini-1.5-flash-latest",
-        "gemini-1.5-flash-001",
-        "gemini-1.5-flash-002",
         "gemini-1.5-pro",
-        "gemini-2.0-flash-exp",
         "gemini-pro"
       ],
       lastErrDetail
     };
+  }
+
+  function extractGeminiSseChunk(parsed) {
+    if (!parsed) return "";
+    // Interactions API delta
+    if (parsed?.delta?.text) return parsed.delta.text;
+    if (Array.isArray(parsed?.step?.content)) {
+      return parsed.step.content.map(c => c.text || "").join("");
+    }
+    // generateContent SSE: filter out thinking/reasoning parts
+    if (Array.isArray(parsed?.candidates?.[0]?.content?.parts)) {
+      return parsed.candidates[0].content.parts
+        .filter(p => !p.thought)
+        .map(p => p.text || "")
+        .join("");
+    }
+    if (typeof parsed?.text === "string") return parsed.text;
+    return "";
   }
 
   function hasAiKey() {
@@ -2835,12 +2854,14 @@
       let candidateVersions = [cfg.apiVersion || "v1beta", (cfg.apiVersion === "v1" ? "v1beta" : "v1")];
       let candidateModels = [];
 
-      if (!cfg.model || apiKeyOverride) {
+      // If cached model is a preview or heavy model, prioritize ultra-fast lite models
+      const validCachedModel = cfg.model && !/preview/i.test(cfg.model) ? cfg.model : "";
+      if (!validCachedModel || apiKeyOverride) {
         const discovered = await discoverGeminiModels(apiKey);
         candidateVersions = [discovered.apiVersion, discovered.apiVersion === "v1beta" ? "v1" : "v1beta"];
         candidateModels = discovered.models;
       } else {
-        candidateModels = [cfg.model, "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-3.8-flash"];
+        candidateModels = [validCachedModel, "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.8-flash"];
       }
 
       candidateModels = candidateModels.filter((v, i, a) => v && a.indexOf(v) === i);
@@ -2885,10 +2906,10 @@
                       const trimmed = line.trim();
                       if (trimmed.startsWith("data: ")) {
                         const jsonStr = trimmed.slice(6).trim();
-                        if (jsonStr) {
+                        if (jsonStr && jsonStr !== "[DONE]") {
                           try {
                             const parsed = JSON.parse(jsonStr);
-                            const chunk = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+                            const chunk = extractGeminiSseChunk(parsed);
                             if (chunk) {
                               accumulatedText += chunk;
                               onChunk(accumulatedText);
@@ -2905,10 +2926,12 @@
                     }
                     return accumulatedText;
                   }
+                  // If streaming body finished with empty text, break inner loop to try without streaming
+                  break;
                 }
 
                 const data = await resp.json();
-                const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+                const text = extractGeminiSseChunk(data) || data?.candidates?.[0]?.content?.parts?.[0]?.text;
                 if (!text) throw new Error("پاسخی از هوش مصنوعی دریافت نشد.");
                 const cleanModel = model.replace(/^models\//, "");
                 if (cfg.model !== cleanModel || cfg.apiVersion !== ver) {
