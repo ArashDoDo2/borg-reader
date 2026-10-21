@@ -2763,9 +2763,10 @@
     return {
       apiVersion: "v1beta",
       models: [
-        "gemini-1.5-flash",
-        "gemini-2.0-flash",
+        "gemini-3.8-flash",
         "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
         "gemini-1.5-flash-latest",
         "gemini-1.5-flash-001",
         "gemini-1.5-flash-002",
@@ -2826,7 +2827,7 @@
         candidateVersions = [discovered.apiVersion, discovered.apiVersion === "v1beta" ? "v1" : "v1beta"];
         candidateModels = discovered.models;
       } else {
-        candidateModels = [cfg.model, "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-pro"];
+        candidateModels = [cfg.model, "gemini-3.8-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"];
       }
 
       candidateModels = candidateModels.filter((v, i, a) => v && a.indexOf(v) === i);
