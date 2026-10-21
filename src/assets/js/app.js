@@ -2690,16 +2690,91 @@
   function getAiConfig() {
     try {
       const cfg = JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || "{}");
-      return { provider: cfg.provider || "gemini", apiKey: (cfg.apiKey || "").trim() };
+      return {
+        provider: cfg.provider || "gemini",
+        apiKey: (cfg.apiKey || "").trim(),
+        model: cfg.model || "",
+        apiVersion: cfg.apiVersion || "v1beta"
+      };
     } catch (_) {
-      return { provider: "gemini", apiKey: "" };
+      return { provider: "gemini", apiKey: "", model: "", apiVersion: "v1beta" };
     }
   }
 
   function saveAiConfig(cfg) {
     try {
-      localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(cfg));
+      const existing = getAiConfig();
+      const merged = { ...existing, ...cfg };
+      localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(merged));
     } catch (_) {}
+  }
+
+  function formatGeminiModelPath(model) {
+    if (!model) return "models/gemini-1.5-flash";
+    return model.startsWith("models/") ? model : `models/${model}`;
+  }
+
+  async function discoverGeminiModels(apiKey) {
+    const versions = ["v1beta", "v1"];
+    let lastErrDetail = "";
+    for (const ver of versions) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/${ver}/models?key=${encodeURIComponent(apiKey)}`;
+        const resp = await fetch(url, {
+          method: "GET",
+          headers: { "X-goog-api-key": apiKey }
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          const list = (data.models || []).filter(m =>
+            Array.isArray(m.supportedGenerationMethods) &&
+            m.supportedGenerationMethods.includes("generateContent")
+          );
+          if (list.length > 0) {
+            const sorted = list.sort((a, b) => {
+              const aName = a.name || "";
+              const bName = b.name || "";
+              const aFlash = /flash/i.test(aName) ? 1 : 0;
+              const bFlash = /flash/i.test(bName) ? 1 : 0;
+              if (aFlash !== bFlash) return bFlash - aFlash;
+              const aGemini = /gemini/i.test(aName) ? 1 : 0;
+              const bGemini = /gemini/i.test(bName) ? 1 : 0;
+              if (aGemini !== bGemini) return bGemini - aGemini;
+              return 0;
+            });
+            return {
+              apiVersion: ver,
+              models: sorted.map(m => m.name.replace(/^models\//, ""))
+            };
+          }
+        } else {
+          try {
+            const errJson = await resp.json();
+            if (errJson?.error?.message) lastErrDetail = errJson.error.message;
+          } catch (_) {}
+          if (resp.status === 400 || resp.status === 403) {
+            throw new Error(`کلید نامعتبر است یا در Google AI Studio فعال نیست (${resp.status}${lastErrDetail ? ': ' + lastErrDetail : ''})`);
+          }
+        }
+      } catch (e) {
+        if (e.message && (e.message.includes("کلید") || e.message.includes("Google AI Studio"))) throw e;
+      }
+    }
+    return {
+      apiVersion: "v1beta",
+      models: [
+        "gemini-1.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.5-flash",
+        "gemini-1.5-flash-latest",
+        "gemini-1.5-flash-001",
+        "gemini-1.5-flash-002",
+        "gemini-1.5-pro",
+        "gemini-2.0-flash-exp",
+        "gemini-pro"
+      ],
+      lastErrDetail
+    };
   }
 
   function hasAiKey() {
@@ -2742,44 +2817,84 @@
         contents: [{ parts: [{ text: fullPrompt }] }],
         generationConfig: { temperature: 0.3 }
       });
-      const models = ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-1.5-pro"];
+
+      let candidateVersions = [cfg.apiVersion || "v1beta", (cfg.apiVersion === "v1" ? "v1beta" : "v1")];
+      let candidateModels = [];
+
+      if (!cfg.model || apiKeyOverride) {
+        const discovered = await discoverGeminiModels(apiKey);
+        candidateVersions = [discovered.apiVersion, discovered.apiVersion === "v1beta" ? "v1" : "v1beta"];
+        candidateModels = discovered.models;
+      } else {
+        candidateModels = [cfg.model, "gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-pro"];
+      }
+
+      candidateModels = candidateModels.filter((v, i, a) => v && a.indexOf(v) === i);
+
       let lastResp = null;
       let lastErr = null;
+      let lastErrDetail = "";
 
-      for (const model of models) {
-        try {
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
-          const resp = await fetch(url, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-goog-api-key": apiKey
-            },
-            body: requestBody
-          });
-          if (resp.ok) {
-            const data = await resp.json();
-            const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-            if (!text) throw new Error("پاسخی از هوش مصنوعی دریافت نشد.");
-            return text;
+      for (const ver of candidateVersions) {
+        for (const model of candidateModels) {
+          try {
+            const modelPath = formatGeminiModelPath(model);
+            const url = `https://generativelanguage.googleapis.com/${ver}/${modelPath}:generateContent?key=${encodeURIComponent(apiKey)}`;
+            const resp = await fetch(url, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-goog-api-key": apiKey
+              },
+              body: requestBody
+            });
+
+            if (resp.ok) {
+              const data = await resp.json();
+              const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (!text) throw new Error("پاسخی از هوش مصنوعی دریافت نشد.");
+              const cleanModel = model.replace(/^models\//, "");
+              if (cfg.model !== cleanModel || cfg.apiVersion !== ver) {
+                saveAiConfig({ model: cleanModel, apiVersion: ver });
+              }
+              return text;
+            }
+
+            lastResp = resp;
+            try {
+              const errData = await resp.json();
+              if (errData?.error?.message) {
+                lastErrDetail = errData.error.message;
+              }
+            } catch (_) {}
+
+            if (resp.status === 400 || resp.status === 403 || resp.status === 429) {
+              break;
+            }
+          } catch (e) {
+            lastErr = e;
+            if (e.message && !e.message.includes("fetch")) {
+              throw e;
+            }
           }
-          lastResp = resp;
-          if (resp.status !== 404) {
-            break;
-          }
-        } catch (e) {
-          lastErr = e;
-          if (e.message && !e.message.includes("fetch")) {
-            throw e;
-          }
+        }
+        if (lastResp && (lastResp.status === 400 || lastResp.status === 403 || lastResp.status === 429)) {
+          break;
         }
       }
 
       if (lastResp) {
-        if (lastResp.status === 400 || lastResp.status === 403) throw new Error("کلید نامعتبر است یا در Google AI Studio فعال نیست.");
-        if (lastResp.status === 429) throw new Error("محدودیت تعداد درخواست در دقیقه رخ داد؛ لطفاً چند لحظه صبر کنید.");
-        if (lastResp.status === 404) throw new Error("مدل هوش مصنوعی در حساب شما یافت نشد (۴۰۴).");
-        throw new Error(`خطای پاسخ Google Gemini (${lastResp.status})`);
+        const detailSuffix = lastErrDetail ? `: ${lastErrDetail}` : "";
+        if (lastResp.status === 400 || lastResp.status === 403) {
+          throw new Error(`کلید نامعتبر است یا در Google AI Studio فعال نیست (${lastResp.status}${detailSuffix}).`);
+        }
+        if (lastResp.status === 429) {
+          throw new Error(`محدودیت تعداد درخواست یا سهمیه در Google رخ داد (${lastResp.status}${detailSuffix}).`);
+        }
+        if (lastResp.status === 404) {
+          throw new Error(`مدل هوش مصنوعی در حساب شما یافت نشد (۴۰۴${detailSuffix}).`);
+        }
+        throw new Error(`خطای پاسخ Google Gemini (${lastResp.status}${detailSuffix})`);
       }
       throw lastErr || new Error("امکان برقراری ارتباط با سرویس هوش مصنوعی وجود ندارد.");
     } else {
