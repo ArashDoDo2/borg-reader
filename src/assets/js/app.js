@@ -1215,6 +1215,7 @@
     $("reader").classList.remove("toc-open", "immersive", "book-ltr");
     closeSettings(false);
     closeSearch(false);
+    closeAi(false);
     clearJumps(); closeGuide(false);
     hideSelectionBar(); renderedHighlights = new Set();
     ttsStop(); $("notePopup").hidden = true; $("lookupBox").hidden = true; closeImage();
@@ -1958,6 +1959,7 @@
         else if (!$("imageViewer").hidden) closeImage();
         else if (!$("notePopup").hidden || !$("lookupBox").hidden) { $("notePopup").hidden = true; $("lookupBox").hidden = true; }
         else if (!$("selectionBar").hidden) hideSelectionBar();
+        else if (aiOpen()) closeAi(true);
         else if (searchOpen()) closeSearch(true);
         else if (settingsOpen()) closeSettings(true);
         else if ($("reader").classList.contains("toc-open")) closeToc(true);
@@ -2025,7 +2027,7 @@
   }
   function handleTap(target, clientX, view, contents) {
     diag("tap"); diag("tapHasFrame", !!((view && view.frameElement) || (contents && contents.window && contents.window.frameElement)));
-    if (settingsOpen() || searchOpen()) { closeSettings(false); closeSearch(false); return; }
+    if (settingsOpen() || searchOpen() || aiOpen()) { closeSettings(false); closeSearch(false); closeAi(false); return; }
     if (!$("selectionBar").hidden) { hideSelectionBar(); return; }
     if (!$("notePopup").hidden || !$("lookupBox").hidden) { $("notePopup").hidden = true; $("lookupBox").hidden = true; return; }
     const el = target && target.nodeType === 3 ? target.parentElement : target;
@@ -2595,6 +2597,7 @@
   function searchOpen() { return !$("searchPanel").hidden; }
   function openSearch() {
     closeSettings(false);
+    closeAi(false);
     $("searchPanel").hidden = false;
     $("searchToggle").setAttribute("aria-expanded", "true");
     setTimeout(() => $("bookSearchInput").focus(), 30);
@@ -2662,6 +2665,7 @@
   function settingsOpen() { return !$("settingsPanel").hidden; }
   function openSettings() {
     closeSearch(false);
+    closeAi(false);
     $("settingsPanel").hidden = false;
     $("settingsToggle").setAttribute("aria-expanded", "true");
     syncSettingsUI();
@@ -2676,6 +2680,271 @@
   $("settingsClose").addEventListener("click", () => closeSettings(true));
   document.addEventListener("click", e => {
     if (settingsOpen() && !$("settingsPanel").contains(e.target) && !$("settingsToggle").contains(e.target)) closeSettings(false);
+  });
+
+  // ======================= v8.12 AI Companion (BYOK) =======================
+  const AI_CONFIG_KEY = "borg-ai-config" + STORAGE_SUFFIX;
+  let aiContextText = "";
+  let aiBusy = false;
+
+  function getAiConfig() {
+    try {
+      const cfg = JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || "{}");
+      return { provider: cfg.provider || "gemini", apiKey: (cfg.apiKey || "").trim() };
+    } catch (_) {
+      return { provider: "gemini", apiKey: "" };
+    }
+  }
+
+  function saveAiConfig(cfg) {
+    try {
+      localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(cfg));
+    } catch (_) {}
+  }
+
+  function hasAiKey() {
+    return Boolean(getAiConfig().apiKey);
+  }
+
+  function formatAiMarkdown(text) {
+    if (!text) return "";
+    let s = esc(String(text).trim());
+    s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\*([^\*\n]+?)\*/g, "<em>$1</em>");
+    const lines = s.split("\n");
+    let inList = false;
+    const res = [];
+    for (const line of lines) {
+      const trimmed = line.trim();
+      const m = trimmed.match(/^[\*\-•]\s+(.*)/);
+      if (m) {
+        if (!inList) { res.push("<ul>"); inList = true; }
+        res.push(`<li>${m[1]}</li>`);
+      } else {
+        if (inList) { res.push("</ul>"); inList = false; }
+        if (trimmed) res.push(`<p>${trimmed}</p>`);
+      }
+    }
+    if (inList) res.push("</ul>");
+    return res.join("");
+  }
+
+  async function callAi(prompt, systemMsg = "", apiKeyOverride = "", providerOverride = "") {
+    const cfg = getAiConfig();
+    const apiKey = (apiKeyOverride || cfg.apiKey || "").trim();
+    const provider = providerOverride || cfg.provider || "gemini";
+    if (!apiKey) throw new Error("کلید هوش مصنوعی وارد نشده است.");
+    if (!navigator.onLine) throw new Error("اتصال به اینترنت برقرار نیست.");
+
+    if (provider === "gemini") {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const fullPrompt = systemMsg ? `${systemMsg}\n\nمتن یا درخواست:\n${prompt}` : prompt;
+      let resp;
+      try {
+        resp = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: fullPrompt }] }],
+            generationConfig: { temperature: 0.3 }
+          })
+        });
+      } catch (e) {
+        const fallbackUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`;
+        resp = await fetch(fallbackUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: fullPrompt }] }],
+            generationConfig: { temperature: 0.3 }
+          })
+        });
+      }
+      if (!resp.ok) {
+        if (resp.status === 400 || resp.status === 403) throw new Error("کلید نامعتبر است یا در Google AI Studio فعال نیست.");
+        if (resp.status === 429) throw new Error("محدودیت تعداد درخواست در دقیقه رخ داد؛ لطفاً چند لحظه صبر کنید.");
+        throw new Error(`خطای پاسخ Google Gemini (${resp.status})`);
+      }
+      const data = await resp.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text) throw new Error("پاسخی از هوش مصنوعی دریافت نشد.");
+      return text;
+    } else {
+      const url = "https://api.openai.com/v1/chat/completions";
+      const messages = [];
+      if (systemMsg) messages.push({ role: "system", content: systemMsg });
+      messages.push({ role: "user", content: prompt });
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages,
+          temperature: 0.3
+        })
+      });
+      if (!resp.ok) {
+        if (resp.status === 401) throw new Error("کلید OpenAI نامعتبر است.");
+        if (resp.status === 429) throw new Error("محدودیت سهمیه یا اعتبار OpenAI رخ داد.");
+        throw new Error(`خطای پاسخ OpenAI (${resp.status})`);
+      }
+      const data = await resp.json();
+      const text = data?.choices?.[0]?.message?.content;
+      if (!text) throw new Error("پاسخی از هوش مصنوعی دریافت نشد.");
+      return text;
+    }
+  }
+
+  function getCurrentSectionText(maxChars = 4000) {
+    if (pdf) {
+      try {
+        const textLayer = document.querySelector(".textLayer");
+        if (textLayer) return textLayer.innerText.trim().slice(0, maxChars);
+      } catch (_) {}
+      return "";
+    }
+    try {
+      if (rendition) {
+        const contents = rendition.getContents();
+        if (contents && contents.length) {
+          const doc = contents[0].document;
+          if (doc && doc.body) return doc.body.innerText.trim().slice(0, maxChars);
+        }
+      }
+    } catch (_) {}
+    return "";
+  }
+
+  function aiOpen() { return !$("aiPanel").hidden; }
+  function openAi(contextText = "") {
+    closeSearch(false);
+    closeSettings(false);
+    $("aiPanel").hidden = false;
+    $("aiToggle").setAttribute("aria-expanded", "true");
+    if (contextText) {
+      aiContextText = contextText;
+      $("aiContextBadge").hidden = false;
+      $("aiContextText").textContent = `متن انتخابی: «${contextText.slice(0, 60)}…»`;
+    }
+    syncAiUI();
+  }
+  function closeAi(returnFocus) {
+    if (!aiOpen()) return;
+    $("aiPanel").hidden = true;
+    $("aiToggle").setAttribute("aria-expanded", "false");
+    if (returnFocus) $("aiToggle").focus({ preventScroll: true });
+  }
+
+  function syncAiUI() {
+    const hasKey = hasAiKey();
+    $("aiSetupPrompt").hidden = hasKey;
+    $("aiMainInterface").hidden = !hasKey;
+  }
+
+  async function askAiPrompt(userQuestion, contextOverride = "") {
+    if (aiBusy) return;
+    const ctx = contextOverride || aiContextText || getCurrentSectionText(3500);
+    const bookTitle = (currentBook && currentBook.title) || "";
+    const chapter = $("chapterLabel")?.textContent || "";
+    const systemPrompt = `شما دستیار هوشمند مطالعه در اپلیکیشن کتاب‌خوان بُرگ هستید. کتاب در حال مطالعه: «${bookTitle}» (فصل/بخش: «${chapter}»). به زبان فارسی صمیمی، شیوا، دقیق و ساختاریافته پاسخ بده. اگر متنی از کتاب در اختیارت قرار گرفته، بر اساس آن پاسخ بده.`;
+
+    let prompt = "";
+    if (ctx) prompt += `متن بخش در حال مطالعه:\n«««\n${ctx}\n»»»\n\n`;
+    prompt += `درخواست / پرسش کاربر: ${userQuestion}`;
+
+    aiBusy = true;
+    $("aiResponse").innerHTML = '<div class="ai-loading-dots">در حال اندیشیدن <span></span><span></span><span></span></div>';
+    try {
+      const reply = await callAi(prompt, systemPrompt);
+      $("aiResponse").innerHTML = formatAiMarkdown(reply);
+    } catch (err) {
+      $("aiResponse").innerHTML = `<p style="color:#b3261e">❌ ${esc(err.message || "خطا در پردازش هوش مصنوعی")}</p>`;
+    } finally {
+      aiBusy = false;
+    }
+  }
+
+  function openAiGuideDialog() {
+    const cfg = getAiConfig();
+    $("aiProviderSelect").value = cfg.provider || "gemini";
+    $("aiApiKeyInput").value = cfg.apiKey || "";
+    $("aiTestStatus").style.display = "none";
+    $("aiTestStatus").textContent = "";
+    $("aiTestStatus").className = "form-error ai-test-status";
+    $("aiGuideDialog").showModal();
+  }
+
+  $("aiToggle").addEventListener("click", () => { if (aiOpen()) closeAi(true); else openAi(); });
+  $("aiClose").addEventListener("click", () => closeAi(true));
+  document.addEventListener("click", e => {
+    if (aiOpen() && !$("aiPanel").contains(e.target) && !$("aiToggle").contains(e.target) && !e.target.closest("[data-sel='ai']")) closeAi(false);
+  });
+  $("aiTeaserButton").addEventListener("click", openAiGuideDialog);
+  const heroAi = $("heroAiBadge");
+  if (heroAi) heroAi.addEventListener("click", openAiGuideDialog);
+  $("aiGuideClose").addEventListener("click", () => $("aiGuideDialog").close());
+  $("aiOpenSetup").addEventListener("click", () => { closeAi(false); openAiGuideDialog(); });
+  $("aiChangeKey").addEventListener("click", openAiGuideDialog);
+  $("aiClearContext").addEventListener("click", () => {
+    aiContextText = "";
+    $("aiContextBadge").hidden = true;
+    $("aiContextText").textContent = "";
+  });
+  $("aiBtnSummary").addEventListener("click", () => askAiPrompt("لطفاً این فصل را در ۳ الی ۵ نکتهٔ کلیدی و مهم خلاصه کن."));
+  $("aiBtnTakeaways").addEventListener("click", () => askAiPrompt("مهم‌ترین مفاهیم و بینش‌های این بخش را با توضیح مختصر بنویس."));
+  $("aiBtnQuestions").addEventListener("click", () => askAiPrompt("۳ پرسش عمیق و تفکربرانگیز از مباحث این بخش برای سنجش درک مطلب طرح کن."));
+  $("aiPromptForm").addEventListener("submit", e => {
+    e.preventDefault();
+    const q = $("aiPromptInput").value.trim();
+    if (!q) return;
+    $("aiPromptInput").value = "";
+    askAiPrompt(q);
+  });
+  $("aiConfigForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const provider = $("aiProviderSelect").value;
+    const apiKey = $("aiApiKeyInput").value.trim();
+    const statusEl = $("aiTestStatus");
+    if (!apiKey) {
+      statusEl.className = "form-error ai-test-status error";
+      statusEl.textContent = "لطفاً کلید API را وارد کنید.";
+      statusEl.style.display = "block";
+      return;
+    }
+    const saveBtn = $("aiTestAndSave");
+    saveBtn.disabled = true;
+    saveBtn.textContent = "در حال تست اتصال…";
+    statusEl.className = "form-error ai-test-status";
+    statusEl.style.display = "block";
+    statusEl.textContent = "در حال ارسال پیام تستی به هوش مصنوعی…";
+    try {
+      await callAi("پاسخ فقط یک کلمه: سلام", "تست اتصال به هوش مصنوعی", apiKey, provider);
+      saveAiConfig({ provider, apiKey });
+      statusEl.className = "form-error ai-test-status success";
+      statusEl.textContent = "✅ اتصال موفقیت‌آمیز بود! کلید هوش مصنوعی با موفقیت در این مرورگر ذخیره شد.";
+      syncAiUI();
+      showToast("دستیار هوش مصنوعی فعال شد.");
+      setTimeout(() => { if ($("aiGuideDialog").open) $("aiGuideDialog").close(); }, 1200);
+    } catch (err) {
+      statusEl.className = "form-error ai-test-status error";
+      statusEl.textContent = `❌ ${err.message || "خطا در برقراری ارتباط با هوش مصنوعی"}`;
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "تست و ذخیرهٔ کلید";
+    }
+  });
+  $("aiClearKey").addEventListener("click", () => {
+    saveAiConfig({ provider: "gemini", apiKey: "" });
+    $("aiApiKeyInput").value = "";
+    const statusEl = $("aiTestStatus");
+    statusEl.className = "form-error ai-test-status";
+    statusEl.textContent = "کلید ذخیره‌شده پاک شد.";
+    statusEl.style.display = "block";
+    syncAiUI();
+    showToast("کلید هوش مصنوعی حذف شد.");
   });
   document.querySelectorAll("[data-theme]").forEach(b => b.addEventListener("click", () => { readerPrefs.theme = b.dataset.theme; saveReaderPrefs(); applyReaderStyles(); }));
   document.querySelectorAll("[data-align]").forEach(b => b.addEventListener("click", () => { readerPrefs.align = b.dataset.align; saveReaderPrefs(); applyReaderStyles(); }));
@@ -2886,6 +3155,16 @@
       if (!quote) { try { quote = String(pendingSelection.contents.window.getSelection()).trim(); } catch (_) {} }
       hideSelectionBar();
       shareQuote(quote.slice(0, 600));
+    }
+    else if (act === "ai" && pendingSelection) {
+      let quote = "";
+      try { quote = String(await bookInstance.getRange(pendingSelection.cfiRange) || "").trim(); } catch (_) {}
+      if (!quote) { try { quote = String(pendingSelection.contents.window.getSelection()).trim(); } catch (_) {} }
+      hideSelectionBar();
+      openAi(quote);
+      if (hasAiKey()) {
+        askAiPrompt("لطفاً این متن انتخابی را به زبان ساده و روان توضیح بده و پیام اصلی آن را بیان کن.", quote);
+      }
     }
     else if (act === "note" && currentBook && currentBook.preview) { hideSelectionBar(); showToast(PREVIEW_NO_SAVE); }
     else if (act === "note") { const note = prompt("یادداشت تو برای این قسمت:", ""); if (note !== null) await createHighlight("yellow", note.trim()); }

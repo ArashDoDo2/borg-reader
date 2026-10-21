@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-21, version **8.11.0** (live at https://parsun.com/borg/).
+Last updated: 2026-10-21, version **8.12.0** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -61,6 +61,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.10.4 | Mobile/iPhone reading experience optimization: streamlined compact reader bottom bar (-24px vertical height), direct fullscreen button and auto-immersive option («پنهان کردن خودکار نوارها هنگام ورق زدن») in Aa settings panel |
 | 8.10.5 | Sync page-nav direction and button labels/arrows with book reading direction: in English (LTR) books, «← قبلی» is on the left and «بعدی →» on the right, matching edge margin taps |
 | 8.11.0 | Visual comfort & eye care: Warm Amber («کهربایی») blue-light-free night theme, Mint Paper («نعنایی») daytime low-glare theme, font weight picker (معمولی/متوسط/توپر) for crisper mobile typography, and in-reader screen brightness dimmer |
+| 8.12.0 | AI Reading Companion (BYOK): landing page showcase & onboarding guide, 100% private client-side integration for Google Gemini & OpenAI, selection bar AI explanation & translation, chapter summary, key insights, and interactive book Q&A |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);

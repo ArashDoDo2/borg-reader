@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.11.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data:; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta name="app-version" content="8.12.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data: https://generativelanguage.googleapis.com https://api.openai.com; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="assets/icon-192.png">
@@ -40,6 +40,7 @@
           <span class="hero-badge"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>مطالعهٔ کاملاً آفلاین</span>
           <span class="hero-badge"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/><path d="M6 6h10M6 10h10"/></svg>پشتیبانی EPUB و PDF</span>
           <span class="hero-badge"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>حفظ حریم خصوصی</span>
+          <span id="heroAiBadge" class="hero-badge hero-badge-ai"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/><path d="M19 3v4M21 5h-4"/></svg>دستیار هوش مصنوعی (رایگان)</span>
         </div>
         <p class="privacy-note">کتاب‌ها روی همین دستگاه ذخیره می‌شوند؛ با ورود به حساب، کتاب‌ها و محل مطالعه بین دستگاه‌هایت همگام می‌شوند.</p>
       </div>
@@ -67,6 +68,22 @@
           </div>
         </div>
         <button id="teaserLogin" class="primary-button teaser-btn" type="button">ورود / استفاده از کد دعوت</button>
+      </div>
+
+      <div id="aiTeaser" class="catalog-teaser ai-teaser">
+        <div class="teaser-content">
+          <div class="teaser-icon ai-icon" aria-hidden="true">
+            <svg class="ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/><path d="M19 3v4M21 5h-4"/></svg>
+          </div>
+          <div class="teaser-copy">
+            <div class="teaser-title-row">
+              <strong class="teaser-title">دستیار هوش مصنوعی بُرگ (با کلید اختصاصی شما)</strong>
+              <span class="teaser-pill ai-pill">ویژه مطالعه</span>
+            </div>
+            <p class="teaser-desc">خلاصه‌سازی هوشمند فصل‌ها، توضیح پاراگراف‌های دشوار و پرسش از کتاب با هوش مصنوعی (Google Gemini و OpenAI)؛ کاملاً رایگان، بدون واسطه و با حفظ ۱۰۰٪ حریم خصوصی.</p>
+          </div>
+        </div>
+        <button id="aiTeaserButton" class="secondary-button teaser-btn ai-teaser-btn" type="button">✨ راهنمای فعال‌سازی و تنظیم کلید</button>
       </div>
 
       <nav class="view-tabs" role="tablist" aria-label="بخش‌ها">
@@ -333,6 +350,7 @@
       <span class="sync-wrap reader-sync-wrap" role="status" aria-live="polite"><button id="readerSync" class="sync-chip reader-sync" type="button" data-state="" hidden></button></span>
       <div class="reader-tools">
         <button id="ttsToggle" class="icon-button" type="button" aria-label="خواندن با صدا" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4.2 4.2 0 0 1 0 6M18.3 6.3a8 8 0 0 1 0 11.4"/></svg></button>
+        <button id="aiToggle" class="icon-button ai-toggle" type="button" aria-label="دستیار هوش مصنوعی" aria-expanded="false" aria-controls="aiPanel" title="دستیار هوش مصنوعی"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/><path d="M19 3v4M21 5h-4"/></svg></button>
         <button id="searchToggle" class="icon-button" type="button" aria-label="جست‌وجو در کتاب" aria-expanded="false" aria-controls="searchPanel"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></svg></button>
         <button id="settingsToggle" class="icon-button settings-toggle" type="button" aria-label="تنظیمات نمایش" aria-expanded="false" aria-controls="settingsPanel">Aa</button>
       </div>
@@ -340,6 +358,33 @@
         <form id="bookSearchForm" class="search-form"><input id="bookSearchInput" type="search" placeholder="جست‌وجو در متن کتاب…" aria-label="جست‌وجو در متن کتاب" enterkeyhint="search" autocomplete="off"><button class="secondary-button" type="submit">بگرد</button></form>
         <p id="bookSearchStatus" class="muted search-status" aria-live="polite"></p>
         <div id="bookSearchResults" class="search-results"></div>
+      </div>
+      <div id="aiPanel" class="settings-panel ai-panel" role="dialog" aria-label="دستیار هوش مصنوعی" hidden>
+        <div class="sheet-head"><span class="sheet-grab" aria-hidden="true"></span><h2 class="sheet-title">✨ دستیار هوش مصنوعی</h2><button id="aiClose" class="icon-button sheet-close" type="button" aria-label="بستن دستیار"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div id="aiPanelBody" class="ai-panel-body">
+          <div id="aiSetupPrompt" class="ai-setup-prompt" hidden>
+            <p class="ai-setup-text">برای استفاده از خلاصه‌سازی و تحلیل هوشمند، کلید رایگان خود را وارد کنید.</p>
+            <button id="aiOpenSetup" class="primary-button" type="button">✨ تنظیم کلید اختصاصی (رایگان)</button>
+          </div>
+          <div id="aiMainInterface" class="ai-main-interface" hidden>
+            <div class="ai-quick-actions">
+              <button id="aiBtnSummary" class="secondary-button ai-action-btn" type="button">📑 خلاصه این فصل</button>
+              <button id="aiBtnTakeaways" class="secondary-button ai-action-btn" type="button">💡 نکات کلیدی</button>
+              <button id="aiBtnQuestions" class="secondary-button ai-action-btn" type="button">❓ پرسش‌های این فصل</button>
+            </div>
+            <div id="aiContextBadge" class="ai-context-badge" hidden><span id="aiContextText"></span><button id="aiClearContext" class="icon-button" type="button" aria-label="حذف متن انتخابی">×</button></div>
+            <div id="aiConversation" class="ai-conversation">
+              <div id="aiResponse" class="ai-response" dir="auto">برای خلاصه‌سازی یا طرح سوال، از دکمه‌های بالا استفاده کنید یا سوال خود را بنویسید.</div>
+            </div>
+            <form id="aiPromptForm" class="ai-prompt-form">
+              <input id="aiPromptInput" type="text" placeholder="هر سوالی از این بخش داری بپرس…" aria-label="سوال از هوش مصنوعی" autocomplete="off">
+              <button id="aiPromptSubmit" class="primary-button" type="submit">بپرس</button>
+            </form>
+            <div class="ai-panel-footer">
+              <button id="aiChangeKey" class="text-button small" type="button">⚙ تنظیمات کلید هوش مصنوعی</button>
+            </div>
+          </div>
+        </div>
       </div>
       <div id="settingsPanel" class="settings-panel" role="dialog" aria-label="تنظیمات نمایش" hidden>
         <div class="sheet-head"><span class="sheet-grab" aria-hidden="true"></span><h2 class="sheet-title">تنظیمات نمایش</h2><button id="settingsClose" class="icon-button sheet-close" type="button" aria-label="بستن تنظیمات"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
@@ -472,6 +517,7 @@
             <button type="button" data-sel="note">✎ یادداشت</button>
             <button type="button" data-sel="quote">🖼 کارت نقل‌قول</button>
             <button type="button" data-sel="define">📖 معنی</button>
+            <button type="button" data-sel="ai">✨ هوش مصنوعی</button>
             <button type="button" data-sel="copy">⧉ کپی</button>
           </span>
           <span class="sel-edit" hidden>
@@ -624,11 +670,52 @@
       <button id="submitOk" class="primary-button" type="submit">ارسال برای کتابخانهٔ عمومی</button>
     </form>
   </dialog>
+  <dialog id="aiGuideDialog" class="account-dialog ai-guide-dialog" aria-labelledby="aiGuideTitle">
+    <button id="aiGuideClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <h2 id="aiGuideTitle">✨ دستیار هوش مصنوعی با کلید اختصاصی</h2>
+    <div class="ai-guide-body">
+      <div class="ai-badges-summary">
+        <span class="ai-chip">⚡ خلاصه‌سازی فصل‌ها</span>
+        <span class="ai-chip">💡 استخراج نکات کلیدی</span>
+        <span class="ai-chip">🔍 توضیح متون دشوار</span>
+        <span class="ai-chip">🔒 ۱۰۰٪ محرمانه و بدون هزینه</span>
+      </div>
+      <div class="ai-guide-info">
+        <strong>کلید اختصاصی (BYOK) چیست و چرا رایگان است؟</strong>
+        <p>به جای اشتراک‌های ماهانه گران‌قیمت، می‌توانید از سهمیهٔ <strong>کاملاً رایگان و نامحدود</strong> هوش مصنوعی Google Gemini استفاده کنید. کلید شما فقط در مرورگر همین دستگاه ذخیره می‌شود و هیچ سرور واسطه‌ای متن‌های شما را نمی‌خواند.</p>
+      </div>
+      <div class="ai-steps-box">
+        <strong>راهنمای ۳ مرحله‌ای دریافت کلید رایگان (کمتر از ۱ دقیقه):</strong>
+        <ol class="ai-steps-list">
+          <li>وارد سایت رسمی <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio (کلیک کنید)</a> شوید (با اکانت جیمیل خود).</li>
+          <li>روی دکمهٔ آبی‌رنگ <strong>«Create API key»</strong> کلیک کنید.</li>
+          <li>کلید ساخته‌شده (که با <code>AIzaSy...</code> شروع می‌شود) را کپی کرده و در کادر زیر قرار دهید.</li>
+        </ol>
+        <p class="small muted">نکته: اگر اکانت OpenAI (ChatGPT) دارید هم می‌توانید کلید OpenAI خود را وارد کنید.</p>
+      </div>
+      <form id="aiConfigForm" class="auth-form" novalidate>
+        <label>سرویس‌دهنده
+          <select id="aiProviderSelect" class="reader-select" style="width:100%;margin-top:4px">
+            <option value="gemini" selected>Google Gemini (پیشنهاد بُرگ — رایگان و سریع)</option>
+            <option value="openai">OpenAI (ChatGPT)</option>
+          </select>
+        </label>
+        <label>کلید API اختصاصی
+          <input id="aiApiKeyInput" type="password" placeholder="مثلاً: AIzaSyB..." autocomplete="off" spellcheck="false" required>
+        </label>
+        <p id="aiTestStatus" class="form-error ai-test-status" role="alert" style="display:none"></p>
+        <div class="ai-actions-row">
+          <button id="aiTestAndSave" class="primary-button" type="submit">تست و ذخیرهٔ کلید</button>
+          <button id="aiClearKey" class="text-button" type="button">حذف کلید فعلی</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
   <datalist id="admCatList"></datalist>
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۱۱.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۱۲.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>
