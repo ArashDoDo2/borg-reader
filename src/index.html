@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.13.7">
+  <meta name="app-version" content="8.13.8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data: https://generativelanguage.googleapis.com https://api.openai.com; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -102,6 +102,7 @@
           <div id="librarySearchBox" class="search-box lib-search" role="search"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="جستجو در عنوان، نویسنده، ناشر…" autocomplete="off" aria-label="جستجو در کتابخانهٔ من" aria-keyshortcuts="/" enterkeyhint="search"><button id="librarySearchClear" class="lib-search-clear" type="button" aria-label="پاک کردن جستجو" title="پاک کردن جستجو (Esc)" hidden>×</button></div>
           <label class="secondary-button import-button"><svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg><span>افزودن<span class="lbl-long"> کتاب</span></span><input id="epubInputSmall" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" multiple hidden></label>
           <button id="cleanOpen" class="secondary-button clean-open" type="button" aria-haspopup="dialog" title="حذف عبارت‌های ناخواسته (مثل لینک کانال) از متن همهٔ کتاب‌ها" aria-label="پاک‌سازی متن"><span>🧹 پاک‌سازی<span class="lbl-long"> متن</span></span></button>
+          <button id="libAiSettings" class="secondary-button lib-ai-settings" type="button" aria-haspopup="dialog" title="تنظیمات یا حذف کلید هوش مصنوعی" aria-label="تنظیمات هوش مصنوعی" hidden><span>✨<span class="lbl-long"> هوش مصنوعی</span></span></button>
         </div>
       </div>
       <div id="statsCard" class="stats-card" hidden>
@@ -556,7 +557,7 @@
       <p id="accountName" class="account-name"></p>
       <p id="accountEmail" class="muted" dir="ltr"></p>
       <p class="muted">کتاب‌ها و محل مطالعه بین همهٔ دستگاه‌هایی که با این حساب وارد شده‌اند همگام می‌شوند.</p>
-      <div class="dialog-actions"><button id="syncNow" class="secondary-button" type="button">همگام‌سازی الان</button><button id="logoutButton" class="secondary-button" type="button">خروج</button></div>
+      <div class="dialog-actions"><button id="accountAiSettings" class="secondary-button" type="button">✨ تنظیمات هوش مصنوعی</button><button id="syncNow" class="secondary-button" type="button">همگام‌سازی الان</button><button id="logoutButton" class="secondary-button" type="button">خروج</button></div>
     </div>
   </dialog>
   <div id="imageViewer" class="image-viewer" role="dialog" aria-label="تصویر" hidden>
@@ -769,7 +770,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۱۳.۷</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۱۳.۸</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

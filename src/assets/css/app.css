@@ -500,7 +500,7 @@ body.dark .cat-chip{background:#3d3524;color:#e5c58b}
 .reader-guide-card .primary-button{width:100%}
 @media(max-width:700px){.reader-guide{padding:10px}.reader-guide-card{padding:14px 16px}.reader-guide-list{font-size:12px;gap:6px}.reader-guide-edge{font-size:11px}}
 /* v8.3 text cleanup */
-.clean-open{white-space:nowrap}
+.clean-open, .lib-ai-settings{white-space:nowrap}
 .clean-dialog .dialog-actions[hidden]{display:none}
 .clean-dialog{width:min(560px,calc(100vw - 24px));max-height:calc(100vh - 32px);overflow:auto}
 .clean-intro{margin:0 0 12px;line-height:1.9}
@@ -523,7 +523,7 @@ body.dark .clean-broad{background:#3d3220;color:#f0d9a8}
 .clean-count{margin-inline-start:auto;font-size:11px;color:var(--green2);font-weight:700}
 .clean-snips{margin:6px 0 0;padding:0 18px 0 0;font-size:12px;color:var(--muted);display:flex;flex-direction:column;gap:3px;overflow-wrap:anywhere}
 .clean-snips mark{background:#f6d48a;color:#3b2a06;border-radius:3px;padding:0 2px}
-@media(max-width:700px){.clean-open{flex:1 1 auto;padding:10px 12px}.clean-dialog{padding:20px 16px}}
+@media(max-width:700px){.clean-open, .lib-ai-settings{flex:1 1 auto;padding:10px 12px}.clean-dialog{padding:20px 16px}}
 
 /* v8.4 error reports */
 .stat.stat-errors b{color:#b3412e}

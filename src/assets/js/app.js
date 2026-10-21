@@ -3084,6 +3084,10 @@
     const hasKey = hasAiKey();
     $("aiSetupPrompt").hidden = hasKey;
     $("aiMainInterface").hidden = !hasKey;
+    const teaser = $("aiTeaser");
+    if (teaser) teaser.hidden = hasKey;
+    const libAi = $("libAiSettings");
+    if (libAi) libAi.hidden = !hasKey;
   }
 
   async function askAiPrompt(userQuestion, contextOverride = "") {
@@ -3132,6 +3136,13 @@
   $("aiGuideClose").addEventListener("click", () => $("aiGuideDialog").close());
   $("aiOpenSetup").addEventListener("click", () => { closeAi(false); openAiGuideDialog(); });
   $("aiChangeKey").addEventListener("click", openAiGuideDialog);
+  const libAi = $("libAiSettings");
+  if (libAi) libAi.addEventListener("click", openAiGuideDialog);
+  const accountAi = $("accountAiSettings");
+  if (accountAi) accountAi.addEventListener("click", () => {
+    $("accountDialog").close();
+    openAiGuideDialog();
+  });
   $("aiClearContext").addEventListener("click", () => {
     aiContextText = "";
     $("aiContextBadge").hidden = true;
@@ -6670,6 +6681,7 @@
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && account && navigator.onLine) sync(); });
   window.addEventListener("online", () => { if (account) sync(); else initAccount(); });
   syncSettingsUI();
+  syncAiUI();
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     // The SW activates immediately (skipWaiting); when it replaces an existing one, offer a reload.
     const hadController = !!navigator.serviceWorker.controller;
