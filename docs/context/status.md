@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-22, version **8.13.11** (live at https://parsun.com/borg/).
+Last updated: 2026-10-22, version **8.13.12** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -74,6 +74,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.9 | AI Book Description Generation: add `✨ نگارش با هوش مصنوعی` button to admin book edit form, catalog suggestion dialog, import from URL dialog, and library book options dialog; extract EPUB description on import |
 | 8.13.10 | Chapter summary persistence & notes integration: cache chapter summaries locally, auto-restore on reopening AI panel, add `📌 ذخیره در یادداشت‌های کتاب` and `📋 کپی متن`, and completely eliminate empty green context badge |
 | 8.13.11 | Support Google Interactions API & migrate to `gemini-3.8-flash`: purge deprecated `gemini-2.5-flash`, add `callGeminiInteractions` endpoint support, and prioritize Gemini 3.8 / 3.5 models |
+| 8.13.12 | Add «🔍 استخراج ناشر و تاریخ» button: inspect EPUB OPF & colophon text, with AI strict non-guessing prompt to only fill publisher/date when 100% verified |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);

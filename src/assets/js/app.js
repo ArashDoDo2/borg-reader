@@ -3352,6 +3352,104 @@
     return await callAi(userPrompt, systemPrompt, "", "", onChunk);
   }
 
+  async function extractBookPublisherAndDate(title, author, bookId = null) {
+    let sampleText = "";
+    let directPublisher = "";
+    let directPublished = "";
+
+    if (bookId) {
+      try {
+        let bookBlob = null;
+        if (typeof getBook === "function") {
+          const localBook = await getBook(bookId).catch(() => null);
+          if (localBook) bookBlob = fileOf(localBook);
+        }
+        if (!bookBlob && typeof api === "function") {
+          const res = await api("book-file", { query: `&id=${bookId}` }).catch(() => null);
+          if (res) bookBlob = await res.blob().catch(() => null);
+        }
+        if (bookBlob && typeof window.JSZip === "function") {
+          const zip = await JSZip.loadAsync(await bookBlob.arrayBuffer());
+          const containerFile = zip.file("META-INF/container.xml");
+          if (containerFile) {
+            const containerXml = await containerFile.async("text");
+            const opfMatch = /full-path\s*=\s*["']([^"']+)["']/i.exec(containerXml);
+            if (opfMatch) {
+              const opfText = await zip.file(opfMatch[1])?.async("text");
+              if (opfText) {
+                const pubMatch = /<dc:publisher[^>]*>([^<]+)<\/dc:publisher>/i.exec(opfText);
+                const dateMatch = /<dc:date[^>]*>([^<]+)<\/dc:date>/i.exec(opfText);
+                if (pubMatch) directPublisher = pubMatch[1].trim();
+                if (dateMatch) {
+                  let d = dateMatch[1].trim();
+                  const iso = /^(\d{4}(?:-\d{2}(?:-\d{2})?)?)T/.exec(d);
+                  directPublished = iso ? iso[1] : d;
+                }
+              }
+            }
+          }
+          const htmlFiles = Object.keys(zip.files)
+            .filter(f => /\.(html|xhtml|htm)$/i.test(f) && !/toc|nav/i.test(f))
+            .slice(0, 3);
+          for (const hf of htmlFiles) {
+            const hText = await zip.file(hf)?.async("text");
+            if (hText) {
+              const clean = hText.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+                                 .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
+                                 .replace(/<[^>]+>/g, " ")
+                                 .replace(/\s+/g, " ")
+                                 .trim();
+              if (clean) sampleText += clean.slice(0, 1500) + "\n";
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Could not inspect book archive for metadata:", err);
+      }
+    }
+
+    if (directPublisher && directPublished) {
+      return { publisher: directPublisher, published: directPublished, source: "opf" };
+    }
+
+    if (hasAiKey()) {
+      const cleanTitle = (title || "").trim();
+      const cleanAuthor = (author || "").trim();
+      const systemPrompt = "شما کارشناس کتابداری و اعتبارسنجی دقیق فراداده کتاب هستید. اطلاعات باید فقط بر اساس مستندات قطعی استخراج شوند. حدس، تخمین، گمانه‌زنی یا توهم تحت هیچ شرایطی مجاز نیست.";
+      const userPrompt = `اطلاعات زیر مربوط به یک کتاب است:
+عنوان: «${cleanTitle}»
+نویسنده: «${cleanAuthor}»
+${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher}»\n` : ""}${directPublished ? `تاریخ کشف‌شده در فایل: «${directPublished}»\n` : ""}${sampleText ? `متن صفحات آغازین و شناسنامه کتاب:\n«««\n${sampleText.slice(0, 2500)}\n»»»\n` : ""}
+دستورالعمل قطعی و غیرقابل شکست:
+۱. نام ناشر (publisher) و سال یا تاریخ انتشار (published) را استخراج کن.
+۲. قانون بسیار حیاتی: اگر نام ناشر یا سال انتشار با قطعیت ۱۰۰٪ مشخص نیست، یا در متن نیامده و نمی‌توان بدون حدس زدن آن را با قطعیت اثبات کرد، حتماً آن فیلد را کاملاً خالی "" بگذار. به هیچ وجه سال یا ناشری را حدس نزن، تخمین نزن یا تقریب نزن.
+۳. در صورت قطعی بودن، سال را به صورت ۴ رقمی (مثلاً 1402 یا 2021) یا تاریخ استاندارد بنویس.
+۴. پاسخ را صرفاً در قالب یک شیء JSON با دو کلید "publisher" و "published" بنویس و هیچ متن، توضیح یا سلامی اضافه نکن:
+{"publisher": "...", "published": "..."}`;
+
+      try {
+        const reply = await callAi(userPrompt, systemPrompt);
+        const jsonMatch = reply.match(/\{[\s\S]*?\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          return {
+            publisher: String(parsed.publisher || directPublisher || "").trim(),
+            published: String(parsed.published || directPublished || "").trim(),
+            source: "ai"
+          };
+        }
+      } catch (err) {
+        console.warn("AI metadata extraction error:", err);
+      }
+    }
+
+    return {
+      publisher: directPublisher || "",
+      published: directPublished || "",
+      source: directPublisher || directPublished ? "opf" : "none"
+    };
+  }
+
   async function askAiPrompt(userQuestion, contextOverride = "", type = "general", forceFresh = false) {
     if (aiBusy) return;
 
@@ -5995,6 +6093,51 @@
       } finally {
         admAiDesc.disabled = false;
         admAiDesc.textContent = prevText;
+      }
+    });
+  }
+  const admExtractMeta = $("admDetailExtractMeta");
+  if (admExtractMeta) {
+    admExtractMeta.addEventListener("click", async () => {
+      const b = adm.detail;
+      const f = $("admDetailForm");
+      const title = f.elements.title.value.trim();
+      const author = f.elements.author.value.trim();
+      if (!title && !author) {
+        showToast("ابتدا عنوان یا نام نویسنده را وارد کنید.");
+        return;
+      }
+      admExtractMeta.disabled = true;
+      const prevText = admExtractMeta.textContent;
+      admExtractMeta.textContent = "🔍 در حال استخراج…";
+      try {
+        const res = await extractBookPublisherAndDate(title, author, b?.id);
+        let filledCount = 0;
+        const msgs = [];
+
+        if (res.publisher) {
+          f.elements.publisher.value = res.publisher;
+          msgs.push(`ناشر: «${res.publisher}»`);
+          filledCount++;
+        }
+        if (res.published) {
+          f.elements.published.value = res.published;
+          msgs.push(`تاریخ: «${res.published}»`);
+          filledCount++;
+        }
+
+        if (filledCount === 2) {
+          showToast(`✅ ${msgs.join(" و ")} استخراج شد.`);
+        } else if (filledCount === 1) {
+          showToast(`✅ ${msgs[0]} استخراج شد (مورد دیگر قطعی نبود و طبق دستور خالی ماند).`);
+        } else {
+          showToast("ناشر یا تاریخ قطعی در کتاب یافت نشد (طبق دستور، خالی ماندند).");
+        }
+      } catch (err) {
+        showToast(err.message || "خطا در استخراج مشخصات");
+      } finally {
+        admExtractMeta.disabled = false;
+        admExtractMeta.textContent = prevText;
       }
     });
   }
