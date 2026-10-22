@@ -718,10 +718,11 @@ def run_migration7():
 def tiny_epub(path, n):
     """The smallest EPUB validate_epub accepts (mimetype + container.xml), unique per n."""
     import zipfile
+    dt = (2025, 1, 1, 0, 0, 0)
     with zipfile.ZipFile(path, "w") as z:
-        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
-        z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
-        z.writestr("c.xhtml", f"<p>{n}</p>" + "x" * (n * 37 % 500))  # sizes differ, for sort=size
+        z.writestr(zipfile.ZipInfo("mimetype", dt), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        z.writestr(zipfile.ZipInfo("META-INF/container.xml", dt), '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="c.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+        z.writestr(zipfile.ZipInfo("c.xhtml", dt), f"<p>{n}</p>" + "x" * (n * 37 % 500))  # sizes differ, for sort=size
     return path
 
 def search_norm_py(s):
@@ -1730,6 +1731,7 @@ def run(base, tmp):
     run_migration9()
     run_large_catalog()
     run_categories()
+    run_student_role(base, tmp, admin, user)
 
     st, r = anon.call("GET", "nope")
     check("unknown route 404", st == 404)
@@ -1758,6 +1760,87 @@ def run_admin_import_url(base, admin, user):
 
     st, r = admin.call("POST", "admin-import-url", {"url": "http://169.254.169.254/latest/meta-data"})
     check("admin-import-url SSRF metadata ip rejected -> 400", st == 400 and r.get("error") == "forbidden_host")
+
+def run_student_role(base, tmp, admin, user):
+    # 1. Admin creates invite with role: student
+    st, r = admin.call("POST", "invites", {"note": "دانشجو placement", "role": "student"})
+    code = r["code"]
+    check("admin creates student invite", st == 201 and len(code) == 10)
+    st, inv_list = admin.call("GET", "invites")
+    sinv = [i for i in inv_list["invites"] if i["note"] == "دانشجو placement"][0]
+    check("invites list returns student role", sinv["role"] == "student" and sinv["note"] == "دانشجو placement")
+
+    # 2. Register student
+    student = Client(base)
+    st, reg = student.call("POST", "register", {"invite": code, "email": "student@x.io", "password": "passwordStudent", "name": "دانشجوی تست"})
+    check("student registered with role 'student'", st == 201 and reg["user"]["role"] == "student")
+    student_id = reg["user"]["id"]
+
+    # 3. Student catalog restrictions
+    st, cat = student.call("GET", "catalog")
+    check("student GET catalog returns empty", st == 200 and cat["books"] == [] and cat["total"] == 0)
+    st, cats = student.call("GET", "categories")
+    check("student GET categories returns empty", st == 200 and cats["categories"] == [])
+
+    # 4. Student can upload to their personal library
+    s_epub = tmp / "student_book.epub"
+    tiny_epub(s_epub, 9901)
+    st, up = upload(student, s_epub, "کتاب دانشجو")
+    check("student can upload book to own library", st == 201 or st == 200)
+    s_book_id = up["book"]["id"]
+
+    # Student can read their own book
+    st, _ = student.call("GET", "book-file", query=f"&id={s_book_id}")
+    check("student can download/read their own uploaded book", st == 200)
+
+    # Student cannot submit book to public catalog
+    st, r = student.call("POST", "catalog-submit", {"book_id": s_book_id})
+    check("student cannot submit book to catalog (403)", st == 403)
+
+    # Student cannot add from catalog
+    st, r = student.call("POST", "catalog-add", {"book_id": s_book_id})
+    check("student cannot add from catalog (403)", st == 403)
+
+    # 5. Admin can assign and unassign book to/from student library
+    adm_epub = tmp / "admin_book.epub"
+    tiny_epub(adm_epub, 9902)
+    st, up_adm = upload(admin, adm_epub, "کتاب داکیومنت شرکت")
+    adm_book_id = up_adm["book"]["id"]
+
+    # Before assignment, student cannot read admin's book
+    st, _ = student.call("GET", "book-file", query=f"&id={adm_book_id}")
+    check("student cannot read unassigned book", st == 404 or st == 403)
+
+    # Admin assigns book to student
+    st, r = admin.call("POST", "admin-assign-book", {"book_id": adm_book_id, "user_id": student_id, "action": "assign"})
+    check("admin assigns book to student", st == 200 and r.get("ok") is True)
+
+    # Check admin-book-users
+    st, bu = admin.call("GET", "admin-book-users", query=f"&id={adm_book_id}")
+    check("admin-book-users includes student id", st == 200 and student_id in bu.get("assigned_user_ids", []))
+
+    # Now student has the book in their library and can read it
+    st, slib = student.call("GET", "library")
+    check("student library includes assigned book", st == 200 and adm_book_id in [b["id"] for b in slib["books"]])
+    st, _ = student.call("GET", "book-file", query=f"&id={adm_book_id}")
+    check("student can download/read assigned book", st == 200)
+
+    # Admin unassigns book
+    st, r = admin.call("POST", "admin-assign-book", {"book_id": adm_book_id, "user_id": student_id, "action": "unassign"})
+    check("admin unassigns book from student", st == 200)
+    st, bu2 = admin.call("GET", "admin-book-users", query=f"&id={adm_book_id}")
+    check("admin-book-users excludes student id after unassign", st == 200 and student_id not in bu2.get("assigned_user_ids", []))
+
+    # 6. Admin can change student role to user and back
+    st, _ = admin.call("POST", "user-update", {"user_id": student_id, "role": "user"})
+    check("admin can update student role to user", st == 200)
+    st, me_u = student.call("GET", "me")
+    check("student is now user", st == 200 and me_u["user"]["role"] == "user")
+
+    st, _ = admin.call("POST", "user-update", {"user_id": student_id, "role": "student"})
+    check("admin can update user role back to student", st == 200)
+    st, me_s = student.call("GET", "me")
+    check("user is now student again", st == 200 and me_s["user"]["role"] == "student")
 
 def main():
     gh = os.environ.get("GITHUB_ACTIONS")

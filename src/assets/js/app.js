@@ -3898,7 +3898,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     if (descEl) descEl.value = b.description || "";
     $("shelfChecks").innerHTML = shelvesCache.length ? shelvesCache.map(sh => `<label><input type="checkbox" data-shelf="${esc(sh.uid)}" ${(b.shelves || []).includes(sh.uid) ? "checked" : ""}> ${esc(sh.name)}
         <button type="button" class="note-del" data-shelf-del="${esc(sh.uid)}" aria-label="حذف قفسه">×</button></label>`).join("") : '<p class="muted small">هنوز قفسه‌ای نساخته‌ای.</p>';
-    $("bookOptionsActions").innerHTML = (account && b.serverId && !b.catalogStatus ? `<button class="secondary-button" type="button" data-opt="share">⇪ پیشنهاد برای کتابخانهٔ عمومی</button>` : "")
+    $("bookOptionsActions").innerHTML = (account && account.user?.role !== "student" && b.serverId && !b.catalogStatus ? `<button class="secondary-button" type="button" data-opt="share">⇪ پیشنهاد برای کتابخانهٔ عمومی</button>` : "")
       + `<button class="secondary-button" type="button" data-opt="remove">حذف کتاب</button>`;
   }
   const bOptDesc = $("bookOptionsDesc");
@@ -4087,11 +4087,12 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     account = acc;
     const user = acc && acc.user;
     $("accountButton").textContent = user ? user.name : "ورود";
-    document.querySelector('[data-view="catalog"]').hidden = !user;
+    const isStudent = user && user.role === "student";
+    document.querySelector('[data-view="catalog"]').hidden = !user || isStudent;
     document.querySelector('[data-view="admin"]').hidden = !(user && user.role === "admin");
     const teaser = $("catalogTeaser");
     if (teaser) teaser.hidden = !!user;
-    if (!user) {
+    if (!user || (isStudent && location.hash.startsWith("#catalog"))) {
       showView("mine"); syncChip.at = 0; syncChip.failed = false; unpushedProgress.clear(); setSyncStatus("");
       resetCatalog(); previewCache = null;
       if (location.hash.startsWith("#catalog")) setHash("", false);
@@ -4099,7 +4100,10 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     }
     $("authForms").hidden = !!user;
     $("accountInfo").hidden = !user;
-    if (user) { $("accountName").textContent = user.name; $("accountEmail").textContent = user.email; }
+    if (user) {
+      $("accountName").textContent = user.name;
+      $("accountEmail").textContent = user.email + (user.role === "student" ? " · 🎓 دانشجو" : (user.role === "admin" ? " · مدیر" : ""));
+    }
     if (!user || user.role !== "admin") { hideNewApiToken(); setCleanSyncState(""); }
     else pullCleanRules();
     renderLibrary();
@@ -4108,6 +4112,10 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   // ---------- Views ----------
   // "book" is a catalog book's page; it lives under the catalog tab.
   function showView(view) {
+    if (account?.user?.role === "student" && (view === "catalog" || view === "book")) {
+      view = "mine";
+      if (location.hash.startsWith("#catalog")) setHash("", false);
+    }
     const tab = view === "book" ? "catalog" : view;
     document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.setAttribute("aria-selected", String(t.dataset.view === tab)));
     $("viewMine").hidden = view !== "mine";
@@ -4989,6 +4997,11 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   function routeFromHash() {
     if (!account) return;
     if (readerOpen() && currentBook && currentBook.preview) closeReader();
+    if (account?.user?.role === "student" && location.hash.startsWith("#catalog")) {
+      setHash("", false);
+      showView("mine");
+      return;
+    }
     const m = /^#catalog\/book\/(\d+)/.exec(location.hash);
     if (m) { detailId = Number(m[1]); showView("book"); }
     else if (location.hash.startsWith("#catalog")) {
@@ -5502,20 +5515,24 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     let users;
     try { users = await api("users"); } catch (err) { $("userList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; return; }
     const fa = faNum, me = account?.user?.id;
-    $("userList").innerHTML = users.users.map(u => `<div class="admin-item" data-user="${u.id}">
+    $("userList").innerHTML = users.users.map(u => {
+      const roleText = u.role === "admin" ? "مدیر" : (u.role === "student" ? "🎓 دانشجو" : "کاربر");
+      return `<div class="admin-item" data-user="${u.id}">
         <span>${esc(u.name)} <span class="muted" dir="ltr">${esc(u.email)}</span><br>
-        <span class="muted small">${u.role === "admin" ? "مدیر" : "کاربر"} · ${fa(u.books)} کتاب${u.last_seen ? ` · آخرین ورود ${fmtDate(u.last_seen)}` : ""}</span>
+        <span class="muted small">${roleText} · ${fa(u.books)} کتاب${u.last_seen ? ` · آخرین ورود ${fmtDate(u.last_seen)}` : ""}</span>
         ${u.disabled ? '<span class="status-chip off">غیرفعال</span>' : ""}</span>
         ${u.id === me ? '<span class="muted small">(خودت)</span>' : `<span class="admin-row">
           <button class="secondary-button" type="button" data-user-act="${u.disabled ? "enable" : "disable"}">${u.disabled ? "فعال کردن" : "غیرفعال کردن"}</button>
           <button class="secondary-button" type="button" data-user-act="${u.role === "admin" ? "demote" : "promote"}">${u.role === "admin" ? "کاربر عادی شود" : "مدیر شود"}</button>
+          ${u.role !== "admin" ? `<button class="secondary-button" type="button" data-user-act="${u.role === "student" ? "set-user" : "set-student"}">${u.role === "student" ? "کاربر عادی شود" : "🎓 دانشجو شود"}</button>` : ""}
           <button class="secondary-button" type="button" data-user-act="reset">ریست رمز</button>
-          <button class="secondary-button" type="button" data-user-act="delete">حذف</button></span>`}</div>`).join("");
+          <button class="secondary-button" type="button" data-user-act="delete">حذف</button></span>`}</div>`;
+    }).join("");
   }
   async function loadInvites() {
     let invites;
     try { invites = await api("invites"); } catch (err) { $("inviteList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; return; }
-    $("inviteList").innerHTML = invites.invites.map(i => `<div class="admin-item"><span>${esc(i.note || "بدون یادداشت")}</span>
+    $("inviteList").innerHTML = invites.invites.map(i => `<div class="admin-item"><span>${esc(i.note || "بدون یادداشت")}${i.role === "student" ? ' <span class="status-chip">🎓 دانشجو</span>' : ""}</span>
         <span class="admin-row"><span class="muted">${i.used_by ? `استفاده‌شده توسط ${esc(i.used_by)}` : i.expires_at * 1000 < Date.now() ? "منقضی" : `معتبر تا ${fmtDate(i.expires_at)}`}</span>
         ${!i.used_by && i.expires_at * 1000 > Date.now() ? `<button class="secondary-button" type="button" data-invite-revoke="${esc(i.id)}">باطل کردن</button>` : ""}</span></div>`).join("")
       || '<p class="muted">هنوز دعوت‌نامه‌ای ساخته نشده.</p>';
@@ -6197,6 +6214,69 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       admAfterChange();
     } catch (err) { showToast(apiMessage(err)); }
   });
+  $("admDetailAssign")?.addEventListener("click", async () => {
+    const b = adm.detail;
+    if (!b) return;
+    $("admAssignSub").textContent = `انتخاب کاربرانی که این کتاب در کتابخانهٔ شخصی‌شان قرار گیرد: «${b.title}»`;
+    $("admAssignList").innerHTML = '<p class="muted">در حال بارگذاری…</p>';
+    $("admAssignDialog").showModal();
+
+    try {
+      const [usersRes, assignedRes] = await Promise.all([
+        api("users"),
+        api("admin-book-users", { query: `&id=${b.id}` })
+      ]);
+      const assignedSet = new Set((assignedRes.assigned_user_ids || []).map(Number));
+      const users = (usersRes.users || []);
+
+      function renderAssignList() {
+        if (!users.length) {
+          $("admAssignList").innerHTML = '<p class="muted">هیچ کاربری یافت نشد.</p>';
+          return;
+        }
+        $("admAssignList").innerHTML = users.map(u => {
+          const isAssigned = assignedSet.has(u.id);
+          const roleBadge = u.role === "student" ? '<span class="status-chip">🎓 دانشجو</span>' : (u.role === "admin" ? '<span class="status-chip cat-chip">مدیر</span>' : '<span class="status-chip off">کاربر</span>');
+          return `<div class="admin-item" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <div>
+              <strong>${esc(u.name)}</strong> ${roleBadge}<br>
+              <span class="muted small" dir="ltr">${esc(u.email)}</span>
+            </div>
+            <button type="button" class="${isAssigned ? 'secondary-button' : 'primary-button'}" data-assign-uid="${u.id}" data-action="${isAssigned ? 'unassign' : 'assign'}" style="white-space:nowrap;font-size:12px;padding:4px 10px">
+              ${isAssigned ? '✓ در کتابخانه (حذف)' : '➕ افزودن به کتابخانه'}
+            </button>
+          </div>`;
+        }).join("");
+      }
+
+      renderAssignList();
+
+      $("admAssignList").onclick = async e => {
+        const btn = e.target.closest("[data-assign-uid]");
+        if (!btn || btn.disabled) return;
+        const uid = Number(btn.dataset.assignUid);
+        const action = btn.dataset.action;
+        btn.disabled = true;
+        try {
+          await api("admin-assign-book", { method: "POST", body: { book_id: b.id, user_id: uid, action } });
+          if (action === "assign") {
+            assignedSet.add(uid);
+            showToast("کتاب به کتابخانهٔ کاربر افزوده شد.");
+          } else {
+            assignedSet.delete(uid);
+            showToast("کتاب از کتابخانهٔ کاربر برداشته شد.");
+          }
+          renderAssignList();
+        } catch (err) {
+          showToast(apiMessage(err));
+          btn.disabled = false;
+        }
+      };
+    } catch (err) {
+      $("admAssignList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`;
+    }
+  });
+  $("admAssignClose")?.addEventListener("click", () => $("admAssignDialog").close());
   $("admDetailRead").addEventListener("click", () => { if (adm.detail) adminPreview(adm.detail, $("admDetailRead")); });
   /** «مطالعهٔ آنلاین» from the admin: the same ephemeral preview as the catalog page (nothing is stored). */
   async function adminPreview(b, btn) {
@@ -6586,6 +6666,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       const userId = Number(t.closest("[data-user]").dataset.user);
       if (act === "enable" || act === "disable") return adminAction("user-update", { user_id: userId, disabled: act === "disable" }, act === "disable" ? "کاربر غیرفعال شد." : "کاربر فعال شد.");
       if (act === "promote" || act === "demote") return adminAction("user-update", { user_id: userId, role: act === "promote" ? "admin" : "user" }, "نقش کاربر تغییر کرد.");
+      if (act === "set-student" || act === "set-user") return adminAction("user-update", { user_id: userId, role: act === "set-student" ? "student" : "user" }, "نقش کاربر تغییر کرد.");
       if (act === "reset") {
         if (!confirm("رمز این کاربر ریست شود؟ از همهٔ دستگاه‌ها خارج می‌شود.")) return;
         const r = await adminAction("user-reset-password", { user_id: userId });
@@ -6600,7 +6681,8 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   });
   $("createInvite").addEventListener("click", async () => {
     try {
-      const r = await api("invites", { method: "POST", body: { note: $("inviteNote").value.trim(), days: 14 } });
+      const role = $("inviteRole")?.value || "user";
+      const r = await api("invites", { method: "POST", body: { note: $("inviteNote").value.trim(), role, days: 14 } });
       $("inviteResult").textContent = `کد دعوت: ${r.code}`;
       $("inviteNote").value = "";
       loadAdmin();

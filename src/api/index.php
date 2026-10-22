@@ -73,9 +73,10 @@ try {
             $pass = validate_password((string)($d['password'] ?? ''));
             $name = str_param($d, 'name', 120);
             if (one('SELECT id FROM users WHERE email = ?', [$email])) fail(409, 'email_taken', 'This email is already registered.');
+            $initialRole = (str_contains($inv['note'] ?? '', '[role:student]')) ? 'student' : 'user';
             db()->beginTransaction();
             q('INSERT INTO users (email, password_hash, display_name, role, created_at) VALUES (?, ?, ?, ?, ?)',
-              [$email, password_hash($pass, PASSWORD_DEFAULT), $name, 'user', time()]);
+              [$email, password_hash($pass, PASSWORD_DEFAULT), $name, $initialRole, time()]);
             $u = one('SELECT * FROM users WHERE email = ?', [$email]);
             $upd = q('UPDATE invites SET used_by = ?, used_at = ? WHERE code_hash = ? AND used_by IS NULL', [$u['id'], time(), $inv['code_hash']]);
             if ($upd->rowCount() !== 1) { db()->rollBack(); fail(403, 'bad_invite', 'Invite code is invalid or used.'); }
@@ -128,16 +129,28 @@ try {
                 $d = body_json();
                 $days = max(1, min(90, (int)($d['days'] ?? 14)));
                 $code = strtoupper(bin2hex(random_bytes(5))); // 10 hex chars
+                $rawNote = str_param($d, 'note', 120, false);
+                $roleTag = ($d['role'] ?? '') === 'student' ? '[role:student]' : '';
+                $note = trim(($roleTag ? "$roleTag " : "") . $rawNote);
                 q('INSERT INTO invites (code_hash, created_by, created_at, expires_at, note) VALUES (?, ?, ?, ?, ?)',
-                  [hash('sha256', $code), $s['id'], time(), time() + $days * 86400, str_param($d, 'note', 120, false)]);
+                  [hash('sha256', $code), $s['id'], time(), time() + $days * 86400, $note]);
                 json_out(201, ['code' => $code, 'expires_at' => time() + $days * 86400]);
             }
             method('GET');
             require_admin();
-            json_out(200, ['invites' => array_map(fn($r) => [
-                'id' => $r['code_hash'], 'note' => $r['note'], 'created_at' => (int)$r['created_at'], 'expires_at' => (int)$r['expires_at'],
-                'used_by' => $r['used_name'], 'used_at' => $r['used_at'] ? (int)$r['used_at'] : null,
-            ], all('SELECT i.*, u.display_name AS used_name FROM invites i LEFT JOIN users u ON u.id = i.used_by ORDER BY i.created_at DESC LIMIT 100'))]);
+            json_out(200, ['invites' => array_map(function ($r) {
+                $isStudent = str_contains($r['note'] ?? '', '[role:student]');
+                $cleanNote = trim(str_replace('[role:student]', '', $r['note'] ?? ''));
+                return [
+                    'id' => $r['code_hash'],
+                    'note' => $cleanNote,
+                    'role' => $isStudent ? 'student' : 'user',
+                    'created_at' => (int)$r['created_at'],
+                    'expires_at' => (int)$r['expires_at'],
+                    'used_by' => $r['used_name'],
+                    'used_at' => $r['used_at'] ? (int)$r['used_at'] : null,
+                ];
+            }, all('SELECT i.*, u.display_name AS used_name FROM invites i LEFT JOIN users u ON u.id = i.used_by ORDER BY i.created_at DESC LIMIT 100'))]);
 
         // ---------- Books, library, progress, catalog ----------
         default:

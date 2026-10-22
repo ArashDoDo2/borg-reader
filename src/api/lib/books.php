@@ -110,6 +110,7 @@ function user_has_book(int $uid, int $bookId): bool {
 }
 function can_read_book(array $s, int $bookId): bool {
     if ($s['role'] === 'admin' || user_has_book((int)$s['id'], $bookId)) return true;
+    if ($s['role'] === 'student') return false;
     return (bool)one("SELECT 1 AS x FROM catalog WHERE book_id = ? AND status = 'approved'", [$bookId]);
 }
 /** Delete a book's files and row when no library and no catalog entry references it. */
@@ -757,6 +758,9 @@ function handle_books_route(string $route): bool {
         case 'catalog':
             method('GET');
             $s = require_user();
+            if ($s['role'] === 'student') {
+                json_out(200, ['books' => [], 'total' => 0, 'page' => 1, 'pages' => 1]);
+            }
             backfill_search_keys();
             $catOut = fn($r) => book_out($r) + [
                 'description' => $r['description'], 'category' => (string)$r['category'], 'submitter' => $r['submitter'], 'in_library' => (bool)$r['in_library'],
@@ -773,11 +777,15 @@ function handle_books_route(string $route): bool {
         case 'categories':
             method('GET');
             $s = require_user();
+            if ($s['role'] === 'student') {
+                json_out(200, ['categories' => []]);
+            }
             json_out(200, ['categories' => categories_list($s['role'] === 'admin')]);
 
         case 'catalog-submit':
             method('POST');
             $s = require_user(true);
+            if ($s['role'] === 'student') fail(403, 'forbidden', 'ثبت در کتابخانهٔ عمومی برای نقش دانشجو مجاز نیست.');
             $d = body_json();
             $bookId = int_param($d['book_id'] ?? '');
             if (!user_has_book((int)$s['id'], $bookId)) fail(404, 'not_found', 'Book not in your library.');
@@ -833,6 +841,7 @@ function handle_books_route(string $route): bool {
         case 'catalog-add':
             method('POST');
             $s = require_user(true);
+            if ($s['role'] === 'student') fail(403, 'forbidden', 'دسترسی به کتابخانهٔ عمومی برای نقش دانشجو مجاز نیست.');
             $bookId = int_param(body_json()['book_id'] ?? '');
             if (!one("SELECT 1 AS x FROM catalog WHERE book_id = ? AND status = 'approved'", [$bookId])) fail(404, 'not_found', 'Book is not in the catalog.');
             insert_ignore('user_books', ['user_id' => $s['id'], 'book_id' => $bookId, 'added_at' => time()]);

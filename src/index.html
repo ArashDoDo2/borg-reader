@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.13.12">
+  <meta name="app-version" content="8.13.13">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data: https://generativelanguage.googleapis.com https://api.openai.com; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -307,8 +307,14 @@
           <div class="admin-block"><h3>کاربران</h3><div id="userList" class="admin-list"></div></div>
         </section>
         <section id="admPanel-invites" class="adm-panel" role="tabpanel" aria-labelledby="admTab-invites" data-admin-panel="invites" hidden>
-          <div class="admin-block"><h3>دعوت‌نامه‌ها</h3>
-            <div class="admin-row"><input id="inviteNote" class="admin-input" placeholder="برای چه کسی؟ (اختیاری)" maxlength="120"><button id="createInvite" class="secondary-button" type="button">ساخت کد دعوت</button></div>
+            <div class="admin-row">
+              <input id="inviteNote" class="admin-input" placeholder="برای چه کسی؟ (اختیاری)" maxlength="120">
+              <select id="inviteRole" class="admin-input" style="max-width:145px;padding:6px 8px" aria-label="نقش کاربر">
+                <option value="user">کاربر عادی</option>
+                <option value="student">🎓 دانشجو</option>
+              </select>
+              <button id="createInvite" class="secondary-button" type="button">ساخت کد دعوت</button>
+            </div>
             <p id="inviteResult" class="invite-result" aria-live="polite"></p>
             <div id="inviteList" class="admin-list"></div></div>
         </section>
@@ -639,10 +645,17 @@
       <button id="admDetailSave" class="primary-button" type="submit">ذخیره</button>
     </form>
     <div class="dialog-actions adm-detail-more">
+      <button id="admDetailAssign" class="secondary-button" type="button">👥 تخصیص به کاربر / دانشجو</button>
       <button id="admDetailRead" class="secondary-button" type="button">📖 مطالعهٔ آنلاین</button>
       <a id="admDetailDownload" class="secondary-button" href="#" download>دانلود</a>
       <button id="admDetailDelete" class="secondary-button adm-danger" type="button">حذف کامل</button>
     </div>
+  </dialog>
+  <dialog id="admAssignDialog" class="account-dialog" aria-labelledby="admAssignTitle" style="max-width:480px">
+    <button id="admAssignClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
+    <h2 id="admAssignTitle">👥 تخصیص به کاربر / دانشجو</h2>
+    <p id="admAssignSub" class="muted small" style="margin-top:4px"></p>
+    <div id="admAssignList" class="admin-list" style="max-height:360px;overflow-y:auto;margin:12px 0"></div>
   </dialog>
   <dialog id="admCatDialog" class="account-dialog adm-cat-dialog" aria-labelledby="admCatTitle">
     <button id="admCatClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>

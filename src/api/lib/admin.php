@@ -728,9 +728,9 @@ function handle_admin_route(string $route): bool {
                 if ($dis) q('DELETE FROM sessions WHERE user_id = ?', [$u['id']]);
             }
             if (array_key_exists('role', $d)) {
-                $role = $d['role'] === 'admin' ? 'admin' : 'user';
-                if ($role === 'user' && $self) fail(400, 'self', 'You cannot remove your own admin role.');
-                if ($role === 'user' && $u['role'] === 'admin' && active_admin_count((int)$u['id']) === 0) fail(400, 'last_admin', 'At least one active admin is required.');
+                $role = in_array($d['role'], ['admin', 'student', 'user'], true) ? $d['role'] : 'user';
+                if ($role !== 'admin' && $self) fail(400, 'self', 'You cannot remove your own admin role.');
+                if ($role !== 'admin' && $u['role'] === 'admin' && active_admin_count((int)$u['id']) === 0) fail(400, 'last_admin', 'At least one active admin is required.');
                 q('UPDATE users SET role = ? WHERE id = ?', [$role, $u['id']]);
             }
             if (array_key_exists('name', $d)) q('UPDATE users SET display_name = ? WHERE id = ?', [str_param($d, 'name', 120), $u['id']]);
@@ -758,6 +758,29 @@ function handle_admin_route(string $route): bool {
             q('DELETE FROM users WHERE id = ?', [$u['id']]);
             foreach ($books as $bid) gc_book($bid);
             json_out(200, ['ok' => true]);
+
+        case 'admin-assign-book':
+            method('POST');
+            $s = require_admin(true);
+            $d = body_json();
+            $bookId = int_param($d['book_id'] ?? '');
+            $userId = int_param($d['user_id'] ?? '');
+            $action = ($d['action'] ?? 'assign') === 'unassign' ? 'unassign' : 'assign';
+            if (!one('SELECT 1 AS x FROM books WHERE id = ?', [$bookId])) fail(404, 'not_found', 'Book not found.');
+            if (!one('SELECT 1 AS x FROM users WHERE id = ?', [$userId])) fail(404, 'not_found', 'User not found.');
+            if ($action === 'assign') {
+                insert_ignore('user_books', ['user_id' => $userId, 'book_id' => $bookId, 'added_at' => time()]);
+            } else {
+                q('DELETE FROM user_books WHERE user_id = ? AND book_id = ?', [$userId, $bookId]);
+            }
+            json_out(200, ['ok' => true]);
+
+        case 'admin-book-users':
+            method('GET');
+            require_admin();
+            $bookId = int_param($_GET['id'] ?? '');
+            $assigned = array_map('intval', array_column(all('SELECT user_id FROM user_books WHERE book_id = ?', [$bookId]), 'user_id'));
+            json_out(200, ['assigned_user_ids' => $assigned]);
 
         case 'invite-revoke':
             method('POST');
