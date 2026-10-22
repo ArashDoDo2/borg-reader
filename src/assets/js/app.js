@@ -2733,23 +2733,29 @@
         if (resp.ok) {
           const data = await resp.json();
           const list = (data.models || []).filter(m => {
-            if (!Array.isArray(m.supportedGenerationMethods) || !m.supportedGenerationMethods.includes("generateContent")) return false;
+            if (Array.isArray(m.supportedGenerationMethods) &&
+                !m.supportedGenerationMethods.some(method => /generatecontent|interaction/i.test(method))) {
+              return false;
+            }
             const name = (m.name || "").toLowerCase();
-            // Exclude specialized non-text modalities
-            if (/(-tts|tts|audio|speech|embed|imagen|image|photo|video|medlm|realtime)/i.test(name)) return false;
+            // Exclude specialized non-text modalities and deprecated 2.5-flash
+            if (/(-tts|tts|audio|speech|embed|imagen|image|photo|video|medlm|realtime|2\.5-flash$)/i.test(name)) return false;
             return true;
           });
           if (list.length > 0) {
             const sorted = list.sort((a, b) => {
               const aName = (a.name || "").replace(/^models\//, "").toLowerCase();
               const bName = (b.name || "").replace(/^models\//, "").toLowerCase();
-              // Ultra-low-latency models (Lite & Flash 2.0/1.5) respond in < 1 second!
-              const aFast = (/lite/i.test(aName) ? 200 : 0) + (/gemini-2\.0-flash/i.test(aName) ? 180 : 0) + (/gemini-1\.5-flash/i.test(aName) ? 140 : 0);
-              const bFast = (/lite/i.test(bName) ? 200 : 0) + (/gemini-2\.0-flash/i.test(bName) ? 180 : 0) + (/gemini-1\.5-flash/i.test(bName) ? 140 : 0);
-              const aClean = /^gemini-\d+(\.\d+)?-(flash|pro)(-lite)?$/.test(aName) ? 100 : 0;
-              const bClean = /^gemini-\d+(\.\d+)?-(flash|pro)(-lite)?$/.test(bName) ? 100 : 0;
-              const aScore = aFast + aClean + (/gemini-2\.5/i.test(aName) ? 30 : /gemini-2\.0/i.test(aName) ? 40 : /gemini-1\.5/i.test(aName) ? 35 : 10);
-              const bScore = bFast + bClean + (/gemini-2\.5/i.test(bName) ? 30 : /gemini-2\.0/i.test(bName) ? 40 : /gemini-1\.5/i.test(bName) ? 35 : 10);
+              const aScore = (/gemini-3\.8/i.test(aName) ? 500 : 0) +
+                             (/gemini-3\.5/i.test(aName) ? 400 : 0) +
+                             (/gemini-2\.0/i.test(aName) ? 300 : 0) +
+                             (/gemini-1\.5/i.test(aName) ? 200 : 0) +
+                             (/lite/i.test(aName) ? 50 : 0);
+              const bScore = (/gemini-3\.8/i.test(bName) ? 500 : 0) +
+                             (/gemini-3\.5/i.test(bName) ? 400 : 0) +
+                             (/gemini-2\.0/i.test(bName) ? 300 : 0) +
+                             (/gemini-1\.5/i.test(bName) ? 200 : 0) +
+                             (/lite/i.test(bName) ? 50 : 0);
               return bScore - aScore;
             });
             return {
@@ -2773,12 +2779,11 @@
     return {
       apiVersion: "v1beta",
       models: [
-        "gemini-2.0-flash",
-        "gemini-2.5-flash-lite",
-        "gemini-1.5-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-2.5-flash",
         "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-2.5-flash-lite",
         "gemini-1.5-pro",
         "gemini-pro"
       ],
@@ -2790,8 +2795,13 @@
     if (!parsed) return "";
     // Interactions API delta
     if (parsed?.delta?.text) return parsed.delta.text;
+    if (parsed?.delta?.type === "text" && parsed.delta.text) return parsed.delta.text;
+    if (parsed?.event_type === "content.delta" && parsed?.delta?.text) return parsed.delta.text;
     if (Array.isArray(parsed?.step?.content)) {
       return parsed.step.content.map(c => c.text || "").join("");
+    }
+    if (Array.isArray(parsed?.steps)) {
+      return parsed.steps.flatMap(s => (Array.isArray(s.content) ? s.content.map(c => c.text || "") : [s.text || ""])).join("");
     }
     // generateContent SSE: filter out thinking/reasoning parts
     if (Array.isArray(parsed?.candidates?.[0]?.content?.parts)) {
@@ -2800,8 +2810,82 @@
         .map(p => p.text || "")
         .join("");
     }
+    if (typeof parsed?.output_text === "string") return parsed.output_text;
     if (typeof parsed?.text === "string") return parsed.text;
     return "";
+  }
+
+  async function callGeminiInteractions(prompt, model, apiKey, isStream, onChunk) {
+    const cleanModel = model.replace(/^models\//, "");
+    const url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${encodeURIComponent(apiKey)}`;
+    const body = {
+      model: cleanModel,
+      input: prompt,
+      generation_config: {
+        thinking_level: "low"
+      }
+    };
+    if (isStream) {
+      body.stream = true;
+    }
+
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-goog-api-key": apiKey
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!resp.ok) {
+      let errDetail = "";
+      try {
+        const errJson = await resp.json();
+        errDetail = errJson?.error?.message || "";
+      } catch (_) {}
+      const err = new Error(errDetail || `HTTP ${resp.status}`);
+      err.status = resp.status;
+      err.detail = errDetail;
+      throw err;
+    }
+
+    if (isStream && resp.body) {
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buffer = "";
+      let accumulatedText = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith("data: ")) {
+            const jsonStr = trimmed.slice(6).trim();
+            if (jsonStr && jsonStr !== "[DONE]") {
+              try {
+                const parsed = JSON.parse(jsonStr);
+                const chunk = extractGeminiSseChunk(parsed);
+                if (chunk) {
+                  accumulatedText += chunk;
+                  onChunk(accumulatedText);
+                }
+              } catch (_) {}
+            }
+          }
+        }
+      }
+      if (accumulatedText) return accumulatedText;
+    }
+
+    const data = await resp.json();
+    const text = extractGeminiSseChunk(data);
+    if (text) return text;
+    throw new Error("پاسخی از هوش مصنوعی دریافت نشد.");
   }
 
   function hasAiKey() {
@@ -2857,6 +2941,38 @@
 
     if (provider === "gemini") {
       const fullPrompt = systemMsg ? `${systemMsg}\n\nمتن یا درخواست:\n${prompt}` : prompt;
+      const isStream = typeof onChunk === "function";
+
+      if (cfg.model && /2\.5-flash$/i.test(cfg.model)) {
+        cfg.model = "gemini-3.8-flash";
+        saveAiConfig({ model: "gemini-3.8-flash" });
+      }
+
+      // 1. Try Google's recommended Interactions API first (for Gemini 3.8 / 3.5)
+      const interactionsCandidates = [
+        (cfg.model && !/preview|2\.5-flash$/i.test(cfg.model) ? cfg.model : "gemini-3.8-flash"),
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
+      ].filter((v, i, a) => v && a.indexOf(v) === i);
+
+      for (const iModel of interactionsCandidates) {
+        try {
+          const res = await callGeminiInteractions(fullPrompt, iModel, apiKey, isStream, onChunk);
+          if (res) {
+            saveAiConfig({ model: iModel, apiVersion: "v1beta" });
+            return res;
+          }
+        } catch (iErr) {
+          if (iErr.status === 400 || iErr.status === 403) {
+            const d = (iErr.detail || iErr.message || "").toLowerCase();
+            if (d.includes("api key not valid") || d.includes("key expired") || d.includes("permission_denied")) {
+              throw new Error(`کلید نامعتبر است یا در Google AI Studio فعال نیست (${iErr.status}: ${iErr.detail || iErr.message})`);
+            }
+          }
+          // On 404 or other errors, gracefully continue to standard generateContent loop
+        }
+      }
+
       function buildGeminiBody(withThinkingZero = true) {
         const genConfig = {
           temperature: 0.2,
@@ -2874,22 +2990,21 @@
       let candidateVersions = [cfg.apiVersion || "v1beta", (cfg.apiVersion === "v1" ? "v1beta" : "v1")];
       let candidateModels = [];
 
-      // If cached model is a preview or heavy reasoning model, prioritize ultra-fast models
+      // If cached model is a preview or deprecated model, prioritize ultra-fast models
       const validCachedModel = cfg.model && !/preview|2\.5-flash$/i.test(cfg.model) ? cfg.model : "";
       if (!validCachedModel || apiKeyOverride) {
         const discovered = await discoverGeminiModels(apiKey);
         candidateVersions = [discovered.apiVersion, discovered.apiVersion === "v1beta" ? "v1" : "v1beta"];
         candidateModels = discovered.models;
       } else {
-        candidateModels = [validCachedModel, "gemini-2.0-flash", "gemini-2.5-flash-lite", "gemini-1.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash", "gemini-3.8-flash"];
+        candidateModels = [validCachedModel, "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash-lite"];
       }
 
-      candidateModels = candidateModels.filter((v, i, a) => v && a.indexOf(v) === i);
+      candidateModels = candidateModels.filter((v, i, a) => v && !/2\.5-flash$/i.test(v) && a.indexOf(v) === i);
 
       let lastResp = null;
       let lastErr = null;
       let lastErrDetail = "";
-      const isStream = typeof onChunk === "function";
 
       for (const ver of candidateVersions) {
         for (const model of candidateModels) {
