@@ -636,7 +636,7 @@
     return { title, author, cover, ...extra };
   }
   // Optional EPUB metadata kept on the book record and sent to the server (limits match the API).
-  const META_LIMITS = { publisher: 300, published: 40, language: 20 };
+  const META_LIMITS = { publisher: 300, published: 40, language: 20, description: 2000 };
   function cleanMeta(v, max) { return String(v == null ? "" : v).replace(/\s+/g, " ").trim().slice(0, max); }
   function extraMeta(m) {
     m = m || {};
@@ -644,7 +644,12 @@
     // "2019-05-01T00:00:00Z" -> "2019-05-01"; a plain year stays as it is.
     const iso = /^(\d{4}(?:-\d{2}(?:-\d{2})?)?)T/.exec(published);
     if (iso) published = iso[1];
-    return { publisher: cleanMeta(m.publisher, 300), published, language: cleanMeta(m.language, 20) };
+    return {
+      publisher: cleanMeta(m.publisher, 300),
+      published,
+      language: cleanMeta(m.language, 20),
+      description: cleanMeta(m.description, 2000)
+    };
   }
   /** The optional fields of a record that have a value, ready for an API body. */
   function metaBody(rec) {
@@ -716,7 +721,8 @@
       const record = {
         id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
         title: metadata.title, author: metadata.author, cover: metadata.cover,
-        publisher: metadata.publisher || "", published: metadata.published || "", language: metadata.language || "", metaExt: true,
+        publisher: metadata.publisher || "", published: metadata.published || "", language: metadata.language || "",
+        description: metadata.description || "", metaExt: true,
         file: file, size: file.size, addedAt: Date.now(), contentHash,
         ...(isPdf ? { format: "pdf", pages: metadata.pages || 0 } : {})
       };
@@ -3090,6 +3096,23 @@
     if (libAi) libAi.hidden = !hasKey;
   }
 
+  async function generateBookDescription(title, author, publisher = "", category = "", onChunk = null) {
+    if (!hasAiKey()) {
+      openAiGuideDialog();
+      throw new Error("لطفاً ابتدا کلید هوش مصنوعی را در پنجرهٔ بازشده تنظیم کنید.");
+    }
+    const cleanTitle = (title || "").trim();
+    const cleanAuthor = (author || "").trim();
+    if (!cleanTitle && !cleanAuthor) {
+      throw new Error("عنوان یا نام نویسنده برای نگارش مشخص نیست.");
+    }
+
+    const systemPrompt = "شما کارشناس و ویراستار ارشد کتاب هستید. به زبان فارسی شیوا، رسا، دقیق و بدون تعارفات اضافی می‌نویسید. وظیفه شما نگارش معرفی و خلاصهٔ جذاب برای بخش توضیحات و شناسنامه کتاب است.";
+    const userPrompt = `لطفاً برای کتاب «${cleanTitle}»${cleanAuthor ? ` اثر «${cleanAuthor}»` : ""}${publisher ? ` (ناشر: ${publisher})` : ""}${category ? ` (دسته: ${category})` : ""} یک معرفی کوتاه، استاندارد و جذاب در ۲ الی ۳ پاراگراف کوتاه (بین ۸۰ تا ۱۵۰ کلمه) بنویس که مخاطب با موضوع و فضای کتاب آشنا شود. بدون مقدمه‌چینی، سلام یا تعارفات اضافی؛ مستقیماً متن معرفی را بنویس.`;
+
+    return await callAi(userPrompt, systemPrompt, "", "", onChunk);
+  }
+
   async function askAiPrompt(userQuestion, contextOverride = "") {
     if (aiBusy) return;
     const ctx = contextOverride || aiContextText || getCurrentSectionText(3500);
@@ -3520,10 +3543,41 @@
     if (!b) return;
     $("bookOptionsTitle").textContent = b.title;
     document.querySelectorAll("[data-status]").forEach(x => x.setAttribute("aria-pressed", String(x.dataset.status === (b.status || ""))));
+    const descEl = $("bookOptionsDesc");
+    if (descEl) descEl.value = b.description || "";
     $("shelfChecks").innerHTML = shelvesCache.length ? shelvesCache.map(sh => `<label><input type="checkbox" data-shelf="${esc(sh.uid)}" ${(b.shelves || []).includes(sh.uid) ? "checked" : ""}> ${esc(sh.name)}
         <button type="button" class="note-del" data-shelf-del="${esc(sh.uid)}" aria-label="حذف قفسه">×</button></label>`).join("") : '<p class="muted small">هنوز قفسه‌ای نساخته‌ای.</p>';
     $("bookOptionsActions").innerHTML = (account && b.serverId && !b.catalogStatus ? `<button class="secondary-button" type="button" data-opt="share">⇪ پیشنهاد برای کتابخانهٔ عمومی</button>` : "")
       + `<button class="secondary-button" type="button" data-opt="remove">حذف کتاب</button>`;
+  }
+  const bOptDesc = $("bookOptionsDesc");
+  if (bOptDesc) {
+    bOptDesc.addEventListener("change", async () => {
+      if (optionsBookId) await setBookMeta(optionsBookId, { description: bOptDesc.value.trim() });
+    });
+  }
+  const bOptAi = $("bookOptionsAiDesc");
+  if (bOptAi) {
+    bOptAi.addEventListener("click", async () => {
+      if (!optionsBookId) return;
+      const b = await getBook(optionsBookId);
+      if (!b) return;
+      bOptAi.disabled = true;
+      const prevText = bOptAi.textContent;
+      bOptAi.textContent = "✨ در حال نگارش…";
+      try {
+        await generateBookDescription(b.title, b.author, b.publisher || "", b.category || "", chunk => {
+          $("bookOptionsDesc").value = chunk;
+        });
+        await setBookMeta(optionsBookId, { description: $("bookOptionsDesc").value.trim() });
+        showToast("معرفی کتاب با هوش مصنوعی ذخیره شد.");
+      } catch (err) {
+        showToast(err.message || "خطا در نگارش با هوش مصنوعی");
+      } finally {
+        bOptAi.disabled = false;
+        bOptAi.textContent = prevText;
+      }
+    });
   }
   async function openBookOptions(id) { optionsBookId = id; await refreshShelves(); await renderBookOptions(); $("bookOptions").showModal(); }
   $("bookOptionsClose").addEventListener("click", () => $("bookOptions").close());
@@ -4911,11 +4965,32 @@
   function openSubmitDialog(b) {
     submitBookId = b.id;
     $("submitBook").textContent = `«${b.title}» — ${b.author || "نویسنده نامشخص"}`;
-    $("submitForm").elements.description.value = "";
+    $("submitForm").elements.description.value = b.description || "";
     submitPicker.set([]);
     $("submitOk").disabled = false;
     $("submitDialog").showModal();
     $("submitForm").elements.description.focus();
+  }
+  const submitAi = $("submitAiDesc");
+  if (submitAi) {
+    submitAi.addEventListener("click", async () => {
+      const b = submitBookId && await getBook(submitBookId);
+      if (!b) return;
+      submitAi.disabled = true;
+      const prevText = submitAi.textContent;
+      submitAi.textContent = "✨ در حال نگارش…";
+      try {
+        await generateBookDescription(b.title, b.author, b.publisher || "", "", chunk => {
+          $("submitForm").elements.description.value = chunk;
+        });
+        showToast("توضیحات با هوش مصنوعی نگارش شد.");
+      } catch (err) {
+        showToast(err.message || "خطا در نگارش با هوش مصنوعی");
+      } finally {
+        submitAi.disabled = false;
+        submitAi.textContent = prevText;
+      }
+    });
   }
   $("submitClose").addEventListener("click", () => $("submitDialog").close());
   $("submitForm").addEventListener("submit", async e => {
@@ -5556,6 +5631,38 @@
       $("admImportUrlSubmit").disabled = false;
     }
   });
+  const urlAiDesc = $("admImportUrlAiDesc");
+  if (urlAiDesc) {
+    urlAiDesc.addEventListener("click", async () => {
+      let title = $("admImportUrlTitleInput").value.trim();
+      const author = $("admImportUrlAuthorInput").value.trim();
+      if (!title) {
+        const url = $("admImportUrlInput").value.trim();
+        if (url) {
+          try {
+            const u = new URL(url);
+            const seg = u.pathname.split("/").pop() || "";
+            title = decodeURIComponent(seg).replace(/\.(epub|pdf)$/i, "").replace(/[-_]+/g, " ");
+            if (title) $("admImportUrlTitleInput").value = title;
+          } catch (_) {}
+        }
+      }
+      urlAiDesc.disabled = true;
+      const prevText = urlAiDesc.textContent;
+      urlAiDesc.textContent = "✨ در حال نگارش…";
+      try {
+        await generateBookDescription(title, author, "", "", chunk => {
+          $("admImportUrlDesc").value = chunk;
+        });
+        showToast("توضیحات با موفقیت نگارش شد.");
+      } catch (err) {
+        showToast(err.message || "خطا در نگارش با هوش مصنوعی");
+      } finally {
+        urlAiDesc.disabled = false;
+        urlAiDesc.textContent = prevText;
+      }
+    });
+  }
 
   // ---- Book details: side panel (desktop) / bottom sheet (phones) ----
   function admFindBook(id) { return adm.books.find(x => x.id === id) || adm.queue.list.find(x => x.id === id) || null; }
@@ -5597,6 +5704,7 @@
     const f = $("admDetailForm"), inCatalog = st !== "none";
     for (const k of ADM_EDIT_FIELDS) f.elements[k].value = b[k] == null ? "" : String(b[k]);
     f.elements.category.disabled = !inCatalog; f.elements.description.disabled = !inCatalog;
+    if ($("admDetailAiDesc")) $("admDetailAiDesc").disabled = !inCatalog;
     // v8.10: with a category list the free-text field gives way to the picker (several categories, sent as ids)
     const tree = catTreeOn();
     $("admDetailCatLabel").hidden = tree;
@@ -5612,6 +5720,31 @@
   }
   $("admDetailClose").addEventListener("click", () => $("admDetail").close());
   $("admDetail").addEventListener("close", () => { adm.detail = null; });
+  const admAiDesc = $("admDetailAiDesc");
+  if (admAiDesc) {
+    admAiDesc.addEventListener("click", async () => {
+      const f = $("admDetailForm");
+      const title = f.elements.title.value;
+      const author = f.elements.author.value;
+      const publisher = f.elements.publisher.value;
+      const category = f.elements.category?.value || "";
+      const descField = f.elements.description;
+      admAiDesc.disabled = true;
+      const prevText = admAiDesc.textContent;
+      admAiDesc.textContent = "✨ در حال نگارش…";
+      try {
+        await generateBookDescription(title, author, publisher, category, chunk => {
+          descField.value = chunk;
+        });
+        showToast("توضیحات با هوش مصنوعی نگارش شد.");
+      } catch (err) {
+        showToast(err.message || "خطا در نگارش با هوش مصنوعی");
+      } finally {
+        admAiDesc.disabled = false;
+        admAiDesc.textContent = prevText;
+      }
+    });
+  }
   function admAfterChange() {
     catalogLoaded = false;
     loadAdminStats();

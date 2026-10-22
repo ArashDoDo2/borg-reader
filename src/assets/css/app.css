@@ -1344,3 +1344,7 @@ body.dark .ai-teaser-btn:hover{background:#382b54}
 .adm-url-actions button{min-height:44px}
 .adm-url-progress{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--mint);border-radius:10px;font-size:12.5px;color:var(--ink)}
 .adm-url-progress .spinner{width:18px;height:18px;border:2px solid var(--line);border-top-color:var(--green2);border-radius:50%;animation:borg-spin .8s linear infinite;flex:none}
+.field-head-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px}
+.ai-gen-desc-btn{font-size:12px;color:var(--green2);display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:8px;background:var(--mint);border:1px solid var(--line);cursor:pointer;white-space:nowrap;font-weight:600;transition:all .15s}
+.ai-gen-desc-btn:hover{filter:brightness(.95);border-color:var(--green2)}
+.ai-gen-desc-btn:disabled{opacity:.6;cursor:wait}

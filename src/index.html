@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.13.8">
+  <meta name="app-version" content="8.13.9">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data: https://generativelanguage.googleapis.com https://api.openai.com; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -574,6 +574,11 @@
     <p class="muted small">قفسه‌ها</p>
     <div id="shelfChecks" class="shelf-checks"></div>
     <div class="admin-row"><input id="newShelfName" class="admin-input" placeholder="قفسهٔ جدید…" maxlength="80"><button id="addShelf" class="secondary-button" type="button">افزودن</button></div>
+    <div class="field-head-row" style="margin-top:10px">
+      <span class="muted small">معرفی و خلاصهٔ کتاب</span>
+      <button id="bookOptionsAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی">✨ نگارش با هوش مصنوعی</button>
+    </div>
+    <textarea id="bookOptionsDesc" class="admin-input" maxlength="2000" rows="3" dir="auto" placeholder="توضیح یا خلاصهٔ کتاب…" style="width:100%;margin-bottom:8px"></textarea>
     <div id="bookOptionsActions" class="dialog-actions"></div>
   </dialog>
   <dialog id="cleanDialog" class="account-dialog clean-dialog" aria-labelledby="cleanTitle">
@@ -614,7 +619,13 @@
       <label>نویسنده<input name="author" maxlength="300" dir="auto"></label>
       <label id="admDetailCatLabel">دسته‌بندی<input name="category" maxlength="80" list="admCatList" autocomplete="off" dir="auto"></label>
       <div id="admDetailCatsWrap" class="cp-field" hidden><span class="cp-label">دسته‌ها</span><div id="admDetailCats"></div><p id="admDetailLegacyCat" class="muted small" hidden></p></div>
-      <label>توضیحات<textarea name="description" maxlength="2000" rows="4" dir="auto"></textarea></label>
+      <label>
+        <span class="field-head-row">
+          <span>توضیحات</span>
+          <button id="admDetailAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی">✨ نگارش با هوش مصنوعی</button>
+        </span>
+        <textarea name="description" maxlength="2000" rows="4" dir="auto" placeholder="معرفی یا خلاصهٔ کتاب…"></textarea>
+      </label>
       <p id="admDetailCatalogNote" class="muted small" hidden>دسته و توضیحات فقط برای کتاب‌های کتابخانهٔ عمومی ذخیره می‌شوند.</p>
       <label>ناشر<input name="publisher" maxlength="300" dir="auto"></label>
       <label>سال / تاریخ انتشار<input name="published" maxlength="40" placeholder="مثلاً ۱۴۰۲ یا 2019-05-01"></label>
@@ -668,7 +679,13 @@
     <h2 id="submitTitle">پیشنهاد برای کتابخانهٔ عمومی</h2>
     <form id="submitForm" class="auth-form" novalidate>
       <p id="submitBook" class="muted small submit-book" dir="auto"></p>
-      <label>توضیح کوتاه (اختیاری)<textarea name="description" maxlength="2000" rows="3" dir="auto"></textarea></label>
+      <label>
+        <span class="field-head-row">
+          <span>توضیح کوتاه (اختیاری)</span>
+          <button id="submitAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی">✨ نگارش با هوش مصنوعی</button>
+        </span>
+        <textarea name="description" maxlength="2000" rows="3" dir="auto" placeholder="توضیح یا خلاصهٔ کتاب…"></textarea>
+      </label>
       <div class="cp-field"><span class="cp-label">دسته‌ها (اختیاری، حداکثر ۱۰)</span><div id="submitCats"></div></div>
       <button id="submitOk" class="primary-button" type="submit">ارسال برای کتابخانهٔ عمومی</button>
     </form>
@@ -691,7 +708,10 @@
         <input id="admImportUrlAuthorInput" name="author" maxlength="300" placeholder="مثلاً: اسکات چاکن" autocomplete="off" dir="auto">
       </label>
       <label>
-        <span>توضیح یا معرفی کوتاه (اختیاری)</span>
+        <span class="field-head-row">
+          <span>توضیح یا معرفی کوتاه (اختیاری)</span>
+          <button id="admImportUrlAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی">✨ نگارش با هوش مصنوعی</button>
+        </span>
         <textarea id="admImportUrlDesc" name="description" maxlength="2000" rows="2" dir="auto" placeholder="توضیح کوتاه دربارهٔ کتاب…"></textarea>
       </label>
       <div class="cp-field">
@@ -770,7 +790,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۱۳.۸</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۱۳.۹</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>
