@@ -1825,10 +1825,24 @@ def run_student_role(base, tmp, admin, user):
     st, _ = student.call("GET", "book-file", query=f"&id={adm_book_id}")
     check("student can download/read assigned book", st == 200)
 
+    # Admin replaces the assigned document with a new edition (book-replace on non-catalog book)
+    adm_epub_v2 = tmp / "admin_book_v2.epub"
+    tiny_epub(adm_epub_v2, 9903)
+    st, up_adm_v2 = upload(admin, adm_epub_v2, "کتاب داکیومنت شرکت - ویرایش ۲")
+    adm_book_id_v2 = up_adm_v2["book"]["id"]
+
+    st, rep = admin.call("POST", "book-replace", {"old_book_id": adm_book_id, "new_book_id": adm_book_id_v2})
+    check("admin replaces assigned book with new version", st == 200 and rep.get("migrated_users") == 1)
+
+    # Student library now has v2 instead of v1
+    st, slib2 = student.call("GET", "library")
+    student_book_ids = [b["id"] for b in slib2["books"]]
+    check("student library updated to new version after admin replace", adm_book_id_v2 in student_book_ids and adm_book_id not in student_book_ids)
+
     # Admin unassigns book
-    st, r = admin.call("POST", "admin-assign-book", {"book_id": adm_book_id, "user_id": student_id, "action": "unassign"})
+    st, r = admin.call("POST", "admin-assign-book", {"book_id": adm_book_id_v2, "user_id": student_id, "action": "unassign"})
     check("admin unassigns book from student", st == 200)
-    st, bu2 = admin.call("GET", "admin-book-users", query=f"&id={adm_book_id}")
+    st, bu2 = admin.call("GET", "admin-book-users", query=f"&id={adm_book_id_v2}")
     check("admin-book-users excludes student id after unassign", st == 200 and student_id not in bu2.get("assigned_user_ids", []))
 
     # 6. Admin can change student role to user and back

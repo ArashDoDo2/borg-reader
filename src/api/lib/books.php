@@ -659,10 +659,12 @@ function handle_books_route(string $route): bool {
             db()->beginTransaction();
             try {
                 move_user_book($me, $oldId, $newId);
-                if ($isAdmin && one('SELECT 1 AS x FROM catalog WHERE book_id = ?', [$oldId])) {
-                    if (one('SELECT 1 AS x FROM catalog WHERE book_id = ?', [$newId])) q('DELETE FROM catalog WHERE book_id = ?', [$oldId]);
-                    else q('UPDATE catalog SET book_id = ? WHERE book_id = ?', [$newId, $oldId]);
-                    $catalogMoved = true;
+                if ($isAdmin) {
+                    if (one('SELECT 1 AS x FROM catalog WHERE book_id = ?', [$oldId])) {
+                        if (one('SELECT 1 AS x FROM catalog WHERE book_id = ?', [$newId])) q('DELETE FROM catalog WHERE book_id = ?', [$oldId]);
+                        else q('UPDATE catalog SET book_id = ? WHERE book_id = ?', [$newId, $oldId]);
+                        $catalogMoved = true;
+                    }
                     foreach (all('SELECT user_id FROM user_books WHERE book_id = ? AND user_id <> ?', [$oldId, $me]) as $r) {
                         if (move_user_book((int)$r['user_id'], $oldId, $newId)) $migrated++;
                     }

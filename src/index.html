@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.13.13">
+  <meta name="app-version" content="8.13.14">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data: https://generativelanguage.googleapis.com https://api.openai.com; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -42,7 +42,7 @@
           <span class="hero-badge"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>حفظ حریم خصوصی</span>
           <span id="heroAiBadge" class="hero-badge hero-badge-ai"><svg class="ico" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/><path d="M19 3v4M21 5h-4"/></svg>دستیار هوش مصنوعی (رایگان)</span>
         </div>
-        <p class="privacy-note">کتاب‌ها روی همین دستگاه ذخیره می‌شوند؛ با ورود به حساب، کتاب‌ها و محل مطالعه بین دستگاه‌هایت همگام می‌شوند.</p>
+        <p class="privacy-note">کتاب‌ها روی همین دستگاه ذخیره می‌شوند؛ <button id="heroLoginLink" class="text-button inline-login-link" type="button">با ورود یا ثبت‌نام</button>، کتاب‌ها و محل مطالعه بین دستگاه‌هایت همگام می‌شوند.</p>
       </div>
       <div class="hero-art" aria-hidden="true">
         <div class="book-stack stack-back"></div>
@@ -645,6 +645,10 @@
       <button id="admDetailSave" class="primary-button" type="submit">ذخیره</button>
     </form>
     <div class="dialog-actions adm-detail-more">
+      <label id="admDetailReplaceLabel" class="secondary-button" style="cursor:pointer" title="آپلود نسخه جدید (فایل EPUB یا PDF) برای جایگزینی این کتاب">
+        <span id="admDetailReplaceText">🔄 جایگزینی با فایل جدید</span>
+        <input id="admDetailReplaceInput" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" hidden>
+      </label>
       <button id="admDetailAssign" class="secondary-button" type="button">👥 تخصیص به کاربر / دانشجو</button>
       <button id="admDetailRead" class="secondary-button" type="button">📖 مطالعهٔ آنلاین</button>
       <a id="admDetailDownload" class="secondary-button" href="#" download>دانلود</a>

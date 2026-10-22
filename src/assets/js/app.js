@@ -4086,7 +4086,9 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   function setAccount(acc) {
     account = acc;
     const user = acc && acc.user;
-    $("accountButton").textContent = user ? user.name : "ورود";
+    const isUnauth = !user;
+    $("accountButton").textContent = user ? user.name : "ورود / ثبت‌نام";
+    $("accountButton").classList.toggle("account-btn-unauth", isUnauth);
     const isStudent = user && user.role === "student";
     document.querySelector('[data-view="catalog"]').hidden = !user || isStudent;
     document.querySelector('[data-view="admin"]').hidden = !(user && user.role === "admin");
@@ -4153,6 +4155,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     }
   });
   $("teaserLogin")?.addEventListener("click", () => $("accountButton").click());
+  $("heroLoginLink")?.addEventListener("click", () => $("accountButton").click());
   $("accountClose").addEventListener("click", () => $("accountDialog").close());
   $("authForm").addEventListener("submit", async e => {
     e.preventDefault();
@@ -6213,6 +6216,68 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       adm.queue.list = adm.queue.list.filter(x => x.id !== b.id);
       admAfterChange();
     } catch (err) { showToast(apiMessage(err)); }
+  });
+  async function uploadAndReplaceAdminBook(b, file) {
+    const isPdf = await sniffPdf(file);
+    if (!isPdf && /\.pdf$/i.test(file.name)) throw new UserError("این فایل PDF قابل خواندن نیست یا خراب است.");
+    if (!isPdf && !/\.epub$/i.test(file.name) && file.type !== "application/epub+zip") throw new UserError("لطفاً یک فایل EPUB یا PDF انتخاب کن.");
+    if (file.size > 100 * 1024 * 1024) throw new UserError("این فایل بزرگ‌تر از حد مجاز (۱۰۰ مگابایت) است.");
+
+    const data = await file.arrayBuffer();
+    const hash = await sha256(data);
+    if (hash === b.sha256) {
+      showToast("این فایل دقیقاً با فایل فعلی کتاب یکسان است.");
+      return;
+    }
+
+    const metadata = isPdf ? await extractPdfMetadata(file) : await extractMetadata(file);
+    const fakeBook = {
+      file,
+      contentHash: hash,
+      title: metadata.title || b.title || file.name.replace(/\.[^.]+$/, ""),
+      author: metadata.author || b.author || "",
+      cover: metadata.cover || undefined,
+      publisher: metadata.publisher || b.publisher || "",
+      published: metadata.published || b.published || "",
+      language: metadata.language || b.language || "",
+      description: metadata.description || b.description || "",
+      ...(isPdf ? { format: "pdf" } : {})
+    };
+
+    const sb = await uploadBook(fakeBook);
+    const res = await api("book-replace", {
+      method: "POST",
+      body: { old_book_id: b.id, new_book_id: sb.id }
+    });
+
+    const migrated = res?.migrated_users || 0;
+    showToast(`«${b.title}» با موفقیت به نسخهٔ جدید بروزرسانی شد` + (migrated ? ` (${faNum(migrated)} کاربر هماهنگ شدند)` : "") + ".");
+    if ($("admDetail").open) $("admDetail").close();
+    admAfterChange();
+    sync();
+  }
+  $("admDetailReplaceInput")?.addEventListener("change", async e => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    const b = adm.detail;
+    if (!b) return;
+    if (!confirm(`آیا می‌خواهید فایل «${file.name}» جایگزین کتاب «${b.title}» شود؟\n\nتمام کاربران و دانشجویانی که این کتاب را در کتابخانهٔ خود دارند، خودکار به نسخهٔ جدید بروزرسانی خواهند شد.`)) {
+      return;
+    }
+    const label = $("admDetailReplaceText");
+    const origText = label ? label.textContent : "";
+    if (label) label.textContent = "⏳ در حال جایگزینی…";
+    if ($("admDetailReplaceLabel")) $("admDetailReplaceLabel").style.pointerEvents = "none";
+    try {
+      await uploadAndReplaceAdminBook(b, file);
+    } catch (err) {
+      console.warn("Book replace failed:", err);
+      showToast(apiMessage(err));
+    } finally {
+      if (label) label.textContent = origText;
+      if ($("admDetailReplaceLabel")) $("admDetailReplaceLabel").style.pointerEvents = "";
+    }
   });
   $("admDetailAssign")?.addEventListener("click", async () => {
     const b = adm.detail;
