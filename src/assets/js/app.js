@@ -3069,21 +3069,145 @@
     $("aiPanel").hidden = false;
     $("aiToggle").setAttribute("aria-expanded", "true");
     const cleanCtx = typeof contextText === "string" ? contextText.trim() : "";
+    const badge = $("aiContextBadge");
+    const badgeText = $("aiContextText");
     if (cleanCtx) {
       aiContextText = cleanCtx;
-      $("aiContextBadge").hidden = false;
-      $("aiContextText").textContent = `📌 تمرکز روی متن انتخابی: «${cleanCtx.slice(0, 50)}…»`;
-    } else if (!aiContextText) {
-      $("aiContextBadge").hidden = true;
-      $("aiContextText").textContent = "";
+      if (badge) {
+        badge.hidden = false;
+        badge.style.display = "flex";
+      }
+      if (badgeText) badgeText.textContent = `📌 تمرکز روی متن انتخابی: «${cleanCtx.slice(0, 50)}…»`;
+    } else {
+      aiContextText = "";
+      if (badge) {
+        badge.hidden = true;
+        badge.style.display = "none";
+      }
+      if (badgeText) badgeText.textContent = "";
     }
     syncAiUI();
+    if (!cleanCtx) {
+      checkAndRestoreChapterSummary();
+    }
   }
   function closeAi(returnFocus) {
     if (!aiOpen()) return;
     $("aiPanel").hidden = true;
     $("aiToggle").setAttribute("aria-expanded", "false");
+    aiContextText = "";
+    const badge = $("aiContextBadge");
+    if (badge) {
+      badge.hidden = true;
+      badge.style.display = "none";
+    }
+    const badgeText = $("aiContextText");
+    if (badgeText) badgeText.textContent = "";
     if (returnFocus) $("aiToggle").focus({ preventScroll: true });
+  }
+
+  function getChapterStorageKey(type = "summary") {
+    if (!currentBook) return "";
+    const chapter = ($("chapterLabel")?.textContent || "").trim();
+    return `borg_ai_${currentBook.id}_${encodeURIComponent(chapter || "ch")}_${type}`;
+  }
+
+  function getSavedAiContent(type = "summary") {
+    try {
+      const key = getChapterStorageKey(type);
+      if (!key) return null;
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_) { return null; }
+  }
+
+  function saveAiContent(content, type = "summary") {
+    try {
+      const key = getChapterStorageKey(type);
+      if (!key || !content) return;
+      localStorage.setItem(key, JSON.stringify({
+        content,
+        timestamp: Date.now(),
+        chapter: ($("chapterLabel")?.textContent || "").trim(),
+        bookId: currentBook?.id
+      }));
+    } catch (_) {}
+  }
+
+  function checkAndRestoreChapterSummary() {
+    const saved = getSavedAiContent("summary");
+    if (saved && saved.content) {
+      renderAiReply(saved.content, "summary", true);
+    }
+  }
+
+  async function saveAiSummaryToNotes(text) {
+    if (!currentBook) return;
+    if (currentBook.preview) { showToast(PREVIEW_NO_SAVE); return; }
+    const chapter = ($("chapterLabel")?.textContent || "").trim();
+    let cfi = "";
+    if (rendition) {
+      try {
+        const loc = rendition.currentLocation();
+        cfi = loc?.start?.cfi || "";
+      } catch (_) {}
+    } else if (pdf) {
+      cfi = `pdf:${pdf.page}`;
+    }
+    await saveAnnotation({
+      uid: newUid(),
+      bookId: currentBook.id,
+      type: "note",
+      cfi: cfi,
+      quote: `✨ خلاصهٔ هوشمند: ${chapter || "فصل"}`,
+      note: text,
+      color: "green",
+      createdAt: Date.now(),
+      deleted: false
+    });
+    renderNotesList();
+    showToast("خلاصه در یادداشت‌های کتاب ذخیره شد.");
+  }
+
+  function renderAiReply(reply, type = "general", isCached = false) {
+    const container = $("aiResponse");
+    if (!container) return;
+    const cachedBadge = isCached ? '<div class="ai-cached-pill">✨ خلاصهٔ ذخیره‌شدهٔ این فصل</div>' : '';
+    const isSummaryType = type === "summary";
+    container.innerHTML = `
+      ${cachedBadge}
+      <div class="ai-reply-text">${formatAiMarkdown(reply)}</div>
+      <div class="ai-response-actions" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)">
+        <button id="aiSaveNoteBtn" class="ai-save-note-btn" type="button">📌 ذخیره در یادداشت‌های کتاب</button>
+        <button id="aiCopyBtn" class="ai-save-note-btn" type="button">📋 کپی متن</button>
+        ${isSummaryType ? '<button id="aiRegenSummaryBtn" class="ai-save-note-btn" type="button">🔄 تولید مجدد</button>' : ''}
+      </div>
+    `;
+
+    const saveBtn = $("aiSaveNoteBtn");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", async () => {
+        saveBtn.disabled = true;
+        await saveAiSummaryToNotes(reply);
+        saveBtn.textContent = "✅ در یادداشت‌ها ذخیره شد";
+      });
+    }
+
+    const copyBtn = $("aiCopyBtn");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", () => {
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(reply).then(() => showToast("متن کپی شد.")).catch(() => {});
+        }
+      });
+    }
+
+    const regenBtn = $("aiRegenSummaryBtn");
+    if (regenBtn) {
+      regenBtn.addEventListener("click", () => {
+        askAiPrompt("لطفاً این فصل را مستقیم و در ۳ الی ۵ نکتهٔ کلیدی و موجز خلاصه کن.", "", "summary", true);
+      });
+    }
   }
 
   function syncAiUI() {
@@ -3113,8 +3237,18 @@
     return await callAi(userPrompt, systemPrompt, "", "", onChunk);
   }
 
-  async function askAiPrompt(userQuestion, contextOverride = "") {
+  async function askAiPrompt(userQuestion, contextOverride = "", type = "general", forceFresh = false) {
     if (aiBusy) return;
+
+    if (type === "summary" && !forceFresh && !contextOverride && !aiContextText) {
+      const saved = getSavedAiContent("summary");
+      if (saved && saved.content) {
+        renderAiReply(saved.content, "summary", true);
+        showToast("خلاصهٔ ذخیره‌شده نمایش داده شد.");
+        return;
+      }
+    }
+
     const ctx = contextOverride || aiContextText || getCurrentSectionText(3500);
     const bookTitle = (currentBook && currentBook.title) || "";
     const chapter = $("chapterLabel")?.textContent || "";
@@ -3130,7 +3264,10 @@
       const reply = await callAi(prompt, systemPrompt, "", "", textChunk => {
         $("aiResponse").innerHTML = formatAiMarkdown(textChunk);
       });
-      $("aiResponse").innerHTML = formatAiMarkdown(reply);
+      if (type === "summary") {
+        saveAiContent(reply, "summary");
+      }
+      renderAiReply(reply, type, false);
     } catch (err) {
       $("aiResponse").innerHTML = `<p style="color:#b3261e">❌ ${esc(err.message || "خطا در پردازش هوش مصنوعی")}</p>`;
     } finally {
@@ -3169,11 +3306,12 @@
   $("aiClearContext").addEventListener("click", () => {
     aiContextText = "";
     $("aiContextBadge").hidden = true;
+    $("aiContextBadge").style.display = "none";
     $("aiContextText").textContent = "";
   });
-  $("aiBtnSummary").addEventListener("click", () => askAiPrompt("لطفاً این فصل را مستقیم و در ۳ الی ۵ نکتهٔ کلیدی و موجز خلاصه کن."));
-  $("aiBtnTakeaways").addEventListener("click", () => askAiPrompt("مهم‌ترین مفاهیم و بینش‌های این بخش را در چند نکتهٔ کوتاه بنویس."));
-  $("aiBtnQuestions").addEventListener("click", () => askAiPrompt("۳ پرسش عمیق و تفکربرانگیز از مباحث این بخش برای سنجش درک مطلب طرح کن."));
+  $("aiBtnSummary").addEventListener("click", () => askAiPrompt("لطفاً این فصل را مستقیم و در ۳ الی ۵ نکتهٔ کلیدی و موجز خلاصه کن.", "", "summary"));
+  $("aiBtnTakeaways").addEventListener("click", () => askAiPrompt("مهم‌ترین مفاهیم و بینش‌های این بخش را در چند نکتهٔ کوتاه بنویس.", "", "takeaways"));
+  $("aiBtnQuestions").addEventListener("click", () => askAiPrompt("۳ پرسش عمیق و تفکربرانگیز از مباحث این بخش برای سنجش درک مطلب طرح کن.", "", "questions"));
   $("aiPromptForm").addEventListener("submit", e => {
     e.preventDefault();
     const q = $("aiPromptInput").value.trim();

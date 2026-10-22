@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.13.9">
+  <meta name="app-version" content="8.13.10">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data: https://generativelanguage.googleapis.com https://api.openai.com; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-title" content="بُرگ">
   <link rel="manifest" href="manifest.webmanifest">
@@ -375,7 +375,7 @@
               <button id="aiBtnTakeaways" class="secondary-button ai-action-btn" type="button">💡 نکات کلیدی</button>
               <button id="aiBtnQuestions" class="secondary-button ai-action-btn" type="button">❓ پرسش‌های این فصل</button>
             </div>
-            <div id="aiContextBadge" class="ai-context-badge" hidden><span id="aiContextText"></span><button id="aiClearContext" class="icon-button" type="button" aria-label="حذف متن انتخابی">×</button></div>
+            <div id="aiContextBadge" class="ai-context-badge" hidden style="display:none"><span id="aiContextText"></span><button id="aiClearContext" class="icon-button" type="button" aria-label="حذف متن انتخابی">×</button></div>
             <div id="aiConversation" class="ai-conversation">
               <div id="aiResponse" class="ai-response" dir="auto">برای خلاصه‌سازی یا طرح سوال، از دکمه‌های بالا استفاده کنید یا سوال خود را بنویسید.</div>
             </div>
@@ -790,7 +790,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span>بُرگ · نسخهٔ ۸.۱۳.۹</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span>بُرگ · نسخهٔ ۸.۱۳.۱۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>
