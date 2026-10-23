@@ -1991,14 +1991,14 @@
     const dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y, dt = Date.now() - touchStart.time;
     touchStart = null;
     // iOS Safari never fires "click" on plain text inside the book iframe, so edge taps are detected from the touch itself.
-    if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && dt < 500) {
+    if (Math.abs(dx) < 22 && Math.abs(dy) < 22 && dt < 600) {
       if (Date.now() < suppressClickUntil) return;
-      suppressClickUntil = Date.now() + 700; // swallow the synthetic click that other browsers send afterwards
+      suppressClickUntil = Date.now() + 350; // swallow the synthetic click that other browsers send afterwards
       handleTap(e.target, t.clientX, e.view, contents);
       return;
     }
     if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 800) {
-      suppressClickUntil = Date.now() + 500;
+      suppressClickUntil = Date.now() + 350;
       if (pdf && pdfCanPanX()) return; // a zoomed PDF page is being panned, not turned
       // Finger moving right turns to the next page in an RTL book, like a Persian paper book.
       if (dx > 0) goLeft(); else goRight();
@@ -2042,11 +2042,14 @@
       const win = (contents && contents.window) || view;
       if (win && String(win.getSelection()).trim()) return;
     } catch (_) {}
-    const frame = (view && view.frameElement) || (contents && contents.window && contents.window.frameElement);
+    let frame = null;
+    try { frame = (view && view.frameElement) || (contents && contents.window && contents.window.frameElement); } catch (_) {}
+    if (!frame && !pdf) frame = $("viewer") ? $("viewer").querySelector("iframe") : null;
     const box = $("viewer").getBoundingClientRect();
-    if ((!frame && !pdf) || !box.width) return;
+    if (!box.width) return;
     // The PDF page is part of the main document (clientX is already a page coordinate); EPUB chapters live in an iframe.
-    const ratio = ((pdf || !frame ? 0 : frame.getBoundingClientRect().left) + clientX - box.left) / box.width;
+    const frameLeft = (pdf || !frame) ? 0 : frame.getBoundingClientRect().left;
+    const ratio = Math.max(0, Math.min(1, (frameLeft + clientX - box.left) / box.width));
     const edges = readerPrefs.taps !== false && (!!pdf || readerPrefs.flow !== "scrolled");
     const middle = () => { if (pdf) pdfMiddleTap(); else setImmersive(!$("reader").classList.contains("immersive")); };
     if (!edges) middle();
@@ -2054,7 +2057,7 @@
     else if (ratio > 1 - EDGE_ZONE) { goRight(); checkAutoImmersive(); }
     else middle();
   }
-  $("tocToggle").addEventListener("click", () => { if ($("reader").classList.contains("toc-open")) closeToc(true); else openToc(); });
+  $("tocToggle").addEventListener("click", e => { e.stopPropagation(); if ($("reader").classList.contains("toc-open")) closeToc(true); else openToc(); });
   $("tocBackdrop").addEventListener("click", () => closeToc(true));
   document.addEventListener("keydown", handleReaderKey);
   // Wheel over the margins/bars around the book (inside the book the iframe listener in onBookContent handles it).
@@ -2664,8 +2667,13 @@
     if (pdf) pdf.hl = { page: pdfTargetPage(btn.dataset.cfi), q: $("bookSearchResults").dataset.q || "" }; // marked in the text layer
     jumpTo(btn.dataset.cfi);
   });
+  $("searchToggle").addEventListener("click", e => {
+    e.stopPropagation();
+    if (searchOpen()) closeSearch(true); else openSearch();
+  });
   document.addEventListener("click", e => {
-    if (searchOpen() && !$("searchPanel").contains(e.target) && !$("searchToggle").contains(e.target)) closeSearch(false);
+    const el = e.target && e.target.nodeType === 3 ? e.target.parentElement : e.target;
+    if (searchOpen() && !el?.closest("#searchPanel, #searchToggle")) closeSearch(false);
   });
 
   function settingsOpen() { return !$("settingsPanel").hidden; }
@@ -2682,10 +2690,17 @@
     $("settingsToggle").setAttribute("aria-expanded", "false");
     if (returnFocus) $("settingsToggle").focus({ preventScroll: true });
   }
-  $("settingsToggle").addEventListener("click", () => { if (settingsOpen()) closeSettings(true); else openSettings(); });
-  $("settingsClose").addEventListener("click", () => closeSettings(true));
+  $("settingsToggle").addEventListener("click", e => {
+    e.stopPropagation();
+    if (settingsOpen()) closeSettings(true); else openSettings();
+  });
+  $("settingsClose").addEventListener("click", e => {
+    e.stopPropagation();
+    closeSettings(true);
+  });
   document.addEventListener("click", e => {
-    if (settingsOpen() && !$("settingsPanel").contains(e.target) && !$("settingsToggle").contains(e.target)) closeSettings(false);
+    const el = e.target && e.target.nodeType === 3 ? e.target.parentElement : e.target;
+    if (settingsOpen() && !el?.closest("#settingsPanel, #settingsToggle")) closeSettings(false);
   });
 
   // ======================= v8.12 AI Companion (BYOK) =======================
@@ -3498,10 +3513,17 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     $("aiGuideDialog").showModal();
   }
 
-  $("aiToggle").addEventListener("click", () => { if (aiOpen()) closeAi(true); else openAi(); });
-  $("aiClose").addEventListener("click", () => closeAi(true));
+  $("aiToggle").addEventListener("click", e => {
+    e.stopPropagation();
+    if (aiOpen()) closeAi(true); else openAi();
+  });
+  $("aiClose").addEventListener("click", e => {
+    e.stopPropagation();
+    closeAi(true);
+  });
   document.addEventListener("click", e => {
-    if (aiOpen() && !$("aiPanel").contains(e.target) && !$("aiToggle").contains(e.target) && !e.target.closest("[data-sel='ai']")) closeAi(false);
+    const el = e.target && e.target.nodeType === 3 ? e.target.parentElement : e.target;
+    if (aiOpen() && !el?.closest("#aiPanel, #aiToggle, [data-sel='ai']")) closeAi(false);
   });
   $("aiTeaserButton").addEventListener("click", openAiGuideDialog);
   const heroAi = $("heroAiBadge");
@@ -4925,8 +4947,10 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     if (!finePointer() || !catNavOpenId || $("catNav").contains(document.activeElement)) return;
     catNavTimer = setTimeout(closeCatPanel, 250);
   });
-  $("catNav").addEventListener("focusout", e => { if (catNavOpenId && !$("catNav").contains(e.relatedTarget)) catNavTimer = setTimeout(closeCatPanel, 250); });
-  document.addEventListener("click", e => { if (catNavOpenId && !$("catNav").contains(e.target)) closeCatPanel(); });
+  document.addEventListener("click", e => {
+    const el = e.target && e.target.nodeType === 3 ? e.target.parentElement : e.target;
+    if (catNavOpenId && !el?.closest("#catNav")) closeCatPanel();
+  });
   document.addEventListener("keydown", e => {
     if (e.key !== "Escape" || !catNavOpenId) return;
     const id = catNavOpenId;
@@ -5283,7 +5307,8 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     addFromCatalog(detailId, { btn: $("detailAdd"), shelves });
   });
   document.addEventListener("click", e => {
-    if (addMenuOpen() && !$("detailAddMenu").contains(e.target) && !$("detailAddMore").contains(e.target)) closeAddMenu();
+    const el = e.target && e.target.nodeType === 3 ? e.target.parentElement : e.target;
+    if (addMenuOpen() && !el?.closest("#detailAddMenu, #detailAddMore")) closeAddMenu();
   });
   document.addEventListener("keydown", e => {
     if (e.key === "Escape" && addMenuOpen()) { closeAddMenu(); $("detailAddMore").focus({ preventScroll: true }); }
