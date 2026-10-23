@@ -4087,7 +4087,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     account = acc;
     const user = acc && acc.user;
     const isUnauth = !user;
-    $("accountButton").textContent = user ? user.name : "ورود / ثبت‌نام";
+    $("accountButton").textContent = user ? user.name : "ورود";
     $("accountButton").classList.toggle("account-btn-unauth", isUnauth);
     const isStudent = user && user.role === "student";
     document.querySelector('[data-view="catalog"]').hidden = !user || isStudent;
