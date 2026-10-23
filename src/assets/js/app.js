@@ -228,6 +228,13 @@
       a: { "color": linkColor }
     });
     rendition.themes.fontSize(`${fontSize}%`);
+    try {
+      rendition.getContents().forEach(c => {
+        if (c.document && c.document.documentElement) {
+          c.document.documentElement.style.backgroundColor = background;
+        }
+      });
+    } catch (_) {}
   }
 
   const $ = (id) => document.getElementById(id);
@@ -2426,7 +2433,6 @@
         }
       }
       if (doc.body) {
-        doc.body.style.backgroundColor = bg;
         doc.body.style.overscrollBehavior = "none";
         if (!isScrolled) {
           doc.body.style.overflowY = "hidden";
