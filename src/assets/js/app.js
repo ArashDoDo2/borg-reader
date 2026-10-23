@@ -2638,7 +2638,6 @@
     }
     return results.slice(0, 100);
   }
-  $("searchToggle").addEventListener("click", () => { if (searchOpen()) closeSearch(true); else openSearch(); });
   $("bookSearchForm").addEventListener("submit", async e => {
     e.preventDefault();
     const q = $("bookSearchInput").value.trim();
