@@ -7358,6 +7358,9 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   window.addEventListener("online", () => { if (account) sync(); else initAccount(); });
   syncSettingsUI();
   syncAiUI();
+  if (APP_VERSION && $("footerVersion")) {
+    $("footerVersion").textContent = `بُرگ · نسخهٔ ${APP_VERSION.replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[d])}`;
+  }
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     // The SW activates immediately (skipWaiting); when it replaces an existing one, offer a reload.
     const hadController = !!navigator.serviceWorker.controller;
