@@ -2019,12 +2019,7 @@
     // iOS Safari never fires "click" on plain text inside the book iframe, so edge taps are detected from the touch itself.
     if (Math.abs(dx) < 32 && Math.abs(dy) < 32 && dt < 700) {
       if (Date.now() < suppressClickUntil) return;
-      const targetEl = e.target && e.target.nodeType === 3 ? e.target.parentElement : e.target;
-      const isInteractive = targetEl && targetEl.closest && targetEl.closest("a, button, input, select, textarea, audio, video, label, img");
-      if (!isInteractive) {
-        if (e.cancelable) e.preventDefault();
-        suppressClickUntil = Date.now() + 500;
-      }
+      suppressClickUntil = Date.now() + 500;
       handleTap(e.target, t.clientX, e.view, contents);
       return;
     }
