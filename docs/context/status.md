@@ -78,6 +78,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.13 | Student role & admin book assignment: new `student` user group for placement students with zero public catalog access, ability to upload to personal library, invite role selector, admin user role toggling, and admin book assignment tool (`👥 تخصیص به کاربر / دانشجو`) |
 | 8.13.14 | Book replacement tool & homepage auth visibility: add `🔄 جایگزینی با فایل جدید` in admin detail to upload new editions and auto-migrate all readers; fix hero AI badge contrast on dark green; add animated pulsing golden `ورود` CTA button and hero inline login trigger for unauthenticated visitors |
 | 8.13.15 | Mobile/iOS Chrome touch & reader toolbar fixes: widen finger tap movement tolerance (22px) and lower lockout to 350ms for reliable middle tap & page turns; fallback iframe discovery for WebKit; stop click propagation on reader toolbar buttons (`settingsToggle`, `searchToggle`, `aiToggle`, `tocToggle`) and use `.closest()` in outside click handlers to prevent immediate close; elevate reader-toolbar `z-index: 35` and set `touch-action: manipulation` |
+| 8.13.16 | Mobile image viewer tap-to-close: tapping anywhere on the enlarged image or background backdrop immediately closes the viewer, and expand close button hit target (48px) |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);

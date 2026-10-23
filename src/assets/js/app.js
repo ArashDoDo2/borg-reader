@@ -2335,10 +2335,7 @@
   }
   function closeImage() { $("imageViewer").hidden = true; $("imageViewerImg").removeAttribute("src"); }
   $("imageViewerClose").addEventListener("click", closeImage);
-  $("imageViewer").addEventListener("click", e => {
-    if (e.target === $("imageViewerImg")) $("imageViewerImg").classList.toggle("zoomed");
-    else if (e.target.closest(".image-viewer-scroll") === null || e.target.classList.contains("image-viewer-scroll")) closeImage();
-  });
+  $("imageViewer").addEventListener("click", () => closeImage());
   document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("imageViewer").hidden) { e.stopImmediatePropagation(); closeImage(); } }, true);
   // Many Persian EPUBs (old keyboards / converters) use RLM (U+200F) where a ZWNJ half-space was meant.
   // RLM does not stop letters from joining, so "صیقل‌یافته" renders as "صیقلیافته". Same length, so CFIs stay valid.

@@ -379,12 +379,12 @@ body.dark .showcase-divider{border-top-color:#384f42}
 .immersive-progress{display:none;position:absolute;left:8px;right:8px;bottom:2px;height:3px;background:var(--line);border-radius:3px;overflow:hidden}
 .immersive-progress span{display:block;height:100%;width:0;background:var(--green2)}
 .reader.immersive .immersive-progress{display:block}
-.image-viewer{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center}
+.image-viewer{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.92);display:flex;align-items:center;justify-content:center;cursor:pointer}
 .image-viewer[hidden]{display:none}
-.image-viewer-scroll{max-width:100vw;max-height:100vh;overflow:auto;touch-action:pinch-zoom pan-x pan-y}
-.image-viewer img{max-width:96vw;max-height:94vh;display:block;cursor:zoom-in}
-.image-viewer img.zoomed{max-width:none;max-height:none;width:200%;cursor:zoom-out}
-.image-viewer .dialog-close{z-index:2;background:#ffffffde}
+.image-viewer-scroll{max-width:100vw;max-height:100vh;overflow:auto;touch-action:pinch-zoom pan-x pan-y;cursor:pointer}
+.image-viewer img{max-width:96vw;max-height:94vh;display:block;cursor:pointer}
+.image-viewer img.zoomed{max-width:none;max-height:none;width:200%;cursor:pointer}
+.image-viewer .dialog-close{z-index:2;background:#ffffffde;cursor:pointer;touch-action:manipulation}
 
 /* v8.1: catalog book page, online preview, catalog filters, admin catalog editor */
 .catalog-filters{margin:14px 0 22px}
@@ -785,7 +785,7 @@ body.dark .reader .icon-button:hover,body.dark .reader .secondary-button:hover{b
 .reader.immersive .reading-area{padding-top:max(8px,env(safe-area-inset-top));padding-bottom:max(8px,env(safe-area-inset-bottom))}
 .reader.immersive .back-chip{margin-bottom:env(safe-area-inset-bottom)}
 .reader.immersive .immersive-progress{bottom:calc(2px + env(safe-area-inset-bottom))}
-.image-viewer .dialog-close{top:calc(12px + env(safe-area-inset-top));left:calc(12px + env(safe-area-inset-left));min-width:44px;width:44px;height:44px;font-size:20px;color:#173b35}
+.image-viewer .dialog-close{top:calc(12px + env(safe-area-inset-top));left:calc(12px + env(safe-area-inset-left));min-width:48px;width:48px;height:48px;font-size:24px;border-radius:50%;box-shadow:0 4px 14px rgba(0,0,0,.35);color:#173b35}
 .reader-guide{padding:max(16px,env(safe-area-inset-top)) 16px max(16px,env(safe-area-inset-bottom))}
 .reader-guide-card .primary-button{min-height:46px}
 .note-popup-actions .text-button{min-height:40px}
