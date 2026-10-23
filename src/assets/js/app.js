@@ -209,7 +209,7 @@
         "background": background,
         "overscroll-behavior": "none",
         "touch-action": isScrolled ? "pan-y" : "manipulation",
-        "overflow": isScrolled ? "hidden auto" : "hidden"
+        "scrollbar-width": "none"
       },
       body: Object.assign({
         "font-family": selectedFontStack(),
@@ -219,7 +219,7 @@
         "background": background,
         "overscroll-behavior": "none",
         "touch-action": isScrolled ? "pan-y" : "manipulation",
-        "overflow": isScrolled ? "hidden auto" : "hidden"
+        "scrollbar-width": "none"
       }, DEBUG.noDir ? {} : { "direction": bookDir }),
       p: { "text-align": align, "margin": paraGap, "line-height": lineHeight, "font-weight": fontWeight },
       img: { "cursor": "zoom-in" },
@@ -2017,9 +2017,14 @@
     const dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y, dt = Date.now() - touchStart.time;
     touchStart = null;
     // iOS Safari never fires "click" on plain text inside the book iframe, so edge taps are detected from the touch itself.
-    if (Math.abs(dx) < 28 && Math.abs(dy) < 28 && dt < 650) {
+    if (Math.abs(dx) < 32 && Math.abs(dy) < 32 && dt < 700) {
       if (Date.now() < suppressClickUntil) return;
-      suppressClickUntil = Date.now() + 350; // swallow the synthetic click that other browsers send afterwards
+      const targetEl = e.target && e.target.nodeType === 3 ? e.target.parentElement : e.target;
+      const isInteractive = targetEl && targetEl.closest && targetEl.closest("a, button, input, select, textarea, audio, video, label, img");
+      if (!isInteractive) {
+        if (e.cancelable) e.preventDefault();
+        suppressClickUntil = Date.now() + 500;
+      }
       handleTap(e.target, t.clientX, e.view, contents);
       return;
     }
@@ -2075,7 +2080,11 @@
     if (!box.width) return;
     // The PDF page is part of the main document (clientX is already a page coordinate); EPUB chapters live in an iframe.
     const frameLeft = (pdf || !frame) ? 0 : frame.getBoundingClientRect().left;
-    const ratio = Math.max(0, Math.min(1, (frameLeft + clientX - box.left) / box.width));
+    let localX = clientX;
+    if (frame && localX > frame.getBoundingClientRect().right) {
+      localX = clientX - frame.getBoundingClientRect().left;
+    }
+    const ratio = Math.max(0, Math.min(1, (frameLeft + localX - box.left) / box.width));
     const edges = readerPrefs.taps !== false && (!!pdf || readerPrefs.flow !== "scrolled");
     const middle = () => { if (pdf) pdfMiddleTap(); else setImmersive(!$("reader").classList.contains("immersive")); };
     if (!edges) middle();
@@ -2088,6 +2097,12 @@
   document.addEventListener("keydown", handleReaderKey);
   // Wheel over the margins/bars around the book (inside the book the iframe listener in onBookContent handles it).
   $("viewer").addEventListener("wheel", onReaderWheel, { passive: false });
+  $("viewer").addEventListener("click", e => {
+    if (e.target === $("viewer")) {
+      if (Date.now() < suppressClickUntil) return;
+      handleTap(e.target, e.clientX, window, null);
+    }
+  });
   document.addEventListener("keydown", () => { if (currentBook) markActivity(); });
 
   // ---- «برگشت به جای قبلی» (v8.2): a jump (not a page turn) remembers where the reader was ----
@@ -2428,13 +2443,20 @@
       if (doc.documentElement) {
         doc.documentElement.style.backgroundColor = bg;
         doc.documentElement.style.overscrollBehavior = "none";
-        doc.documentElement.style.overflow = isScrolled ? "hidden auto" : "hidden";
         doc.documentElement.style.touchAction = isScrolled ? "pan-y" : "manipulation";
+        doc.documentElement.style.scrollbarWidth = "none";
       }
       if (doc.body) {
         doc.body.style.overscrollBehavior = "none";
-        doc.body.style.overflow = isScrolled ? "hidden auto" : "hidden";
         doc.body.style.touchAction = isScrolled ? "pan-y" : "manipulation";
+        doc.body.style.scrollbarWidth = "none";
+      }
+      let hideScrollStyle = doc.getElementById("borg-no-scrollbar");
+      if (!hideScrollStyle && doc.head) {
+        hideScrollStyle = doc.createElement("style");
+        hideScrollStyle.id = "borg-no-scrollbar";
+        hideScrollStyle.textContent = "html, body, * { scrollbar-width: none !important; -ms-overflow-style: none !important; } ::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }";
+        doc.head.appendChild(hideScrollStyle);
       }
     } catch (_) {}
     doc.addEventListener("wheel", onReaderWheel, { passive: false });

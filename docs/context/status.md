@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-24, version **8.13.19** (live at https://parsun.com/borg/).
+Last updated: 2026-10-24, version **8.13.20** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -82,6 +82,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.17 | Mobile reader viewport lock: lock vertical overscroll (`overscroll-behavior: none`, `overflow-y: hidden`) and unify theme background on both `html` and `body` inside the EPUB chapter iframe and container in paginated reading, preventing rubber-band peek-through and white flash on mobile |
 | 8.13.18 | Fix horizontal column scrolling: eliminate unwanted horizontal scrollbar and column splitting in paginated mode by enforcing `overflow: hidden` on iframe, `html`, and `body` (preventing browser auto-conversion of `overflow-x` to `auto` when `overflow-y: hidden`) |
 | 8.13.19 | Fix iOS Chrome touch interactions: remove touchmove preventDefault that cancelled clicks/taps on iOS Chrome, set `touch-action: manipulation` to prevent browser history navigation hijacking, handle `touchcancel`, and broaden tap gesture tolerance |
+| 8.13.20 | Fix blank pages & mobile middle tap: restore epub.js multi-column pagination by removing `overflow: hidden` on iframe/html/body, suppress scrollbars cleanly via `scrollbar-width: none` and webkit pseudo-elements, prevent synthetic double-tap toggle on iOS Chrome, and add viewer container click fallback |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
