@@ -2080,11 +2080,7 @@
     if (!box.width) return;
     // The PDF page is part of the main document (clientX is already a page coordinate); EPUB chapters live in an iframe.
     const frameLeft = (pdf || !frame) ? 0 : frame.getBoundingClientRect().left;
-    let localX = clientX;
-    if (frame && localX > frame.getBoundingClientRect().right) {
-      localX = clientX - frame.getBoundingClientRect().left;
-    }
-    const ratio = Math.max(0, Math.min(1, (frameLeft + localX - box.left) / box.width));
+    const ratio = Math.max(0, Math.min(1, (frameLeft + clientX - box.left) / box.width));
     const edges = readerPrefs.taps !== false && (!!pdf || readerPrefs.flow !== "scrolled");
     const middle = () => { if (pdf) pdfMiddleTap(); else setImmersive(!$("reader").classList.contains("immersive")); };
     if (!edges) middle();
@@ -2097,12 +2093,6 @@
   document.addEventListener("keydown", handleReaderKey);
   // Wheel over the margins/bars around the book (inside the book the iframe listener in onBookContent handles it).
   $("viewer").addEventListener("wheel", onReaderWheel, { passive: false });
-  $("viewer").addEventListener("click", e => {
-    if (e.target === $("viewer")) {
-      if (Date.now() < suppressClickUntil) return;
-      handleTap(e.target, e.clientX, window, null);
-    }
-  });
   document.addEventListener("keydown", () => { if (currentBook) markActivity(); });
 
   // ---- «برگشت به جای قبلی» (v8.2): a jump (not a page turn) remembers where the reader was ----
