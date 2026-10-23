@@ -79,7 +79,8 @@ button{cursor:pointer}
 .empty-drop-btn{padding:12px 22px;font-size:13px;border-radius:12px;background:var(--paper);border:1.5px solid #b5ccbd;box-shadow:0 2px 8px rgba(0,0,0,.04);transition:all .18s ease}
 .empty-drop-btn .ico{width:16px;height:16px;min-width:16px;min-height:16px;max-width:16px;max-height:16px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .empty-drop-btn:hover{background:var(--mint);border-color:var(--green2);color:var(--green);transform:translateY(-1px);box-shadow:0 4px 14px rgba(23,53,42,.08)}
-.reader{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column}
+.reader{position:fixed;inset:0;z-index:20;background:var(--bg);display:flex;flex-direction:column;overscroll-behavior:none}
+body.reader-open{overflow:hidden!important;overscroll-behavior:none}
 .hidden{display:none!important}
 .reader-toolbar{height:70px;flex-shrink:0;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:15px;padding:0 20px;background:var(--paper)}
 .reader-title{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -94,13 +95,13 @@ button{cursor:pointer}
 .progress-track{height:5px;background:var(--line);border-radius:20px;overflow:hidden}
 .progress-track span{height:100%;display:block;width:0;background:var(--green2);transition:width .2s}
 .reader-progress small{display:block;color:var(--muted);font-size:11px;margin-top:7px}
-.reading-area{display:flex;flex-direction:column;min-width:0;min-height:0;padding:0 clamp(12px,3vw,40px)}
+.reading-area{display:flex;flex-direction:column;min-width:0;min-height:0;padding:0 clamp(12px,3vw,40px);overscroll-behavior:none}
 .page-nav{height:58px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-shrink:0}
 .nav-button,.text-button{border:1px solid var(--line);background:var(--paper);border-radius:10px;color:var(--green2);font-weight:700;font-size:12px;padding:8px 13px}
 .nav-button:hover,.text-button:hover{background:var(--mint)}
 .nav-button:disabled{opacity:.35;cursor:not-allowed}
 #chapterLabel{color:var(--muted);font-size:12px;text-align:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.viewer{background:var(--reader-bg);color:var(--reader-ink);border:1px solid var(--line);border-radius:16px;flex:1;min-height:0;overflow:hidden;box-shadow:var(--shadow)}
+.viewer{background:var(--reader-bg);color:var(--reader-ink);border:1px solid var(--line);border-radius:16px;flex:1;min-height:0;overflow:hidden;box-shadow:var(--shadow);overscroll-behavior:none}
 .viewer iframe{border:0!important}
 .reader-bottom{height:50px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:11px;color:var(--muted)}
 .toast{position:fixed;z-index:50;bottom:22px;left:50%;transform:translate(-50%,20px);background:#173b35;color:white;padding:11px 18px;border-radius:12px;box-shadow:var(--shadow);font-size:13px;opacity:0;pointer-events:none;transition:.25s;max-width:90vw;text-align:center}

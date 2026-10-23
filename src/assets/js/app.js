@@ -203,8 +203,24 @@
     const fontWeight = readerPrefs.weight || "400";
     const isLightTone = effectiveTheme() === "light" || effectiveTheme() === "mint" || effectiveTheme() === "sepia";
     const linkColor = isLightTone ? (effectiveTheme() === "mint" ? "#246e4c" : "#397a67") : (effectiveTheme() === "amber" ? "#e09d58" : "#8fd1b5");
+    const isScrolled = readerPrefs.flow === "scrolled";
     rendition.themes.default({
-      body: Object.assign({ "font-family": selectedFontStack(), "font-weight": fontWeight, "line-height": lineHeight, "color": ink, "background": background }, DEBUG.noDir ? {} : { "direction": bookDir }),
+      html: {
+        "background": background,
+        "overscroll-behavior": "none",
+        "touch-action": isScrolled ? "pan-y" : "pan-x",
+        "overflow-y": isScrolled ? "auto" : "hidden"
+      },
+      body: Object.assign({
+        "font-family": selectedFontStack(),
+        "font-weight": fontWeight,
+        "line-height": lineHeight,
+        "color": ink,
+        "background": background,
+        "overscroll-behavior": "none",
+        "touch-action": isScrolled ? "pan-y" : "pan-x",
+        "overflow-y": isScrolled ? "auto" : "hidden"
+      }, DEBUG.noDir ? {} : { "direction": bookDir }),
       p: { "text-align": align, "margin": paraGap, "line-height": lineHeight, "font-weight": fontWeight },
       img: { "cursor": "zoom-in" },
       "img.borg-blockimg": { "display": "block", "margin-left": "auto", "margin-right": "auto" },
@@ -1030,6 +1046,7 @@
     $("previewAdd").disabled = false;
     $("reader").classList.remove("hidden");
     document.body.style.overflow = "hidden";
+    document.body.classList.add("reader-open");
     $("tocList").innerHTML = '<p class="muted">در حال ساخت فهرست…</p>';
     $("viewer").innerHTML = "";
     showOpening();
@@ -1230,6 +1247,7 @@
     $("reader").classList.add("hidden");
     renderSyncChip();
     document.body.style.overflow = "";
+    document.body.classList.remove("reader-open");
     if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
     bookInstance = null; rendition = null; currentBook = null; previewPos = null;
     $("previewBanner").hidden = true;
@@ -2396,7 +2414,37 @@
     try { fixHalfSpaces(doc); } catch (_) {}
     try { markBlockImages(doc); } catch (_) {}
     if (readerPrefs.digits) { try { toPersianDigits(doc); } catch (_) {} }
+    const isScrolled = readerPrefs.flow === "scrolled";
+    const [bg] = READER_THEMES[effectiveTheme()] || ["#fffdf7"];
+    try {
+      if (doc.documentElement) {
+        doc.documentElement.style.backgroundColor = bg;
+        doc.documentElement.style.overscrollBehavior = "none";
+        if (!isScrolled) {
+          doc.documentElement.style.overflowY = "hidden";
+          doc.documentElement.style.touchAction = "pan-x";
+        }
+      }
+      if (doc.body) {
+        doc.body.style.backgroundColor = bg;
+        doc.body.style.overscrollBehavior = "none";
+        if (!isScrolled) {
+          doc.body.style.overflowY = "hidden";
+          doc.body.style.touchAction = "pan-x";
+        }
+      }
+    } catch (_) {}
     doc.addEventListener("wheel", onReaderWheel, { passive: false });
+    doc.addEventListener("touchmove", e => {
+      if (readerPrefs.flow === "scrolled") return;
+      if (e.touches && e.touches.length === 1 && touchStart) {
+        const dy = Math.abs(e.touches[0].clientY - touchStart.y);
+        const dx = Math.abs(e.touches[0].clientX - touchStart.x);
+        if (dy > dx && dy > 5 && e.cancelable) {
+          e.preventDefault();
+        }
+      }
+    }, { passive: false });
     // Capture phase: runs before epub.js' own link handling, so footnotes open in place instead of jumping.
     doc.addEventListener("click", e => {
       const a = e.target.closest && e.target.closest("a[href]");
