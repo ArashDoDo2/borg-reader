@@ -102,7 +102,7 @@ body.reader-open{overflow:hidden!important;overscroll-behavior:none}
 .nav-button:disabled{opacity:.35;cursor:not-allowed}
 #chapterLabel{color:var(--muted);font-size:12px;text-align:center;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .viewer{background:var(--reader-bg);color:var(--reader-ink);border:1px solid var(--line);border-radius:16px;flex:1;min-height:0;overflow:hidden;box-shadow:var(--shadow);overscroll-behavior:none}
-.viewer iframe{border:0!important}
+.viewer iframe{border:0!important;overflow:hidden!important}
 .reader-bottom{height:50px;display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:11px;color:var(--muted)}
 .toast{position:fixed;z-index:50;bottom:22px;left:50%;transform:translate(-50%,20px);background:#173b35;color:white;padding:11px 18px;border-radius:12px;box-shadow:var(--shadow);font-size:13px;opacity:0;pointer-events:none;transition:.25s;max-width:90vw;text-align:center}
 .toast.show{opacity:1;transform:translate(-50%,0)}

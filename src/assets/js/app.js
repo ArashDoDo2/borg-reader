@@ -209,7 +209,7 @@
         "background": background,
         "overscroll-behavior": "none",
         "touch-action": isScrolled ? "pan-y" : "pan-x",
-        "overflow-y": isScrolled ? "auto" : "hidden"
+        "overflow": isScrolled ? "hidden auto" : "hidden"
       },
       body: Object.assign({
         "font-family": selectedFontStack(),
@@ -219,7 +219,7 @@
         "background": background,
         "overscroll-behavior": "none",
         "touch-action": isScrolled ? "pan-y" : "pan-x",
-        "overflow-y": isScrolled ? "auto" : "hidden"
+        "overflow": isScrolled ? "hidden auto" : "hidden"
       }, DEBUG.noDir ? {} : { "direction": bookDir }),
       p: { "text-align": align, "margin": paraGap, "line-height": lineHeight, "font-weight": fontWeight },
       img: { "cursor": "zoom-in" },
@@ -2427,17 +2427,13 @@
       if (doc.documentElement) {
         doc.documentElement.style.backgroundColor = bg;
         doc.documentElement.style.overscrollBehavior = "none";
-        if (!isScrolled) {
-          doc.documentElement.style.overflowY = "hidden";
-          doc.documentElement.style.touchAction = "pan-x";
-        }
+        doc.documentElement.style.overflow = isScrolled ? "hidden auto" : "hidden";
+        doc.documentElement.style.touchAction = isScrolled ? "pan-y" : "pan-x";
       }
       if (doc.body) {
         doc.body.style.overscrollBehavior = "none";
-        if (!isScrolled) {
-          doc.body.style.overflowY = "hidden";
-          doc.body.style.touchAction = "pan-x";
-        }
+        doc.body.style.overflow = isScrolled ? "hidden auto" : "hidden";
+        doc.body.style.touchAction = isScrolled ? "pan-y" : "pan-x";
       }
     } catch (_) {}
     doc.addEventListener("wheel", onReaderWheel, { passive: false });
