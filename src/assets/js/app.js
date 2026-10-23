@@ -7348,11 +7348,12 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   }
 
   async function initAccount() {
-    if (!navigator.onLine) return; // offline: local-only until the connection returns
+    if (!navigator.onLine) { setAccount(null); return; } // offline: local-only until the connection returns
     try {
       const r = await api("me");
       if (r.user) { setAccount({ user: r.user, csrf: r.csrf }); routeFromHash(); sync(); }
-    } catch (_) { /* offline or API not configured: local-only mode */ }
+      else { setAccount(null); }
+    } catch (_) { setAccount(null); /* offline or API not configured: local-only mode */ }
   }
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && account && navigator.onLine) sync(); });
   window.addEventListener("online", () => { if (account) sync(); else initAccount(); });
