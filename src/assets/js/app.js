@@ -208,7 +208,7 @@
       html: {
         "background": background,
         "overscroll-behavior": "none",
-        "touch-action": isScrolled ? "pan-y" : "pan-x",
+        "touch-action": isScrolled ? "pan-y" : "manipulation",
         "overflow": isScrolled ? "hidden auto" : "hidden"
       },
       body: Object.assign({
@@ -218,7 +218,7 @@
         "color": ink,
         "background": background,
         "overscroll-behavior": "none",
-        "touch-action": isScrolled ? "pan-y" : "pan-x",
+        "touch-action": isScrolled ? "pan-y" : "manipulation",
         "overflow": isScrolled ? "hidden auto" : "hidden"
       }, DEBUG.noDir ? {} : { "direction": bookDir }),
       p: { "text-align": align, "margin": paraGap, "line-height": lineHeight, "font-weight": fontWeight },
@@ -1134,6 +1134,7 @@
     rendition.on("keydown", handleReaderKey);
     rendition.on("touchstart", onTouchStart);
     rendition.on("touchend", onTouchEnd);
+    rendition.on("touchcancel", () => { touchStart = null; });
     rendition.on("click", onReaderClick);
     rendition.on("selected", onTextSelected);
     rendition.on("relocated", onJumpRelocated);
@@ -2016,7 +2017,7 @@
     const dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y, dt = Date.now() - touchStart.time;
     touchStart = null;
     // iOS Safari never fires "click" on plain text inside the book iframe, so edge taps are detected from the touch itself.
-    if (Math.abs(dx) < 22 && Math.abs(dy) < 22 && dt < 600) {
+    if (Math.abs(dx) < 28 && Math.abs(dy) < 28 && dt < 650) {
       if (Date.now() < suppressClickUntil) return;
       suppressClickUntil = Date.now() + 350; // swallow the synthetic click that other browsers send afterwards
       handleTap(e.target, t.clientX, e.view, contents);
@@ -2428,25 +2429,16 @@
         doc.documentElement.style.backgroundColor = bg;
         doc.documentElement.style.overscrollBehavior = "none";
         doc.documentElement.style.overflow = isScrolled ? "hidden auto" : "hidden";
-        doc.documentElement.style.touchAction = isScrolled ? "pan-y" : "pan-x";
+        doc.documentElement.style.touchAction = isScrolled ? "pan-y" : "manipulation";
       }
       if (doc.body) {
         doc.body.style.overscrollBehavior = "none";
         doc.body.style.overflow = isScrolled ? "hidden auto" : "hidden";
-        doc.body.style.touchAction = isScrolled ? "pan-y" : "pan-x";
+        doc.body.style.touchAction = isScrolled ? "pan-y" : "manipulation";
       }
     } catch (_) {}
     doc.addEventListener("wheel", onReaderWheel, { passive: false });
-    doc.addEventListener("touchmove", e => {
-      if (readerPrefs.flow === "scrolled") return;
-      if (e.touches && e.touches.length === 1 && touchStart) {
-        const dy = Math.abs(e.touches[0].clientY - touchStart.y);
-        const dx = Math.abs(e.touches[0].clientX - touchStart.x);
-        if (dy > dx && dy > 5 && e.cancelable) {
-          e.preventDefault();
-        }
-      }
-    }, { passive: false });
+    doc.addEventListener("touchcancel", () => { touchStart = null; }, { passive: true });
     // Capture phase: runs before epub.js' own link handling, so footnotes open in place instead of jumping.
     doc.addEventListener("click", e => {
       const a = e.target.closest && e.target.closest("a[href]");
