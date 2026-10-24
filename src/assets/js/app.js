@@ -2006,11 +2006,13 @@
   }
   function onTouchStart(e) {
     diag("touchstart");
+    if (e.touches && e.touches.length > 1) { touchStart = null; return; }
     const t = e.changedTouches && e.changedTouches[0];
     touchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
   }
   function onTouchEnd(e, contents) {
     diag("touchend");
+    if (e.touches && e.touches.length > 0) { touchStart = null; return; }
     const t = e.changedTouches && e.changedTouches[0];
     diag("touchendHasPoint", !!t); diag("touchendHadStart", !!touchStart);
     if (!touchStart || !t) return;
@@ -2174,6 +2176,13 @@
     chip.style.bottom = `${Math.max(8, Math.round(bottom))}px`;
   }
   window.addEventListener("resize", placeBackChip);
+  window.addEventListener("orientationchange", () => {
+    setTimeout(() => {
+      placeBackChip();
+      if (rendition) { try { rendition.resize(); } catch (_) {} }
+      if (pdf) pdfRender();
+    }, 200);
+  });
   $("backChip").addEventListener("click", () => {
     const cfi = jumps.stack.pop();
     updateBackChip();
