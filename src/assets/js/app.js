@@ -1884,7 +1884,7 @@
   $("prefPdfInvert").addEventListener("change", e => { readerPrefs.pdfInvert = e.target.checked; saveReaderPrefs(); syncSettingsUI(); });
 
   // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
-  const SWIPE_MIN_PX = 50, EDGE_ZONE = 0.25;
+  const SWIPE_MIN_PX = 48, EDGE_ZONE = 0.25;
   let touchStart = null, suppressClickUntil = 0;
   function stripBookScripts(doc) {
     try {
@@ -1956,9 +1956,13 @@
     $("tocToggle").setAttribute("aria-expanded", "false");
     if (returnFocus) $("tocToggle").focus({ preventScroll: true });
   }
+  let lastImmersiveToggleAt = 0;
   function setImmersive(on) {
     const reader = $("reader");
     if (reader.classList.contains("immersive") === on) return;
+    const now = Date.now();
+    if (now - lastImmersiveToggleAt < 400) return;
+    lastImmersiveToggleAt = now;
     reader.classList.toggle("immersive", on);
     placeBackChip();
     if (on) showToast("برای نمایش دوبارهٔ نوارها، وسط صفحه را لمس کن.");
@@ -2018,9 +2022,9 @@
     const dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y, dt = Date.now() - touchStart.time;
     touchStart = null;
     // iOS Safari never fires "click" on plain text inside the book iframe, so edge taps are detected from the touch itself.
-    if (Math.abs(dx) < 32 && Math.abs(dy) < 32 && dt < 700) {
+    if (Math.abs(dx) < 48 && Math.abs(dy) < 48 && dt < 750) {
       if (Date.now() < suppressClickUntil) return;
-      suppressClickUntil = Date.now() + 500;
+      suppressClickUntil = Date.now() + 650;
       handleTap(e.target, t.clientX, e.view, contents);
       return;
     }
@@ -2067,7 +2071,11 @@
     if (el && el.closest && el.closest("a, button, input, select, textarea, audio, video, label, img")) return;
     try {
       const win = (contents && contents.window) || view;
-      if (win && String(win.getSelection()).trim()) return;
+      const sel = win && win.getSelection && win.getSelection();
+      if (sel && !sel.isCollapsed && String(sel).trim().length > 0) {
+        try { sel.removeAllRanges(); } catch (_) {}
+        return;
+      }
     } catch (_) {}
     let frame = null;
     try { frame = (view && view.frameElement) || (contents && contents.window && contents.window.frameElement); } catch (_) {}
@@ -2089,6 +2097,26 @@
   document.addEventListener("keydown", handleReaderKey);
   // Wheel over the margins/bars around the book (inside the book the iframe listener in onBookContent handles it).
   $("viewer").addEventListener("wheel", onReaderWheel, { passive: false });
+  let viewerTouchStart = null;
+  $("viewer").addEventListener("touchstart", e => {
+    const t = e.changedTouches && e.changedTouches[0];
+    viewerTouchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
+  }, { passive: true });
+  $("viewer").addEventListener("touchend", e => {
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!viewerTouchStart || !t) return;
+    const dx = t.clientX - viewerTouchStart.x, dy = t.clientY - viewerTouchStart.y, dt = Date.now() - viewerTouchStart.time;
+    viewerTouchStart = null;
+    if (Math.abs(dx) < 48 && Math.abs(dy) < 48 && dt < 750) {
+      if (Date.now() < suppressClickUntil) return;
+      suppressClickUntil = Date.now() + 650;
+      handleTap(e.target, t.clientX, window, null);
+    }
+  }, { passive: true });
+  $("viewer").addEventListener("click", e => {
+    if (Date.now() < suppressClickUntil) return;
+    handleTap(e.target, e.clientX, window, null);
+  });
   document.addEventListener("keydown", () => { if (currentBook) markActivity(); });
 
   // ---- «برگشت به جای قبلی» (v8.2): a jump (not a page turn) remembers where the reader was ----
@@ -2454,6 +2482,8 @@
     } catch (_) {}
     doc.addEventListener("wheel", onReaderWheel, { passive: false });
     doc.addEventListener("touchcancel", () => { touchStart = null; }, { passive: true });
+    doc.addEventListener("touchstart", onTouchStart, { passive: true });
+    doc.addEventListener("touchend", e => onTouchEnd(e, contents), { passive: true });
     // Capture phase: runs before epub.js' own link handling, so footnotes open in place instead of jumping.
     doc.addEventListener("click", e => {
       const a = e.target.closest && e.target.closest("a[href]");

@@ -144,7 +144,7 @@ body.dark .book-options:hover,body.dark .remove-book:hover{background:rgba(41,61
 /* v6.1: TOC toggle and drawer (mobile), immersive reading mode */
 .toc-toggle{display:none}
 .toc-backdrop{display:none}
-.reader.immersive .reader-toolbar,.reader.immersive .page-nav,.reader.immersive .reader-bottom{display:none}
+.reader.immersive .reader-toolbar,.reader.immersive .page-nav,.reader.immersive .reader-bottom{display:none!important}
 .reader.immersive .reading-area{padding:8px}
 @media(max-width:700px){
  .toc-toggle{display:inline-flex;align-items:center;justify-content:center;min-width:38px;height:38px;flex-shrink:0}
