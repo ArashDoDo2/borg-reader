@@ -1961,7 +1961,7 @@
     const reader = $("reader");
     if (reader.classList.contains("immersive") === on) return;
     const now = Date.now();
-    if (now - lastImmersiveToggleAt < 400) return;
+    if (now - lastImmersiveToggleAt < 250) return;
     lastImmersiveToggleAt = now;
     reader.classList.toggle("immersive", on);
     placeBackChip();
@@ -2083,7 +2083,8 @@
     const box = $("viewer").getBoundingClientRect();
     if (!box.width) return;
     // The PDF page is part of the main document (clientX is already a page coordinate); EPUB chapters live in an iframe.
-    const frameLeft = (pdf || !frame) ? 0 : frame.getBoundingClientRect().left;
+    const fromIframe = !!(view && view !== window);
+    const frameLeft = (pdf || !frame || !fromIframe) ? 0 : frame.getBoundingClientRect().left;
     const ratio = Math.max(0, Math.min(1, (frameLeft + clientX - box.left) / box.width));
     const edges = readerPrefs.taps !== false && (!!pdf || readerPrefs.flow !== "scrolled");
     const middle = () => { if (pdf) pdfMiddleTap(); else setImmersive(!$("reader").classList.contains("immersive")); };
@@ -2099,10 +2100,12 @@
   $("viewer").addEventListener("wheel", onReaderWheel, { passive: false });
   let viewerTouchStart = null;
   $("viewer").addEventListener("touchstart", e => {
+    if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
     const t = e.changedTouches && e.changedTouches[0];
     viewerTouchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
   }, { passive: true });
   $("viewer").addEventListener("touchend", e => {
+    if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
     const t = e.changedTouches && e.changedTouches[0];
     if (!viewerTouchStart || !t) return;
     const dx = t.clientX - viewerTouchStart.x, dy = t.clientY - viewerTouchStart.y, dt = Date.now() - viewerTouchStart.time;
@@ -2114,6 +2117,7 @@
     }
   }, { passive: true });
   $("viewer").addEventListener("click", e => {
+    if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
     if (Date.now() < suppressClickUntil) return;
     handleTap(e.target, e.clientX, window, null);
   });
