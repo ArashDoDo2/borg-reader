@@ -338,8 +338,8 @@ body.dark .showcase-divider{border-top-color:#384f42}
 .stats-goal{display:flex;align-items:center;gap:14px;font-size:13px}
 .stat-mini:hover{border-color:#b5cebe;transform:translateY(-1px);box-shadow:0 4px 12px rgba(23,53,42,.05)}
 .goal-ring{position:relative;width:58px;height:58px;flex-shrink:0}
-.goal-ring svg{width:100%;height:100%;transform:rotate(-90deg)}
-.goal-ring circle{fill:none;stroke-width:3.4}
+.goal-ring svg{width:100%;height:100%;transform:rotate(-90deg);fill:none!important}
+.goal-ring circle{fill:none!important;stroke-width:3.4}
 .ring-bg{stroke:var(--line)}.ring-fg{stroke:var(--green2);stroke-linecap:round;filter:drop-shadow(0 1px 3px rgba(40,102,83,.25));transition:stroke-dasharray .4s}
 .goal-ring b{position:absolute;inset:0;display:grid;place-items:center;font-size:15px;font-weight:700}
 .goal-button{border:0;padding:2px 8px;font-size:12px;border-radius:6px;transition:background .15s}
@@ -669,6 +669,7 @@ body.dark .import-button,body.dark .import-button:hover{color:#132019}
  .cover-progress{height:4px}
  /* «⋯» and «⇪»: 28px visual circle inside a 44px tap area at the cover corner; removing a book is in the «⋯» sheet */
  .book-options,.share-book{top:0;width:44px;height:44px;background:radial-gradient(circle,rgba(255,255,255,.88) 0 13px,transparent 14px);box-shadow:none;font-size:14px;opacity:1;color:#173b35}
+ body.dark .book-options,body.dark .share-book{background:radial-gradient(circle,rgba(32,43,37,.92) 0 13px,transparent 14px);color:#eaf0eb}
  .book-options{left:0}
  .share-book{left:34px}
  .book-card .remove-book{display:none}
@@ -799,11 +800,11 @@ body.dark .reader .icon-button:hover,body.dark .reader .secondary-button:hover{b
  .reader-tools>.settings-toggle{font-size:17px}
  .reader-toolbar>.close-reader .ico{width:22px;height:22px}
  .close-reader-label,.bookmark-label{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
- .reader-tools{gap:0;flex-shrink:0}
- .reader-heading{flex:1 1 auto;padding:0 6px;text-align:right}
+ .reader-tools{gap:0;flex-shrink:0;display:flex;align-items:center}
+ .reader-heading{flex:1 1 auto;min-width:0;overflow:hidden;padding:0 6px;text-align:right}
  .reader.book-ltr .reader-heading{text-align:left}
- .reader-heading .reader-title{font-size:13.5px;line-height:1.35;flex:none}
- .reader-chapter{display:block;font-size:10.5px;line-height:1.25}
+ .reader-heading .reader-title{font-size:13.5px;line-height:1.35;flex:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ .reader-chapter{display:block;font-size:10.5px;line-height:1.25;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
  /* Page-nav row: taps, swipes and the seek bar cover it on phones; it stays in the DOM for screen readers and
     reappears if a keyboard user tabs into it. The chapter title moved to the toolbar. */
  .page-nav{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}

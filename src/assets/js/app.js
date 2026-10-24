@@ -2012,7 +2012,6 @@
   }
   function onTouchEnd(e, contents) {
     diag("touchend");
-    if (e.touches && e.touches.length > 0) { touchStart = null; return; }
     const t = e.changedTouches && e.changedTouches[0];
     diag("touchendHasPoint", !!t); diag("touchendHadStart", !!touchStart);
     if (!touchStart || !t) return;

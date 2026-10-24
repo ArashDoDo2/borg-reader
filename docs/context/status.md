@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-24, version **8.13.21** (live at https://parsun.com/borg/).
+Last updated: 2026-10-24, version **8.13.22** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -84,6 +84,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.19 | Fix iOS Chrome touch interactions: remove touchmove preventDefault that cancelled clicks/taps on iOS Chrome, set `touch-action: manipulation` to prevent browser history navigation hijacking, handle `touchcancel`, and broaden tap gesture tolerance |
 | 8.13.20 | Fix blank pages & mobile middle tap: restore epub.js multi-column pagination by removing `overflow: hidden` on iframe/html/body, suppress scrollbars cleanly via `scrollbar-width: none` and webkit pseudo-elements, prevent synthetic double-tap toggle on iOS Chrome, and add viewer container click fallback |
 | 8.13.21 | Comprehensive mobile optimizations: multi-touch gesture guard preventing pinch release from triggering page turns/taps, orientationchange re-pagination, iOS auto-zoom prevention (16px minimum font size for TTS and AI inputs), dynamic viewport height (`dvh`), overscroll containment on drawers/sheets, interactive-widget viewport configuration, and standalone iOS PWA meta tags |
+| 8.13.22 | Fix iOS Chrome black circle rendering glitch & reader interaction lock: enforce `fill="none"` SVG presentation attributes on goal-ring and reader icons, remove premature touch release return in `onTouchEnd` restoring edge taps & immersive full-screen toggle, and enforce `min-width: 0` truncation on `.reader-heading` so long book titles never push reader toolbar buttons off-screen |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
