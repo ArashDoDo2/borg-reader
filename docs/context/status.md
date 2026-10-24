@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-25, version **8.13.24** (live at https://parsun.com/borg/).
+Last updated: 2026-10-25, version **8.13.25** (live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -87,6 +87,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.22 | Fix iOS Chrome black circle rendering glitch & reader interaction lock: enforce `fill="none"` SVG presentation attributes on goal-ring and reader icons, remove premature touch release return in `onTouchEnd` restoring edge taps & immersive full-screen toggle, and enforce `min-width: 0` truncation on `.reader-heading` so long book titles never push reader toolbar buttons off-screen |
 | 8.13.23 | Fix middle tap immersive toggle on iOS Chrome: add 400ms debounce on `setImmersive` to prevent synthetic click reversals, broaden tap tolerance to 48px/750ms without swipe dead zone, add direct touch listeners on chapter `doc`, register container tap fallback on `#viewer`, and enforce `display: none !important` on `.reader.immersive .reader-toolbar` |
 | 8.13.24 | Isolate viewer tap fallback from PDF stage: guard `#viewer` touch and click handlers against `.pdf-stage` and active PDF mode so PDF edge taps and double-tap zoom resets never fire duplicate events, adjust tap ratio to avoid adding `frameLeft` when events originate in top-level window, and lower `setImmersive` debounce to 250ms |
+| 8.13.25 | Drop synthetic clicks after touch gestures: suppress all click events arriving within 1200ms of any touch (`lastTouchAt`), increase tap click suppression window to 1000ms, raise `setImmersive` toggle debounce to 600ms, preventing iOS Chrome synthetic clicks from instantly undoing full-screen immersive mode |
 
 ## Open items (not started unless the owner says so)
 1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);

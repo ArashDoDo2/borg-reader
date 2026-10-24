@@ -1885,7 +1885,7 @@
 
   // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
   const SWIPE_MIN_PX = 48, EDGE_ZONE = 0.25;
-  let touchStart = null, suppressClickUntil = 0;
+  let touchStart = null, suppressClickUntil = 0, lastTouchAt = 0;
   function stripBookScripts(doc) {
     try {
       if (!doc || !doc.querySelectorAll) return;
@@ -1961,7 +1961,7 @@
     const reader = $("reader");
     if (reader.classList.contains("immersive") === on) return;
     const now = Date.now();
-    if (now - lastImmersiveToggleAt < 250) return;
+    if (now - lastImmersiveToggleAt < 600) return;
     lastImmersiveToggleAt = now;
     reader.classList.toggle("immersive", on);
     placeBackChip();
@@ -1999,7 +1999,7 @@
         else if (searchOpen()) closeSearch(true);
         else if (settingsOpen()) closeSettings(true);
         else if ($("reader").classList.contains("toc-open")) closeToc(true);
-        else if ($("reader").classList.contains("immersive")) setImmersive(false);
+        else if ($("reader").classList.contains("immersive")) { lastImmersiveToggleAt = 0; setImmersive(false); }
         else closeReader();
         break;
       default: handled = false;
@@ -2010,12 +2010,14 @@
   }
   function onTouchStart(e) {
     diag("touchstart");
+    lastTouchAt = Date.now();
     if (e.touches && e.touches.length > 1) { touchStart = null; return; }
     const t = e.changedTouches && e.changedTouches[0];
     touchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
   }
   function onTouchEnd(e, contents) {
     diag("touchend");
+    lastTouchAt = Date.now();
     const t = e.changedTouches && e.changedTouches[0];
     diag("touchendHasPoint", !!t); diag("touchendHadStart", !!touchStart);
     if (!touchStart || !t) return;
@@ -2024,12 +2026,12 @@
     // iOS Safari never fires "click" on plain text inside the book iframe, so edge taps are detected from the touch itself.
     if (Math.abs(dx) < 48 && Math.abs(dy) < 48 && dt < 750) {
       if (Date.now() < suppressClickUntil) return;
-      suppressClickUntil = Date.now() + 650;
+      suppressClickUntil = Date.now() + 1000;
       handleTap(e.target, t.clientX, e.view, contents);
       return;
     }
     if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 800) {
-      suppressClickUntil = Date.now() + 350;
+      suppressClickUntil = Date.now() + 500;
       if (pdf && pdfCanPanX()) return; // a zoomed PDF page is being panned, not turned
       // Finger moving right turns to the next page in an RTL book, like a Persian paper book.
       if (dx > 0) goLeft(); else goRight();
@@ -2059,6 +2061,7 @@
   }
   function onReaderClick(e, contents) {
     diag("click");
+    if (Date.now() - lastTouchAt < 1200) return;
     if (Date.now() < suppressClickUntil) return;
     handleTap(e.target, e.clientX, e.view, contents);
   }
@@ -2101,23 +2104,26 @@
   let viewerTouchStart = null;
   $("viewer").addEventListener("touchstart", e => {
     if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
+    lastTouchAt = Date.now();
     const t = e.changedTouches && e.changedTouches[0];
     viewerTouchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
   }, { passive: true });
   $("viewer").addEventListener("touchend", e => {
     if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
+    lastTouchAt = Date.now();
     const t = e.changedTouches && e.changedTouches[0];
     if (!viewerTouchStart || !t) return;
     const dx = t.clientX - viewerTouchStart.x, dy = t.clientY - viewerTouchStart.y, dt = Date.now() - viewerTouchStart.time;
     viewerTouchStart = null;
     if (Math.abs(dx) < 48 && Math.abs(dy) < 48 && dt < 750) {
       if (Date.now() < suppressClickUntil) return;
-      suppressClickUntil = Date.now() + 650;
+      suppressClickUntil = Date.now() + 1000;
       handleTap(e.target, t.clientX, window, null);
     }
   }, { passive: true });
   $("viewer").addEventListener("click", e => {
     if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
+    if (Date.now() - lastTouchAt < 1200) return;
     if (Date.now() < suppressClickUntil) return;
     handleTap(e.target, e.clientX, window, null);
   });
