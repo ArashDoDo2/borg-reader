@@ -34,6 +34,13 @@ Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/ap
   arriving after `touchstart` of tap B counts as a tap. → regression check in `tests/e2e_test.py` §7 (CDP touch tap, then a
   `click` dispatched into the iframe 900 ms later must not leave immersive mode; fails on 8.13.24). Not yet confirmed on a
   real iPhone — if the bars still stay with the class present, suspect a WKWebView repaint problem instead.
+  → **8.13.26 trace on the owner's iPhone Chrome:** `setImmersive(true) applied` … `1s later: class=true toolbar display=flex
+  h=121`. So the JS was never the problem: the browser's stylesheet does not apply the rule. The service worker precached
+  `APP_SHELL` with `cache.addAll(urls)`, i.e. through the HTTP cache, so Chrome (own HTTP cache, unlike Safari/Edge) could keep
+  an old `app.css` across releases while `index.html` (network-first) was fresh. → 8.13.27: precache requests use
+  `cache: "reload"`; `--borg-css` marker in `app.css`; the trace prints marker, rule count and whether the parsed sheet has
+  the immersive rule. Lesson: when a class is present and a `!important` rule does not apply, check *which* stylesheet the
+  device parsed before touching event code.
 - **"Saving book failed" in some Safari modes** → IndexedDB refuses Blobs. → `put()` falls back to storing an
   ArrayBuffer (`fileBuffer`); `fileOf()` rebuilds a File.
 - The about:srcdoc "Blocked script execution" console message is expected (scripts in books are disabled).

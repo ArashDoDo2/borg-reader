@@ -2,7 +2,7 @@
 
 Persian-first EPUB/PDF reader: an offline-capable PWA (static files, no build step) plus an optional PHP 8 API
 for invite-only accounts, cloud sync and a moderated public catalog. Live at https://parsun.com/borg/.
-Current version: see `<meta name="app-version">` in `src/index.html` (8.13.26 when this file was last updated).
+Current version: see `<meta name="app-version">` in `src/index.html` (8.13.27 when this file was last updated).
 
 Owner and final decision-maker: Arash Naderpour. Work only inside the agreed scope; no refactors, extra files
 or deletions beyond what was asked. When something is ambiguous, ask instead of guessing.
@@ -41,9 +41,10 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
 - Smoke test a deployment: `scripts/smoke-test.sh https://parsun.com/borg/ <version>`.
 
 ## Release flow (single branch, see ADR 0007)
-1. Commit on `main`. Bump the version in **four** places: `app-version` meta, `app-released` meta (UTC ISO time of the
+1. Commit on `main`. Bump the version in **five** places: `app-version` meta, `app-released` meta (UTC ISO time of the
    release — the footer shows it next to the version so a stale cache is obvious) and the footer «نسخهٔ …» in
-   `src/index.html`, and `CACHE_NAME` in `src/service-worker.js`. Add new assets to `APP_SHELL`.
+   `src/index.html`, `CACHE_NAME` in `src/service-worker.js`, and `--borg-css` at the top of `src/assets/css/app.css`
+   (the tap trace prints it, proving which stylesheet a device parsed). Add new assets to `APP_SHELL`.
 2. `git push origin main`. GitHub Actions runs API + e2e tests (Chromium) and the WebKit e2e checks (both gate), then deploys via
    cPanel UAPI and runs the smoke test. A failing test blocks the deploy.
 3. Check the run: `gh run list -R ArashDoDo2/borg-reader --limit 1`; failure details are emitted as annotations:
@@ -71,5 +72,9 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
 - Touch input in the reader: never pair a touch with its synthetic click by a time window alone (see
   `touchConsumedGesture` and the 8.13.15–8.13.25 history in `docs/context/reader-engine-notes.md`). Chrome on iOS is not
   covered by CI; ask the owner to check on a device.
+- Never rewrite history on `main` (no force-push, no reset of a pushed commit): the server clone only fast-forwards, and a
+  rewritten `main` blocks every deploy until the owner runs `git reset --hard origin/main` on the server (2026-10-25).
+- The service worker precaches with `cache: "reload"`; keep it that way, or a release can ship a stale app.css/app.js from
+  the browser's HTTP cache (seen on Chrome for iOS).
 - Three test suites must stay green: `tests/api_test.py`, `tests/e2e_test.py`, and `tests/webkit_e2e.py --browser chromium`
   locally (WebKit itself runs in CI).

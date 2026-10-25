@@ -1,5 +1,5 @@
 // Bump this name on every release so old caches are removed.
-const CACHE_NAME = "borg-shell-v8.13.26";
+const CACHE_NAME = "borg-shell-v8.13.27";
 // Files shared to the app (Android share sheet) wait here until the page imports them.
 const SHARE_CACHE = "borg-share";
 const APP_SHELL = [
@@ -20,7 +20,10 @@ const APP_SHELL = [
 self.addEventListener("install", event => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(APP_SHELL))
+      // v8.13.27: fetch every shell file from the network, not the browser's HTTP cache. `cache.addAll(urls)` went through
+      // that cache, so a new release could precache a stale app.css/app.js (seen on Chrome for iOS: fresh index.html and
+      // footer version, old stylesheet, immersive mode "not working").
+      .then(cache => cache.addAll(APP_SHELL.map(url => new Request(url, { cache: "reload" }))))
       .then(() => self.skipWaiting())
   );
 });

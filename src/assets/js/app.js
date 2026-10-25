@@ -1999,6 +1999,14 @@
     if (TAP_TRACE) setTimeout(() => { try {
       const tb = document.querySelector(".reader-toolbar"), cs = tb && getComputedStyle(tb);
       tapTrace(`  1s later: class=${reader.classList.contains("immersive")} toolbar display=${cs && cs.display} h=${tb && tb.offsetHeight} viewer=${Math.round($("viewer").getBoundingClientRect().height)}`);
+      // Which stylesheet did this browser actually parse? (Chrome on iOS was seen with a stale app.css.)
+      const cssVer = getComputedStyle(document.documentElement).getPropertyValue("--borg-css").trim() || "(none)";
+      let rules = -1, found = "no";
+      try {
+        const sheet = [...document.styleSheets].find(s => s.href && /app\.css/.test(s.href));
+        if (sheet) { rules = sheet.cssRules.length; const r = [...sheet.cssRules].find(r => r.selectorText && r.selectorText.includes(".reader.immersive .reader-toolbar")); if (r) found = `yes display=${r.style.display} ${r.style.getPropertyPriority("display")}`; }
+      } catch (err) { found = "err " + (err && err.name); }
+      tapTrace(`  css marker=${cssVer} rules=${rules} immersive-rule=${found}`);
     } catch (_) {} }, 1000);
     placeBackChip();
     if (on) showToast("برای نمایش دوبارهٔ نوارها، وسط صفحه را لمس کن.");

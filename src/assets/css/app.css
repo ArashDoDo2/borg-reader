@@ -1,6 +1,7 @@
 @font-face{font-family:"Vazirmatn";src:url("../fonts/Vazirmatn-Variable.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
 :root{color-scheme:light;--bg:#f4f5f1;--paper:#fff;--ink:#172d27;--muted:#74817b;--line:#e4e9e3;--green:#17483c;--green2:#286653;--mint:#e5eee7;--gold:#e5c58b;--shadow:0 16px 44px rgba(23,53,42,.09);--reader-bg:#fffdf8;--reader-ink:#252c28}
 *{box-sizing:border-box}
+:root{--borg-css:"8.13.27"} /* version marker read by the tap trace (bump with app-version) */
 [hidden]{display:none!important}
 html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:"Vazirmatn",Tahoma,Arial,sans-serif;font-size:14px;line-height:1.85}
