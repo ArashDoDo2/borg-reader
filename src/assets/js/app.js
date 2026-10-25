@@ -572,6 +572,28 @@
           ${account && b.serverId && !b.catalogStatus ? `<button class="share-book" type="button" data-share="${esc(b.id)}" aria-label="پیشنهاد ${esc(b.title)} برای کتابخانهٔ عمومی" title="پیشنهاد برای کتابخانهٔ عمومی">⇪</button>` : ""}
         </article>`;
   }
+  /** v8.13.29 (desktop): the most recently read unfinished book as a wide «در حال خواندن» card. */
+  function nowReadingHtml(b, prog) {
+    const [bg, fg] = paletteFor(b.title || b.id);
+    const cover = b.cover ? `<img alt="" src="${b.cover}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
+    const pct = prog && typeof prog.percentage === "number" ? Math.max(0, Math.min(100, Math.round(prog.percentage))) : 0;
+    const bits = [];
+    if (prog && prog.chapter) bits.push(esc(prog.chapter));
+    bits.push(`${pct.toLocaleString("fa-IR")}٪ خوانده‌شده`);
+    if (prog && prog.updatedAt) bits.push(`آخرین مطالعه ${syncAgo(prog.updatedAt)}`);
+    return `<article class="book-card now-reading" tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="ادامهٔ مطالعهٔ ${esc(b.title)}">
+          <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${isPdfRecord(b) ? '<span class="format-badge" aria-label="PDF">PDF</span>' : ""}</div>
+          <div class="now-reading-body">
+            <p class="eyebrow">در حال خواندن</p>
+            <h3 title="${esc(b.title)}">${esc(b.title)}</h3>
+            <p class="now-reading-author">${esc(b.author || "نویسنده نامشخص")}</p>
+            <p class="now-reading-meta">${bits.join(" · ")}</p>
+            <div class="now-reading-bar" aria-hidden="true"><span style="width:${pct}%"></span></div>
+            <span class="primary-button now-reading-btn" aria-hidden="true">ادامهٔ مطالعه <span class="now-reading-arrow">←</span></span>
+          </div>
+          <button class="book-options" type="button" data-options="${esc(b.id)}" aria-label="تنظیمات ${esc(b.title)}" title="وضعیت و قفسه">⋯</button>
+        </article>`;
+  }
   let libRenderSeq = 0;
   function renderLibrary() {
     const seq = ++libRenderSeq;
@@ -598,7 +620,10 @@
       const reading = query ? [] : books.filter(b => { const p = prog.get(b.id); return p && p.cfi && (p.percentage || 0) < 100; })
         .sort((a, b) => lastRead(b) - lastRead(a)).slice(0, window.matchMedia("(max-width:700px)").matches ? 3 : 8); // phones: compact rows (CSS), three at most
       $("continueSection").hidden = reading.length === 0;
-      $("continueShelf").innerHTML = reading.map(b => bookCardHtml(b, prog.get(b.id))).join("");
+      // Desktop: the newest unfinished book as a wide card, the rest as small cards beside it. Phones: compact rows (CSS).
+      const wide = !window.matchMedia("(max-width:700px)").matches;
+      $("continueShelf").classList.toggle("has-now-reading", wide && reading.length > 0);
+      $("continueShelf").innerHTML = reading.map((b, i) => wide && i === 0 ? nowReadingHtml(b, prog.get(b.id)) : bookCardHtml(b, prog.get(b.id))).join("");
       updateStorageInfo();
       $("emptyState").classList.toggle("visible", books.length === 0);
       // v8.6: the welcome hero is a first-run screen; once the library holds books it is hidden (CSS).
@@ -998,7 +1023,9 @@
   async function saveProgress(bookId, cfi, pct, bookmark) {
     if (isPreviewId(bookId)) return;
     const old = await getProgress(bookId);
-    await put("progress", { bookId, cfi, percentage: pct, updatedAt: Date.now(), bookmark: bookmark !== undefined ? bookmark : (old?.bookmark || null) });
+    // v8.13.29: the chapter shown when progress was saved (local only; the «در حال خواندن» card shows it).
+    const chapter = currentBook && currentBook.id === bookId ? ($("chapterLabel").textContent || "").trim() : (old?.chapter || "");
+    await put("progress", { bookId, cfi, percentage: pct, updatedAt: Date.now(), bookmark: bookmark !== undefined ? bookmark : (old?.bookmark || null), chapter });
     scheduleProgressPush(bookId);
   }
   // v8.5 diagnostics: how often the expensive open steps really ran (read by the e2e tests when borg-debug has "stats").
@@ -4468,7 +4495,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
         const lp = await getProgress(b.id);
         const sp = sb && sb.progress;
         if (sp && (!lp || sp.updated_at > (lp.updatedAt || 0))) {
-          await put("progress", { bookId: b.id, cfi: sp.cfi, percentage: sp.percentage, updatedAt: sp.updated_at, bookmark: lp?.bookmark || null });
+          await put("progress", { bookId: b.id, cfi: sp.cfi, percentage: sp.percentage, updatedAt: sp.updated_at, bookmark: lp?.bookmark || null, chapter: lp?.chapter || "" });
         } else if (lp && lp.cfi && (!sp || (lp.updatedAt || 0) > sp.updated_at)) {
           try { await api("progress", { method: "POST", body: { book_id: b.serverId, cfi: lp.cfi, percentage: lp.percentage || 0, updated_at: lp.updatedAt || Date.now() } }); } catch (_) {}
         }

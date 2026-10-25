@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.13.28 (2026-10-25). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.13.29 (2026-10-26). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -39,7 +39,7 @@ continuity, ADR 0003; the unused staging path would use `ketabkhane-db-test`, AD
 | Store | Key | Fields |
 |---|---|---|
 | `books` | `id` (UUID) | `title`, `author`, `cover` (data URL), `file` (Blob), `size`, `addedAt`, `locations` (cached epub.js locations, JSON), `contentHash` (SHA-256, v6.2; filled lazily for older books); v8.1 optional `publisher`, `published` (`YYYY-MM-DD` or free text), `language` read from the EPUB `<dc:publisher>`/`<dc:date>`/`<dc:language>`, plus `metaExt` (already read) and `metaExtPush` (still to send to the server) |
-| `progress` | `bookId` | `cfi`, `percentage`, `updatedAt` (the v1 single `bookmark` was migrated into `annotations`) |
+| `progress` | `bookId` | `cfi`, `percentage`, `updatedAt`, `chapter` (v8.13.29: the label shown when saved; local only, kept on sync pull) (the v1 single `bookmark` was migrated into `annotations`) |
 | `annotations` | `uid` (index `bookId`) | `type` (bookmark/highlight/note), `cfi`, `quote`, `note`, `color`, timestamps, sync flags |
 | `shelves` | `uid` | `name`, `position`, `updatedAt`, `deleted` |
 
@@ -96,7 +96,13 @@ Migration rules:
 - **Phone library, books first (v8.13.28, `max-width:700px`):** with books present (`body.lib-has-books`) `.library-section`
   is a flex column and the catalog/AI promo cards get `order:10` (below the grid) with their description hidden;
   `#continueShelf` cards are compact rows (54 px cover beside the meta), at most 3 (`renderLibrary` checks `matchMedia`).
-  Empty library keeps the hero and the full cards. Desktop unchanged.
+  Empty library keeps the hero and the full cards.
+- **Desktop library (v8.13.29, `min-width:701px`):** `renderLibrary` renders the newest unfinished book as `nowReadingHtml`
+  (`.book-card.now-reading`: 150 px cover, title, author, `chapter · ٪ · آخرین مطالعه`, progress bar, «ادامهٔ مطالعه»; same
+  `data-open`/`data-options` handling as other cards) and the rest as small cards (`#continueShelf.has-now-reading`, flex).
+  With books, `.library-section` is a wrapping flex row: promo cards `order:10`, half width each, below the grid. The stats
+  card is one row. `.view-tabs` is hidden by a `:has()` rule when fewer than two tabs are visible and the sync chip is hidden
+  (all widths; browsers without `:has()` keep the bar).
 - **Library search (v8.5):** `#searchInput` filters the grid live (180 ms debounce) by title, author, publisher and
   shelf names, combined with the filter chips and sort. Query and fields go through `libFold()`: `normalizeForSearch`
   (ی/ي/ى, ک/ك, RLM half-space) then spaces/ZWNJ/bidi marks/tatweel/harakat dropped, Persian/Arabic digits → 0-9,

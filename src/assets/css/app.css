@@ -1,7 +1,7 @@
 @font-face{font-family:"Vazirmatn";src:url("../fonts/Vazirmatn-Variable.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
 :root{color-scheme:light;--bg:#f4f5f1;--paper:#fff;--ink:#172d27;--muted:#74817b;--line:#e4e9e3;--green:#17483c;--green2:#286653;--mint:#e5eee7;--gold:#e5c58b;--shadow:0 16px 44px rgba(23,53,42,.09);--reader-bg:#fffdf8;--reader-ink:#252c28}
 *{box-sizing:border-box}
-:root{--borg-css:"8.13.28"} /* version marker read by the tap trace (bump with app-version) */
+:root{--borg-css:"8.13.29"} /* version marker read by the tap trace (bump with app-version) */
 [hidden]{display:none!important}
 html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:"Vazirmatn",Tahoma,Arial,sans-serif;font-size:14px;line-height:1.85}
@@ -1391,4 +1391,40 @@ body.dark .ai-teaser-btn:hover{background:#382b54}
  .continue-shelf .book-options{left:4px}
  .continue-shelf .share-book{left:40px}
  .continue-shelf .book-card:has(.share-book) .book-meta{padding-left:84px}
+}
+
+/* v8.13.29 desktop library: a wide «در حال خواندن» card, promos below the books side by side, a one-row stats strip,
+   and no tab bar when there is only one tab. */
+.view-tabs:not(:has([role=tab]:not([hidden])~[role=tab]:not([hidden]))):not(:has(.sync-chip:not([hidden]))){display:none}
+@media(min-width:701px){
+ .continue-shelf.has-now-reading{display:flex;align-items:stretch;gap:18px}
+ .continue-shelf.has-now-reading>.book-card{flex:0 0 150px}
+ .continue-shelf.has-now-reading>.now-reading{flex:1 1 480px;min-width:0;display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 28px;align-items:center;padding:22px 24px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(135deg,var(--paper) 30%,var(--mint) 100%);box-shadow:0 12px 32px -12px rgba(23,53,42,.22);position:relative}
+ body.dark .continue-shelf.has-now-reading>.now-reading{box-shadow:0 12px 32px -12px rgba(0,0,0,.6)}
+ .now-reading .book-cover-thumb{width:150px}
+ .now-reading:hover .book-cover-thumb{transform:translateY(-4px) rotate(-1.5deg)}
+ .now-reading-body{min-width:0;display:flex;flex-direction:column;gap:5px}
+ .now-reading-body .eyebrow{margin:0;color:var(--green2);font-size:12px}
+ .now-reading-body h3{margin:0;font-size:23px;line-height:1.5;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:color .18s}
+ .now-reading:hover .now-reading-body h3{color:var(--green2)}
+ .now-reading-author{margin:0;color:var(--muted);font-size:13.5px}
+ .now-reading-meta{margin:6px 0 0;font-size:12.5px;color:var(--muted);line-height:1.8}
+ .now-reading-bar{height:6px;border-radius:6px;background:var(--line);overflow:hidden;margin:10px 0 4px}
+ .now-reading-bar span{display:block;height:100%;background:var(--green2);border-radius:6px;transition:width .4s cubic-bezier(.2,0,0,1)}
+ .now-reading-btn{align-self:flex-start;margin-top:10px;padding:11px 22px;gap:10px}
+ .now-reading-arrow{display:inline-block;transition:transform .2s cubic-bezier(.2,0,0,1)}
+ .now-reading:hover .now-reading-arrow{transform:translateX(-4px)}
+ .now-reading .book-options{top:14px;left:14px}
+ body.lib-has-books .library-section{display:flex;flex-wrap:wrap;gap:0 16px}
+ body.lib-has-books .library-section>*{flex:1 1 100%;min-width:0}
+ body.lib-has-books .library-section>.catalog-teaser{order:10;flex:1 1 calc(50% - 8px);flex-direction:column;align-items:stretch;gap:14px;margin:22px 0 0}
+ body.lib-has-books .library-section>.catalog-teaser .teaser-btn{align-self:stretch;width:100%}
+ .stats-card{display:flex;align-items:center;gap:0;padding:0 8px;background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:0 2px 8px rgba(23,53,42,.03)}
+ .stats-goal,.stat-mini{background:transparent;border:0;border-radius:0;box-shadow:none;padding:9px 16px}
+ .stats-goal{flex:1 1 auto}
+ .stat-mini{display:flex;align-items:baseline;gap:8px;border-inline-start:1px solid var(--line)}
+ .stat-mini:hover{transform:none;box-shadow:none;border-color:var(--line)}
+ .stat-mini b{display:inline;font-size:18px}
+ .goal-ring{width:46px;height:46px}
+ .goal-ring b{font-size:13px}
 }
