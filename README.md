@@ -32,7 +32,7 @@ python3 tests/webkit_e2e.py --browser chromium   # منطق آزمون‌های 
 
 ## انتشار
 فقط شاخهٔ `main`. با هر push، GitHub Actions آزمون‌ها را اجرا می‌کند و در صورت موفقیت از طریق cPanel منتشر می‌کند
-و آزمون دود می‌گیرد. پیش از push نسخه را در `app-version` و پانویس `index.html` و `CACHE_NAME` در
+و آزمون دود می‌گیرد. پیش از push نسخه را در `app-version` و `app-released` (زمان انتشار، UTC) و پانویس `index.html` و `CACHE_NAME` در
 `service-worker.js` بالا ببرید. جزئیات: `CLAUDE.md` و `docs/architecture.md`.
 
 ## مجوزها

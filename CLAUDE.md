@@ -2,7 +2,7 @@
 
 Persian-first EPUB/PDF reader: an offline-capable PWA (static files, no build step) plus an optional PHP 8 API
 for invite-only accounts, cloud sync and a moderated public catalog. Live at https://parsun.com/borg/.
-Current version: see `<meta name="app-version">` in `src/index.html` (8.13.25 when this file was last updated).
+Current version: see `<meta name="app-version">` in `src/index.html` (8.13.26 when this file was last updated).
 
 Owner and final decision-maker: Arash Naderpour. Work only inside the agreed scope; no refactors, extra files
 or deletions beyond what was asked. When something is ambiguous, ask instead of guessing.
@@ -41,7 +41,8 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
 - Smoke test a deployment: `scripts/smoke-test.sh https://parsun.com/borg/ <version>`.
 
 ## Release flow (single branch, see ADR 0007)
-1. Commit on `main`. Bump the version in **three** places: `app-version` meta and the footer «نسخهٔ …» in
+1. Commit on `main`. Bump the version in **four** places: `app-version` meta, `app-released` meta (UTC ISO time of the
+   release — the footer shows it next to the version so a stale cache is obvious) and the footer «نسخهٔ …» in
    `src/index.html`, and `CACHE_NAME` in `src/service-worker.js`. Add new assets to `APP_SHELL`.
 2. `git push origin main`. GitHub Actions runs API + e2e tests (Chromium) and the WebKit e2e checks (both gate), then deploys via
    cPanel UAPI and runs the smoke test. A failing test blocks the deploy.

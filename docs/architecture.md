@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.13.25 (2026-10-25). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.13.26 (2026-10-25). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -21,7 +21,7 @@ index.html ──> assets/js/app.js ──> epub.js (+ JSZip) ──> book rende
 ## 2. Components
 | File | Role |
 |---|---|
-| `src/index.html` | Library + reader UI; loads vendor scripts then `app.js`. Holds `<meta name="app-version">`. |
+| `src/index.html` | Library + reader UI; loads vendor scripts then `app.js`. Holds `<meta name="app-version">` and `<meta name="app-released">` (UTC; shown in the footer in the device's time zone, v8.13.26). |
 | `src/assets/js/app.js` | All app logic (single IIFE): import, metadata, library, shelves, reader, navigation, annotations, TTS, search, settings, account/sync, catalog, admin, SW registration. |
 | `src/assets/vendor/jszip.min.js` | JSZip 3.10.1. Must load **before** epub.js (epub.js needs it to open an EPUB from an ArrayBuffer). |
 | `src/assets/vendor/epub.min.js` | epub.js 0.3.93. Paginated rendition, `spread: auto`. Scripts inside EPUBs are not enabled. |
@@ -63,7 +63,8 @@ mirrored to the server for an admin since v8.7, §4a);
 `borg-reading-days`/`-other`/`-pushed` (stats); `borg-sec-per-page` (measured reading speed for «زمان باقی‌مانده»); `borg-device-id`;
 `borg-ai-config` (v8.12, §4g: `{provider: "gemini" | "openai", apiKey, model, apiVersion}` — the key never leaves the browser);
 `borg_ai_<bookId>_<chapter>_<type>` (v8.13.10: cached AI chapter summaries `{content, timestamp, chapter, bookId}`);
-`borg-debug` (diagnostics only, read by the WebKit probe and the e2e tests; empty for real users).
+`borg-debug` (diagnostics only, read by the WebKit probe and the e2e tests; empty for real users; `{"taps":true}` or
+`?taptrace` in the URL turns on the v8.13.26 on-device tap trace overlay, §4b).
 
 Migration rules:
 - Never delete/recreate the database; bump `DB_VERSION` and migrate step by step in `onupgradeneeded`.
@@ -302,7 +303,9 @@ Details and history of each workaround: `docs/context/reader-engine-notes.md`.
   immersive. The click a browser synthesises after a touch is paired with its touch by state (`touchConsumedGesture`,
   v8.13.25: set when a touch ended as a tap/swipe, cleared by the next `touchstart` or a non-touch `pointerdown`), with a
   650 ms `suppressClickUntil` window kept as a second guard; listeners sit on the chapter document (epub.js re-emits them),
-  directly on the document, and as a fallback on `#viewer`. `orientationchange` re-paginates after 200 ms.
+  directly on the document, and as a fallback on `#viewer`. `orientationchange` re-paginates after 200 ms. `tapTrace()`
+  (v8.13.26, `?taptrace` or borg-debug `taps`) writes every input event, `handleTap` decision and `setImmersive` outcome to a
+  fixed overlay, for browsers without a console.
 - **Reading features:** TTS (`speechSynthesis`, sentence queue with `.tts-hl` highlight, follows pages),
   footnote popups, word lookup / copy / quote card from the selection bar, highlights in 4 colours, notes,
   multiple bookmarks, in-book search with Persian normalisation, image viewer, wake lock, layout options
@@ -382,7 +385,7 @@ Host: shared cPanel (`parsun.com`, user `parsunco`), HTTPS. Single branch `main`
    `app-version` is served.
 Secrets (`CPANEL_TOKEN`, `CPANEL_USER`, `CPANEL_HOST`) are GitHub Actions secrets set by the owner. The server
 config with DB credentials and `setup_key` is `/home/parsunco/borg-config/config.php` (never in the repo).
-Versioning: bump `app-version` meta, footer text in `index.html` and `CACHE_NAME` in `service-worker.js`.
+Versioning: bump `app-version` and `app-released` metas, footer text in `index.html` and `CACHE_NAME` in `service-worker.js`.
 Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is untouched; migrations are additive).
 
 ## 7. Testing

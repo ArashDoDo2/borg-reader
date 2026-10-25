@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-25, version **8.13.25** on `main` (CI tests green; the cPanel deploy step failed, so the live site at
+Last updated: 2026-10-25, version **8.13.26** on `main` (CI tests green; the cPanel deploy step failed, so the live site at
 https://parsun.com/borg/ is still **8.13.24** until the owner redeploys — see open item 1).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
@@ -89,6 +89,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.23 | Fix middle tap immersive toggle on iOS Chrome: add 400ms debounce on `setImmersive` to prevent synthetic click reversals, broaden tap tolerance to 48px/750ms without swipe dead zone, add direct touch listeners on chapter `doc`, register container tap fallback on `#viewer`, and enforce `display: none !important` on `.reader.immersive .reader-toolbar` |
 | 8.13.24 | Isolate viewer tap fallback from PDF stage: guard `#viewer` touch and click handlers against `.pdf-stage` and active PDF mode so PDF edge taps and double-tap zoom resets never fire duplicate events, adjust tap ratio to avoid adding `frameLeft` when events originate in top-level window, and lower `setImmersive` debounce to 250ms |
 | 8.13.25 | Root-cause fix for the iOS Chrome middle tap: the click that Chrome synthesises after a touch is paired with its touch by **state** (`touchConsumedGesture`), not by the wall clock. It arrives late there because it queues behind the chapter re-layout (`rendition.resize()` → epub.js `clear()` + `display()`) that `setImmersive(true)` starts, so every time window (350→650 ms, debounce 400→250 ms) let it through and it toggled immersive straight back off. Flag set on a consumed tap/swipe, cleared by the next `touchstart` or a non-touch `pointerdown`; `suppressClickUntil` kept as is (PDF stage untouched). Regression test: touch tap + 900 ms late click in `tests/e2e_test.py` §7 | — needs the owner's real-device check on iPhone Chrome |
+| 8.13.26 | On-device tap trace (`?taptrace` in the URL or borg-debug `{"taps":true}`): a fixed overlay lists every reader input event (touchstart/end/cancel, click, pointerdown, source main/frame), what `handleTap`/`setImmersive` did with it and, 1 s after each toggle, the `immersive` class, the toolbar's computed display and the viewer height — so iOS Chrome can be diagnosed without a console. Footer shows the release time (`meta app-released`, device time zone) next to the version | — owner tests 8.13.25 on iPhone Chrome and, if the bars still stay, screenshots the overlay |
 
 ## Open items (not started unless the owner says so)
 0. **Deploy blocked (owner):** since run 40168747739 (the 8.13.24 docs commit, 2026-10-25 06:20 UTC) the deploy job fails
@@ -96,10 +97,12 @@ Read this first when picking the project up. Technical detail is in `docs/archit
    apart (06:19 / 06:20) probably left the server clone with a stale `.git/index.lock` or an unfinished pull. Check cPanel →
    Git Version Control → Manage → Pull or Deploy for the real error, clear it, then rerun the failed job of run 40172498038
    (`gh run rerun 40172498038 -R ArashDoDo2/borg-reader --failed`) or push the next commit.
-1. **Verify on device (owner):** 8.13.25 fixes the iOS Chrome middle tap by analysis and by a Chromium regression test; it could not
-   be run on a real iPhone. Check: tap middle → bars hide; tap again → bars return; tapping twice quickly still works.
-   If the bars still stay, the remaining hypothesis is a WKWebView repaint issue (class present, screen not updated) — see
-   `docs/context/reader-engine-notes.md`.
+1. **Verify on device (owner):** the owner reported the bars still stay on iPhone Chrome on 2026-10-25 18:49 AEDT, but no deploy
+   had succeeded since 8.13.24 at that time, so 8.13.25 was most likely not what was tested (the footer now shows version +
+   release time to settle this). Edge on iPhone works. Next: with 8.13.26 live, open `https://parsun.com/borg/?taptrace` in
+   Chrome, open a book, tap the middle once, wait 2 s, screenshot the overlay. Its lines decide the fix: a `click … handled` →
+   `setImmersive(false)` line means the JS pairing missed a path; `1s later: class=true toolbar display=none` with bars visible
+   on screen means a WKWebView repaint problem; `touchcancel` lines mean Chrome's gesture recogniser eats the tap.
 2. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
    real-device check on iPhone/iPad of the 8.6–8.10 mobile changes (taps fixed at the root in 8.6.1).
 3. **Known, not fixed:** with margin «زیاد», swipes may not turn pages on phones.

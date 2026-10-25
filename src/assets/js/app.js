@@ -1134,7 +1134,7 @@
     rendition.on("keydown", handleReaderKey);
     rendition.on("touchstart", onTouchStart);
     rendition.on("touchend", onTouchEnd);
-    rendition.on("touchcancel", () => { touchStart = null; });
+    rendition.on("touchcancel", () => { tapTrace("touchcancel (rendition)"); touchStart = null; });
     rendition.on("click", onReaderClick);
     rendition.on("selected", onTextSelected);
     rendition.on("relocated", onJumpRelocated);
@@ -1891,7 +1891,31 @@
   // re-layout that setImmersive() starts, and after the time window it used to toggle immersive straight back off.
   // Set when a touch sequence was consumed as a tap/swipe; cleared by the next touch or by a real mouse/pen pointer.
   let touchConsumedGesture = false;
-  function onPointerDown(e) { if (e.pointerType && e.pointerType !== "touch") touchConsumedGesture = false; }
+  // v8.13.26 on-device tap trace for browsers without a console (Chrome on iOS): `?taptrace` in the URL or borg-debug
+  // {"taps":true} shows a fixed overlay listing every input event the reader sees and what setImmersive() did with it.
+  const TAP_TRACE = !!DEBUG.taps || /[?&]taptrace\b/.test(location.search);
+  let tapTraceEl = null, tapTraceT0 = 0;
+  function tapTrace(msg) {
+    if (!TAP_TRACE) return;
+    try {
+      if (!tapTraceEl) {
+        tapTraceEl = document.createElement("pre");
+        tapTraceEl.id = "tapTrace";
+        tapTraceEl.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:9999;margin:0;padding:4px 6px;max-height:45vh;overflow:auto;" +
+          "background:rgba(0,0,0,.78);color:#8f8;font:11px/1.35 monospace;direction:ltr;text-align:left;white-space:pre-wrap;pointer-events:none";
+        document.body.appendChild(tapTraceEl); tapTraceT0 = Date.now();
+      }
+      const line = `${String(Date.now() - tapTraceT0).padStart(6)} ${msg}`;
+      tapTraceEl.textContent = (tapTraceEl.textContent ? tapTraceEl.textContent + "\n" : "") + line;
+      const lines = tapTraceEl.textContent.split("\n"); if (lines.length > 45) tapTraceEl.textContent = lines.slice(-45).join("\n");
+      tapTraceEl.scrollTop = tapTraceEl.scrollHeight;
+    } catch (_) {}
+  }
+  const evSrc = e => { try { return e && e.view && e.view !== window ? "frame" : "main"; } catch (_) { return "?"; } };
+  function onPointerDown(e) {
+    tapTrace(`pointerdown ${e.pointerType || "?"} ${evSrc(e)}`);
+    if (e.pointerType && e.pointerType !== "touch") touchConsumedGesture = false;
+  }
   document.addEventListener("pointerdown", onPointerDown, { passive: true, capture: true });
   function stripBookScripts(doc) {
     try {
@@ -1966,11 +1990,16 @@
   let lastImmersiveToggleAt = 0;
   function setImmersive(on) {
     const reader = $("reader");
-    if (reader.classList.contains("immersive") === on) return;
+    if (reader.classList.contains("immersive") === on) { tapTrace(`setImmersive(${on}) no-op (already)`); return; }
     const now = Date.now();
-    if (now - lastImmersiveToggleAt < 250) return;
+    if (now - lastImmersiveToggleAt < 250) { tapTrace(`setImmersive(${on}) debounced`); return; }
     lastImmersiveToggleAt = now;
     reader.classList.toggle("immersive", on);
+    tapTrace(`setImmersive(${on}) applied`);
+    if (TAP_TRACE) setTimeout(() => { try {
+      const tb = document.querySelector(".reader-toolbar"), cs = tb && getComputedStyle(tb);
+      tapTrace(`  1s later: class=${reader.classList.contains("immersive")} toolbar display=${cs && cs.display} h=${tb && tb.offsetHeight} viewer=${Math.round($("viewer").getBoundingClientRect().height)}`);
+    } catch (_) {} }, 1000);
     placeBackChip();
     if (on) showToast("برای نمایش دوبارهٔ نوارها، وسط صفحه را لمس کن.");
     // The viewer changed size without a window resize, so re-paginate explicitly.
@@ -2017,6 +2046,7 @@
   }
   function onTouchStart(e) {
     diag("touchstart");
+    tapTrace(`touchstart ${evSrc(e)} n=${e.touches ? e.touches.length : "?"}`);
     touchConsumedGesture = false; // a new gesture; its own touchend decides whether the following click is redundant
     if (e.touches && e.touches.length > 1) { touchStart = null; return; }
     const t = e.changedTouches && e.changedTouches[0];
@@ -2026,13 +2056,14 @@
     diag("touchend");
     const t = e.changedTouches && e.changedTouches[0];
     diag("touchendHasPoint", !!t); diag("touchendHadStart", !!touchStart);
-    if (!touchStart || !t) return;
+    if (!touchStart || !t) { tapTrace(`touchend ${evSrc(e)} ignored (no start)`); return; }
     const dx = t.clientX - touchStart.x, dy = t.clientY - touchStart.y, dt = Date.now() - touchStart.time;
     touchStart = null;
+    tapTrace(`touchend ${evSrc(e)} dx=${Math.round(dx)} dy=${Math.round(dy)} dt=${dt}`);
     // iOS Safari never fires "click" on plain text inside the book iframe, so edge taps are detected from the touch itself.
     if (Math.abs(dx) < 48 && Math.abs(dy) < 48 && dt < 750) {
       touchConsumedGesture = true; // even when this tap is dropped as a duplicate below, its click is still redundant
-      if (Date.now() < suppressClickUntil) return;
+      if (Date.now() < suppressClickUntil) { tapTrace("  tap dropped (duplicate window)"); return; }
       suppressClickUntil = Date.now() + 650;
       handleTap(e.target, t.clientX, e.view, contents);
       return;
@@ -2069,8 +2100,9 @@
   }
   function onReaderClick(e, contents) {
     diag("click");
-    if (touchConsumedGesture) { diag("clickAfterTouch"); return; } // the touch already handled this gesture, however late the click is
-    if (Date.now() < suppressClickUntil) return;
+    if (touchConsumedGesture) { diag("clickAfterTouch"); tapTrace(`click ${evSrc(e)} ignored (after touch)`); return; } // the touch already handled this gesture, however late the click is
+    if (Date.now() < suppressClickUntil) { tapTrace(`click ${evSrc(e)} ignored (window)`); return; }
+    tapTrace(`click ${evSrc(e)} handled`);
     handleTap(e.target, e.clientX, e.view, contents);
   }
   function handleTap(target, clientX, view, contents) {
@@ -2099,6 +2131,7 @@
     const ratio = Math.max(0, Math.min(1, (frameLeft + clientX - box.left) / box.width));
     const edges = readerPrefs.taps !== false && (!!pdf || readerPrefs.flow !== "scrolled");
     const middle = () => { if (pdf) pdfMiddleTap(); else setImmersive(!$("reader").classList.contains("immersive")); };
+    tapTrace(`  tap ratio=${ratio.toFixed(2)} → ${!edges || (ratio >= EDGE_ZONE && ratio <= 1 - EDGE_ZONE) ? "middle" : "edge"}`);
     if (!edges) middle();
     else if (ratio < EDGE_ZONE) { goLeft(); checkAutoImmersive(); }
     else if (ratio > 1 - EDGE_ZONE) { goRight(); checkAutoImmersive(); }
@@ -2122,17 +2155,19 @@
     if (!viewerTouchStart || !t) return;
     const dx = t.clientX - viewerTouchStart.x, dy = t.clientY - viewerTouchStart.y, dt = Date.now() - viewerTouchStart.time;
     viewerTouchStart = null;
+    tapTrace(`viewer touchend dx=${Math.round(dx)} dy=${Math.round(dy)} dt=${dt}`);
     if (Math.abs(dx) < 48 && Math.abs(dy) < 48 && dt < 750) {
       touchConsumedGesture = true;
-      if (Date.now() < suppressClickUntil) return;
+      if (Date.now() < suppressClickUntil) { tapTrace("  viewer tap dropped (duplicate window)"); return; }
       suppressClickUntil = Date.now() + 650;
       handleTap(e.target, t.clientX, window, null);
     }
   }, { passive: true });
   $("viewer").addEventListener("click", e => {
     if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
-    if (touchConsumedGesture) { diag("clickAfterTouch"); return; }
-    if (Date.now() < suppressClickUntil) return;
+    if (touchConsumedGesture) { diag("clickAfterTouch"); tapTrace("viewer click ignored (after touch)"); return; }
+    if (Date.now() < suppressClickUntil) { tapTrace("viewer click ignored (window)"); return; }
+    tapTrace("viewer click handled");
     handleTap(e.target, e.clientX, window, null);
   });
   document.addEventListener("keydown", () => { if (currentBook) markActivity(); });
@@ -2499,7 +2534,7 @@
       }
     } catch (_) {}
     doc.addEventListener("wheel", onReaderWheel, { passive: false });
-    doc.addEventListener("touchcancel", () => { touchStart = null; }, { passive: true });
+    doc.addEventListener("touchcancel", () => { tapTrace("touchcancel (doc)"); touchStart = null; }, { passive: true });
     doc.addEventListener("pointerdown", onPointerDown, { passive: true, capture: true }); // a mouse click inside the book must still count
     doc.addEventListener("touchstart", onTouchStart, { passive: true });
     doc.addEventListener("touchend", e => onTouchEnd(e, contents), { passive: true });
@@ -7487,7 +7522,15 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   syncSettingsUI();
   syncAiUI();
   if (APP_VERSION && $("footerVersion")) {
-    $("footerVersion").textContent = `بُرگ · نسخهٔ ${APP_VERSION.replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[d])}`;
+    // v8.13.26: the release time (meta app-released, UTC) is shown next to the version, in the device's own time zone, so
+    // a stale cache or an unfinished deploy is obvious at a glance.
+    const released = (document.querySelector('meta[name="app-released"]') || {}).content || "";
+    let when = "";
+    try {
+      const d = new Date(released);
+      if (released && !isNaN(d)) when = " · " + new Intl.DateTimeFormat("fa-IR", { dateStyle: "short", timeStyle: "short" }).format(d);
+    } catch (_) {}
+    $("footerVersion").textContent = `بُرگ · نسخهٔ ${APP_VERSION.replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[d])}${when}`;
   }
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
     // The SW activates immediately (skipWaiting); when it replaces an existing one, offer a reload.
