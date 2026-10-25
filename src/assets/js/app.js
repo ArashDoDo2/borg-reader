@@ -345,9 +345,19 @@
     return String(value ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
   }
   function paletteFor(seed) {
-    const colors = [["#e5c88d","#173b35"],["#c9d8c6","#28463b"],["#d8a38b","#4b3028"],["#b9cbd6","#243f51"],["#d4c2d9","#4c3453"],["#d9d5c8","#4d493d"]];
+    // v8.13.31: four deeper tones next to the six pastels, so a shelf of generated covers is not all pastel.
+    const colors = [["#e5c88d","#173b35"],["#c9d8c6","#28463b"],["#d8a38b","#4b3028"],["#b9cbd6","#243f51"],["#d4c2d9","#4c3453"],["#d9d5c8","#4d493d"],
+                    ["#1f4d42","#f1e3c2"],["#2c3e5c","#ecd9a8"],["#6e3a33","#f5dfc8"],["#43405a","#e8def6"]];
     let n = 0; for (const c of seed) n = (n * 31 + c.charCodeAt(0)) >>> 0;
     return colors[n % colors.length];
+  }
+  /** v8.13.31: the generated cover of a book without cover art: paper grain, inner frame, an eight-pointed star, the
+   *  title and the author, sized from the cover's own width (CSS container units). Colours come from paletteFor(). */
+  const COVER_MOTIF = '<svg class="ca-motif" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 2.4L14.07 7.01L18.79 5.21L16.99 9.93L21.6 12L16.99 14.07L18.79 18.79L14.07 16.99L12 21.6L9.93 16.99L5.21 18.79L7.01 14.07L2.4 12L7.01 9.93L5.21 5.21L9.93 7.01Z"/><circle cx="12" cy="12" r="2.6"/></svg>';
+  function coverArtHtml(title, author) {
+    const a = String(author || "").trim().replace(/^نویسنده(ٔ)? نامشخص$/, ""); // the importers store this placeholder
+    return `<div class="cover-art" aria-hidden="true"><span class="ca-frame"></span>${COVER_MOTIF}<span class="ca-title" dir="auto">${esc(title || "بدون عنوان")}</span>`
+      + (a ? `<span class="ca-rule"></span><span class="ca-author" dir="auto">${esc(a)}</span>` : "") + `</div>`;
   }
   function getAllProgress() {
     return new Promise((resolve, reject) => {
@@ -390,8 +400,8 @@
     const counts = { reading: 0, want: 0, finished: 0 };
     const f = readerPrefs.libraryFilter || "all";
     const chips = [["all", "همه"], ["status:reading", "در حال خواندن"], ["status:want", "می‌خواهم بخوانم"], ["status:finished", "خوانده‌شده"],
-                   ...shelvesCache.map(x => [`shelf:${x.uid}`, `📚 ${x.name}`])];
-    $("libraryFilters").innerHTML = books.length ? chips.map(([k, l]) => `<button type="button" data-filter="${esc(k)}" aria-pressed="${k === f}">${esc(l)}</button>`).join("") : "";
+                   ...shelvesCache.map(x => [`shelf:${x.uid}`, x.name, "books"])];
+    $("libraryFilters").innerHTML = books.length ? chips.map(([k, l, ico]) => `<button type="button" data-filter="${esc(k)}" aria-pressed="${k === f}"${ico ? ` data-ico="${ico}"` : ""}>${esc(l)}</button>`).join("") : "";
   }
   async function setBookMeta(localId, patch) {
     const b = await getBook(localId);
@@ -443,7 +453,9 @@
     const goal = Math.max(1, Number(readerPrefs.dailyGoal) || 20);
     const today = Math.floor(secondsOn(dayKey()) / 60);
     $("statToday").textContent = fa(today);
-    $("goalArc").setAttribute("stroke-dasharray", `${Math.min(100, Math.round(today / goal * 100))} 100`);
+    // v8.13.31: set as a style one frame later, so the card is painted with the empty ring first and the CSS transition runs.
+    const arc = `${Math.min(100, Math.round(today / goal * 100))} 100`;
+    requestAnimationFrame(() => { $("goalArc").style.strokeDasharray = arc; });
     $("goalButton").textContent = `هدف: ${fa(goal)} دقیقه`;
     let streak = 0;
     const d = new Date();
@@ -556,32 +568,32 @@
     const a = map[at], z = map[at + q.length - 1] + 1;
     return `${esc(text.slice(0, a))}<mark>${esc(text.slice(a, z))}</mark>${esc(text.slice(z))}`;
   }
-  function bookCardHtml(b, prog, hl) {
+  function bookCardHtml(b, prog, hl, enter) {
     const [bg, fg] = paletteFor(b.title || b.id);
-    const cover = b.cover ? `<img alt="" src="${b.cover}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
+    const cover = b.cover ? `<img alt="" src="${b.cover}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : coverArtHtml(b.title, b.author);
     const pct = prog && typeof prog.percentage === "number" ? Math.max(0, Math.min(100, prog.percentage)) : null;
     const bar = pct ? `<div class="cover-progress" aria-hidden="true"><span style="width:${pct}%"></span></div>` : "";
     const catalogLabel = b.catalogStatus === "approved" ? " · عمومی" : b.catalogStatus === "pending" ? " · در انتظار تأیید" : "";
     const statusLabel = b.status === "finished" ? "خوانده‌شده" : b.status === "want" ? "می‌خواهم بخوانم" : null;
     const badge = (statusLabel || (pct ? `${pct.toLocaleString("fa-IR")}٪ خوانده‌شده` : (prog ? "شروع‌شده" : "خوانده‌نشده"))) + catalogLabel;
-    return `<article class="book-card" tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="باز کردن ${esc(b.title)}">
+    return `<article class="book-card${enter != null ? " card-enter" : ""}"${enter != null ? ` style="--d:${enter}ms"` : ""} tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="باز کردن ${esc(b.title)}">
           <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${bar}${isPdfRecord(b) ? '<span class="format-badge" aria-label="PDF">PDF</span>' : ""}</div>
           <div class="book-meta"><h3 title="${esc(b.title)}">${libMarkHtml(b.title, hl)}</h3><p>${libMarkHtml(b.author || "نویسنده نامشخص", hl)}</p><span class="book-badge">${badge}</span></div>
           <button class="remove-book" type="button" data-remove="${esc(b.id)}" aria-label="حذف ${esc(b.title)}" title="حذف">×</button>
           <button class="book-options" type="button" data-options="${esc(b.id)}" aria-label="تنظیمات ${esc(b.title)}" title="وضعیت و قفسه">⋯</button>
-          ${account && b.serverId && !b.catalogStatus ? `<button class="share-book" type="button" data-share="${esc(b.id)}" aria-label="پیشنهاد ${esc(b.title)} برای کتابخانهٔ عمومی" title="پیشنهاد برای کتابخانهٔ عمومی">⇪</button>` : ""}
+          ${account && b.serverId && !b.catalogStatus ? `<button class="share-book" type="button" data-share="${esc(b.id)}" aria-label="پیشنهاد ${esc(b.title)} برای کتابخانهٔ عمومی" title="پیشنهاد برای کتابخانهٔ عمومی" data-ico="share"></button>` : ""}
         </article>`;
   }
   /** v8.13.29 (desktop): the most recently read unfinished book as a wide «در حال خواندن» card. */
-  function nowReadingHtml(b, prog) {
+  function nowReadingHtml(b, prog, enter) {
     const [bg, fg] = paletteFor(b.title || b.id);
-    const cover = b.cover ? `<img alt="" src="${b.cover}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
+    const cover = b.cover ? `<img alt="" src="${b.cover}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">` : coverArtHtml(b.title, b.author);
     const pct = prog && typeof prog.percentage === "number" ? Math.max(0, Math.min(100, Math.round(prog.percentage))) : 0;
     const bits = [];
     if (prog && prog.chapter) bits.push(esc(prog.chapter));
     bits.push(`${pct.toLocaleString("fa-IR")}٪ خوانده‌شده`);
     if (prog && prog.updatedAt) bits.push(`آخرین مطالعه ${syncAgo(prog.updatedAt)}`);
-    return `<article class="book-card now-reading" tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="ادامهٔ مطالعهٔ ${esc(b.title)}">
+    return `<article class="book-card now-reading${enter != null ? " card-enter" : ""}"${enter != null ? ` style="--d:${enter}ms"` : ""} tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="ادامهٔ مطالعهٔ ${esc(b.title)}">
           <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${isPdfRecord(b) ? '<span class="format-badge" aria-label="PDF">PDF</span>' : ""}</div>
           <div class="now-reading-body">
             <p class="eyebrow">در حال خواندن</p>
@@ -595,6 +607,11 @@
         </article>`;
   }
   let libRenderSeq = 0;
+  // v8.13.31: when each book first appeared in the library and its stagger slot. A card animates in only then; the library
+  // re-renders several times right after start-up (stats, progress, sync), so a re-render inside the animation window gets
+  // a negative delay equal to the time already elapsed, and the animation continues instead of restarting or vanishing.
+  const libSeen = new Map(); // id -> { t, slot }
+  const LIB_ENTER_STEP = 38, LIB_ENTER_SPAN = 1300;
   function renderLibrary() {
     const seq = ++libRenderSeq;
     const raw = $("searchInput").value.trim();
@@ -615,7 +632,12 @@
         .filter(b => f === "all" || (f.startsWith("status:") ? (b.status || (prog.get(b.id)?.cfi ? "reading" : "")) === f.slice(7) : (b.shelves || []).includes(f.slice(6))));
       renderFilters(books);
       renderStats(books);
-      $("bookGrid").innerHTML = filtered.map(b => bookCardHtml(b, prog.get(b.id), query)).join("");
+      const now = performance.now();
+      let slot = 0;
+      for (const b of filtered) if (!libSeen.has(b.id)) libSeen.set(b.id, { t: now, slot: Math.min(slot++, 14) });
+      for (const b of books) if (!libSeen.has(b.id)) libSeen.set(b.id, { t: now, slot: 0 });
+      const enterOf = b => { const e = libSeen.get(b.id), gone = now - e.t; return gone < LIB_ENTER_SPAN ? Math.round(e.slot * LIB_ENTER_STEP - gone) : null; };
+      $("bookGrid").innerHTML = filtered.map(b => bookCardHtml(b, prog.get(b.id), query, enterOf(b))).join("");
       // While searching the «ادامهٔ مطالعه» shelf is hidden: the grid is the single result list the count refers to.
       const reading = query ? [] : books.filter(b => { const p = prog.get(b.id); return p && p.cfi && (p.percentage || 0) < 100; })
         .sort((a, b) => lastRead(b) - lastRead(a)).slice(0, window.matchMedia("(max-width:700px)").matches ? 3 : 8); // phones: compact rows (CSS), three at most
@@ -624,9 +646,9 @@
       const wide = !window.matchMedia("(max-width:700px)").matches;
       $("continueShelf").classList.toggle("has-now-reading", wide && reading.length > 0);
       // 8.13.30: the wide card takes a row of its own; the other unfinished books scroll horizontally below it.
-      const rest = reading.slice(wide ? 1 : 0).map(b => bookCardHtml(b, prog.get(b.id))).join("");
+      const rest = reading.slice(wide ? 1 : 0).map(b => bookCardHtml(b, prog.get(b.id), "", enterOf(b))).join("");
       $("continueShelf").innerHTML = wide && reading.length
-        ? nowReadingHtml(reading[0], prog.get(reading[0].id)) + (rest ? `<div class="continue-rest">${rest}</div>` : "")
+        ? nowReadingHtml(reading[0], prog.get(reading[0].id), enterOf(reading[0])) + (rest ? `<div class="continue-rest">${rest}</div>` : "")
         : rest;
       updateStorageInfo();
       $("emptyState").classList.toggle("visible", books.length === 0);
@@ -2688,7 +2710,7 @@
   function ttsUi() {
     $("ttsBar").hidden = !tts.active;
     $("ttsToggle").setAttribute("aria-pressed", String(tts.active));
-    $("ttsPlay").textContent = tts.paused ? "▶" : "⏸";
+    $("ttsPlay").dataset.ico = tts.paused ? "play" : "pause";
     $("ttsPlay").setAttribute("aria-label", tts.paused ? "ادامه" : "مکث");
   }
   function contentsForIndex(index) {
@@ -3383,7 +3405,7 @@
         badge.hidden = false;
         badge.style.display = "flex";
       }
-      if (badgeText) badgeText.textContent = `📌 تمرکز روی متن انتخابی: «${cleanCtx.slice(0, 50)}…»`;
+      if (badgeText) badgeText.textContent = `تمرکز روی متن انتخابی: «${cleanCtx.slice(0, 50)}…»`;
     } else {
       aiContextText = "";
       if (badge) {
@@ -3478,15 +3500,15 @@
   function renderAiReply(reply, type = "general", isCached = false) {
     const container = $("aiResponse");
     if (!container) return;
-    const cachedBadge = isCached ? '<div class="ai-cached-pill">✨ خلاصهٔ ذخیره‌شدهٔ این فصل</div>' : '';
+    const cachedBadge = isCached ? '<div class="ai-cached-pill" data-ico="sparkles">خلاصهٔ ذخیره‌شدهٔ این فصل</div>' : '';
     const isSummaryType = type === "summary";
     container.innerHTML = `
       ${cachedBadge}
       <div class="ai-reply-text">${formatAiMarkdown(reply)}</div>
       <div class="ai-response-actions" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)">
-        <button id="aiSaveNoteBtn" class="ai-save-note-btn" type="button">📌 ذخیره در یادداشت‌های کتاب</button>
-        <button id="aiCopyBtn" class="ai-save-note-btn" type="button">📋 کپی متن</button>
-        ${isSummaryType ? '<button id="aiRegenSummaryBtn" class="ai-save-note-btn" type="button">🔄 تولید مجدد</button>' : ''}
+        <button id="aiSaveNoteBtn" class="ai-save-note-btn" type="button" data-ico="pin">ذخیره در یادداشت‌های کتاب</button>
+        <button id="aiCopyBtn" class="ai-save-note-btn" type="button" data-ico="clipboard">کپی متن</button>
+        ${isSummaryType ? '<button id="aiRegenSummaryBtn" class="ai-save-note-btn" type="button" data-ico="refresh">تولید مجدد</button>' : ''}
       </div>
     `;
 
@@ -3495,7 +3517,7 @@
       saveBtn.addEventListener("click", async () => {
         saveBtn.disabled = true;
         await saveAiSummaryToNotes(reply);
-        saveBtn.textContent = "✅ در یادداشت‌ها ذخیره شد";
+        saveBtn.textContent = "در یادداشت‌ها ذخیره شد"; saveBtn.dataset.ico = "check";
       });
     }
 
@@ -3673,7 +3695,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       }
       renderAiReply(reply, type, false);
     } catch (err) {
-      $("aiResponse").innerHTML = `<p style="color:#b3261e">❌ ${esc(err.message || "خطا در پردازش هوش مصنوعی")}</p>`;
+      $("aiResponse").innerHTML = `<p style="color:#b3261e" data-ico="x-circle">${esc(err.message || "خطا در پردازش هوش مصنوعی")}</p>`;
     } finally {
       aiBusy = false;
     }
@@ -3751,13 +3773,13 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       await callAi("پاسخ فقط یک کلمه: سلام", "تست اتصال به هوش مصنوعی", apiKey, provider);
       saveAiConfig({ provider, apiKey });
       statusEl.className = "form-error ai-test-status success";
-      statusEl.textContent = "✅ اتصال موفقیت‌آمیز بود! کلید هوش مصنوعی با موفقیت در این مرورگر ذخیره شد.";
+      statusEl.textContent = "اتصال موفقیت‌آمیز بود! کلید هوش مصنوعی با موفقیت در این مرورگر ذخیره شد.";
       syncAiUI();
       showToast("دستیار هوش مصنوعی فعال شد.");
       setTimeout(() => { if ($("aiGuideDialog").open) $("aiGuideDialog").close(); }, 1200);
     } catch (err) {
       statusEl.className = "form-error ai-test-status error";
-      statusEl.textContent = `❌ ${err.message || "خطا در برقراری ارتباط با هوش مصنوعی"}`;
+      statusEl.textContent = err.message || "خطا در برقراری ارتباط با هوش مصنوعی";
     } finally {
       saveBtn.disabled = false;
       saveBtn.textContent = "تست و ذخیرهٔ کلید";
@@ -3902,7 +3924,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     const anns = (await getAnnotations(currentBook.id)).sort((a, b) => pdf ? (pdfTargetPage(a.cfi) || 0) - (pdfTargetPage(b.cfi) || 0) : cfiCompare(a.cfi, b.cfi));
     $("notesList").innerHTML = anns.length ? anns.map(a => `<div class="note-item" data-goto="${esc(a.cfi)}">
         <span class="note-mark" style="background:${a.type === "bookmark" ? "#2f7a62" : (HL_COLORS[a.color] || HL_COLORS.yellow)}"></span>
-        <span class="note-text"><span class="note-quote" dir="auto">${a.type === "bookmark" ? "🔖 " : ""}${esc(a.quote || "")}</span>${a.note ? `<span class="note-note" dir="auto">✎ ${esc(a.note)}</span>` : ""}</span>
+        <span class="note-text"><span class="note-quote" dir="auto"${a.type === "bookmark" ? ' data-ico="bookmark"' : ""}>${esc(a.quote || "")}</span>${a.note ? `<span class="note-note" dir="auto" data-ico="pencil">${esc(a.note)}</span>` : ""}</span>
         <button class="note-del" type="button" data-del="${esc(a.uid)}" aria-label="حذف">×</button></div>`).join("")
       : (pdf ? '<p class="muted">هنوز نشانکی نداری. با دکمهٔ نشانک، صفحه را نشانه بگذار.</p>' : '<p class="muted">هنوز نشانک یا یادداشتی نداری. متن را انتخاب کن تا هایلایت شود.</p>');
   }
@@ -4076,6 +4098,30 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     if ((e.key === "Enter" || e.key === " ") && e.target.matches("[data-open]")) { e.preventDefault(); openReader(e.target.dataset.open).catch(err => { console.error(err); reportError("reader", err, "openReader"); showToast("بازکردن کتاب ناموفق بود."); }); }
   };
   ["bookGrid", "continueShelf"].forEach(id => { $(id).addEventListener("click", onLibraryClick); $(id).addEventListener("keydown", onLibraryKey); });
+  // v8.13.31: the cover under a mouse tilts slightly toward it, with a soft glare (CSS reads --rx/--ry/--gx/--gy).
+  // Mouse/trackpad only, and off with prefers-reduced-motion; one update per frame.
+  const tiltOk = window.matchMedia("(hover:hover) and (pointer:fine) and (prefers-reduced-motion:no-preference)");
+  let tiltEl = null, tiltEv = null, tiltRaf = 0;
+  const tiltReset = el => { if (el) ["--rx", "--ry", "--gx", "--gy"].forEach(k => el.style.removeProperty(k)); };
+  function tiltFrame() {
+    tiltRaf = 0;
+    const e = tiltEv, cover = e && e.target.closest && e.target.closest(".book-cover-thumb");
+    if (cover !== tiltEl) { tiltReset(tiltEl); tiltEl = cover; }
+    if (!cover) return;
+    const r = cover.getBoundingClientRect(); if (!r.width || !r.height) return;
+    const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)), y = Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+    cover.style.setProperty("--ry", `${((x - .5) * 14).toFixed(2)}deg`);
+    cover.style.setProperty("--rx", `${((.5 - y) * 12).toFixed(2)}deg`);
+    cover.style.setProperty("--gx", `${(x * 100).toFixed(1)}%`);
+    cover.style.setProperty("--gy", `${(y * 100).toFixed(1)}%`);
+  }
+  ["bookGrid", "continueShelf"].forEach(id => {
+    $(id).addEventListener("pointermove", e => {
+      if (e.pointerType !== "mouse" || !tiltOk.matches) return;
+      tiltEv = e; if (!tiltRaf) tiltRaf = requestAnimationFrame(tiltFrame);
+    }, { passive: true });
+    $(id).addEventListener("pointerleave", () => { tiltEv = null; tiltReset(tiltEl); tiltEl = null; });
+  });
   $("libraryFilters").addEventListener("click", e => {
     const b = e.target.closest("[data-filter]");
     if (!b) return;
@@ -4096,7 +4142,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     if (descEl) descEl.value = b.description || "";
     $("shelfChecks").innerHTML = shelvesCache.length ? shelvesCache.map(sh => `<label><input type="checkbox" data-shelf="${esc(sh.uid)}" ${(b.shelves || []).includes(sh.uid) ? "checked" : ""}> ${esc(sh.name)}
         <button type="button" class="note-del" data-shelf-del="${esc(sh.uid)}" aria-label="حذف قفسه">×</button></label>`).join("") : '<p class="muted small">هنوز قفسه‌ای نساخته‌ای.</p>';
-    $("bookOptionsActions").innerHTML = (account && account.user?.role !== "student" && b.serverId && !b.catalogStatus ? `<button class="secondary-button" type="button" data-opt="share">⇪ پیشنهاد برای کتابخانهٔ عمومی</button>` : "")
+    $("bookOptionsActions").innerHTML = (account && account.user?.role !== "student" && b.serverId && !b.catalogStatus ? `<button class="secondary-button" type="button" data-opt="share" data-ico="share">پیشنهاد برای کتابخانهٔ عمومی</button>` : "")
       + `<button class="secondary-button" type="button" data-opt="remove">حذف کتاب</button>`;
   }
   const bOptDesc = $("bookOptionsDesc");
@@ -4113,7 +4159,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       if (!b) return;
       bOptAi.disabled = true;
       const prevText = bOptAi.textContent;
-      bOptAi.textContent = "✨ در حال نگارش…";
+      bOptAi.textContent = "در حال نگارش…";
       try {
         await generateBookDescription(b.title, b.author, b.publisher || "", b.category || "", chunk => {
           $("bookOptionsDesc").value = chunk;
@@ -4302,7 +4348,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     $("accountInfo").hidden = !user;
     if (user) {
       $("accountName").textContent = user.name;
-      $("accountEmail").textContent = user.email + (user.role === "student" ? " · 🎓 دانشجو" : (user.role === "admin" ? " · مدیر" : ""));
+      $("accountEmail").textContent = user.email + (user.role === "student" ? " · دانشجو" : (user.role === "admin" ? " · مدیر" : ""));
     }
     if (!user || user.role !== "admin") { hideNewApiToken(); setCleanSyncState(""); }
     else pullCleanRules();
@@ -4780,7 +4826,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   const authorOf = b => String((b && b.author) || "").trim();
   function catalogCover(b, lazy) {
     return b.has_cover ? `<img alt="" ${lazy ? 'loading="lazy"' : ""} src="${API}?r=book-cover&id=${b.id}" style="width:100%;height:100%;object-fit:cover;position:absolute;inset:0">`
-      : `<div style="position:relative"><div class="cover-symbol">✳</div><div class="cover-name">${esc(b.title)}</div></div>`;
+      : coverArtHtml(b.title, b.author);
   }
   function catalogCardHtml(b, withAction) {
     const [bg, fg] = paletteFor(b.title || String(b.id));
@@ -4923,10 +4969,10 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   function renderCatalogFilters() {
     const chips = [];
     if (catalogFilter.author) {
-      chips.push(`<button type="button" class="filter-chip-active" data-clear-author aria-label="برداشتن فیلتر نویسنده ${esc(catalogFilter.author)}">نویسنده: ${esc(catalogFilter.author)} <span aria-hidden="true">✕</span></button>`);
+      chips.push(`<button type="button" class="filter-chip-active" data-clear-author aria-label="برداشتن فیلتر نویسنده ${esc(catalogFilter.author)}">نویسنده: ${esc(catalogFilter.author)} <span aria-hidden="true" data-ico="x"></span></button>`);
     }
     if (catalogFilter.category) {
-      chips.push(`<button type="button" class="filter-chip-active" data-clear-category aria-label="برداشتن فیلتر دستهٔ ${esc(catalogFilter.category)}">دسته: ${esc(catalogFilter.category)} <span aria-hidden="true">✕</span></button>`);
+      chips.push(`<button type="button" class="filter-chip-active" data-clear-category aria-label="برداشتن فیلتر دستهٔ ${esc(catalogFilter.category)}">دسته: ${esc(catalogFilter.category)} <span aria-hidden="true" data-ico="x"></span></button>`);
     }
     $("catalogFilters").innerHTML = chips.join("");
     $("catalogFilters").hidden = !chips.length;
@@ -5061,7 +5107,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       crumbs.innerHTML = `<button type="button" class="crumb" data-cat-pick="">کتابخانهٔ عمومی</button>${sep}`
         + (top ? `<button type="button" class="crumb" data-cat-pick="${top.id}" dir="auto">${esc(top.name)}</button>${sep}` : "")
         + `<span class="crumb-current" aria-current="page" dir="auto">${esc(cur ? cur.name : cats.loaded ? "دستهٔ نامشخص" : "…")}</span>`
-        + `<button type="button" class="cat-clear" data-cat-pick="" aria-label="برداشتن فیلتر دسته"><span aria-hidden="true">✕</span> همهٔ دسته‌ها</button>`;
+        + `<button type="button" class="cat-clear" data-cat-pick="" aria-label="برداشتن فیلتر دسته"><span aria-hidden="true" data-ico="x"></span> همهٔ دسته‌ها</button>`;
     } else crumbs.innerHTML = "";
     crumbs.hidden = !sel;
   }
@@ -5339,7 +5385,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     $("detailMeta").hidden = !rows.length;
     const local = b.in_library ? (await getAllBooks()).find(x => x.serverId === b.id || (b.sha256 && x.contentHash === b.sha256)) : null;
     if (detailId !== b.id) return;
-    $("detailRead").textContent = local ? "📖 ادامهٔ مطالعه" : "📖 مطالعهٔ آنلاین";
+    $("detailRead").textContent = local ? "ادامهٔ مطالعه" : "مطالعهٔ آنلاین";
     $("detailRead").dataset.local = local ? local.id : "";
     $("detailAddGroup").hidden = !!b.in_library;
     $("detailInLibrary").hidden = !b.in_library;
@@ -5546,7 +5592,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       if (!b) return;
       submitAi.disabled = true;
       const prevText = submitAi.textContent;
-      submitAi.textContent = "✨ در حال نگارش…";
+      submitAi.textContent = "در حال نگارش…";
       try {
         await generateBookDescription(b.title, b.author, b.publisher || "", "", chunk => {
           $("submitForm").elements.description.value = chunk;
@@ -5720,7 +5766,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     try { users = await api("users"); } catch (err) { $("userList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; return; }
     const fa = faNum, me = account?.user?.id;
     $("userList").innerHTML = users.users.map(u => {
-      const roleText = u.role === "admin" ? "مدیر" : (u.role === "student" ? "🎓 دانشجو" : "کاربر");
+      const roleText = u.role === "admin" ? "مدیر" : (u.role === "student" ? '<span data-ico="graduation">دانشجو</span>' : "کاربر");
       return `<div class="admin-item" data-user="${u.id}">
         <span>${esc(u.name)} <span class="muted" dir="ltr">${esc(u.email)}</span><br>
         <span class="muted small">${roleText} · ${fa(u.books)} کتاب${u.last_seen ? ` · آخرین ورود ${fmtDate(u.last_seen)}` : ""}</span>
@@ -5728,7 +5774,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
         ${u.id === me ? '<span class="muted small">(خودت)</span>' : `<span class="admin-row">
           <button class="secondary-button" type="button" data-user-act="${u.disabled ? "enable" : "disable"}">${u.disabled ? "فعال کردن" : "غیرفعال کردن"}</button>
           <button class="secondary-button" type="button" data-user-act="${u.role === "admin" ? "demote" : "promote"}">${u.role === "admin" ? "کاربر عادی شود" : "مدیر شود"}</button>
-          ${u.role !== "admin" ? `<button class="secondary-button" type="button" data-user-act="${u.role === "student" ? "set-user" : "set-student"}">${u.role === "student" ? "کاربر عادی شود" : "🎓 دانشجو شود"}</button>` : ""}
+          ${u.role !== "admin" ? `<button class="secondary-button" type="button" data-user-act="${u.role === "student" ? "set-user" : "set-student"}"${u.role === "student" ? "" : ' data-ico="graduation"'}>${u.role === "student" ? "کاربر عادی شود" : "دانشجو شود"}</button>` : ""}
           <button class="secondary-button" type="button" data-user-act="reset">ریست رمز</button>
           <button class="secondary-button" type="button" data-user-act="delete">حذف</button></span>`}</div>`;
     }).join("");
@@ -5736,7 +5782,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   async function loadInvites() {
     let invites;
     try { invites = await api("invites"); } catch (err) { $("inviteList").innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; return; }
-    $("inviteList").innerHTML = invites.invites.map(i => `<div class="admin-item"><span>${esc(i.note || "بدون یادداشت")}${i.role === "student" ? ' <span class="status-chip">🎓 دانشجو</span>' : ""}</span>
+    $("inviteList").innerHTML = invites.invites.map(i => `<div class="admin-item"><span>${esc(i.note || "بدون یادداشت")}${i.role === "student" ? ' <span class="status-chip" data-ico="graduation">دانشجو</span>' : ""}</span>
         <span class="admin-row"><span class="muted">${i.used_by ? `استفاده‌شده توسط ${esc(i.used_by)}` : i.expires_at * 1000 < Date.now() ? "منقضی" : `معتبر تا ${fmtDate(i.expires_at)}`}</span>
         ${!i.used_by && i.expires_at * 1000 > Date.now() ? `<button class="secondary-button" type="button" data-invite-revoke="${esc(i.id)}">باطل کردن</button>` : ""}</span></div>`).join("")
       || '<p class="muted">هنوز دعوت‌نامه‌ای ساخته نشده.</p>';
@@ -6221,7 +6267,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       }
       urlAiDesc.disabled = true;
       const prevText = urlAiDesc.textContent;
-      urlAiDesc.textContent = "✨ در حال نگارش…";
+      urlAiDesc.textContent = "در حال نگارش…";
       try {
         await generateBookDescription(title, author, "", "", chunk => {
           $("admImportUrlDesc").value = chunk;
@@ -6253,7 +6299,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     const [bg, fg] = paletteFor(title || String(b.id));
     const cover = $("admDetailCover");
     cover.style.background = bg; cover.style.color = fg;
-    cover.innerHTML = b.has_cover ? `<img alt="" src="${API}?r=book-cover&id=${b.id}">` : `<div class="cover-name">${esc(title)}</div>`;
+    cover.innerHTML = b.has_cover ? `<img alt="" src="${API}?r=book-cover&id=${b.id}">` : coverArtHtml(title, b.author);
     $("admDetailTitle").textContent = title;
     $("admDetailChips").innerHTML = `<span class="adm-chip fmt">${b.format === "pdf" ? "PDF" : "EPUB"}</span><span class="adm-st st-${st}">${STATUS_FA[st]}</span>`
       + (b.source === "api" ? '<span class="adm-chip api">API</span>' : "")
@@ -6303,7 +6349,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       const descField = f.elements.description;
       admAiDesc.disabled = true;
       const prevText = admAiDesc.textContent;
-      admAiDesc.textContent = "✨ در حال نگارش…";
+      admAiDesc.textContent = "در حال نگارش…";
       try {
         await generateBookDescription(title, author, publisher, category, chunk => {
           descField.value = chunk;
@@ -6330,7 +6376,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       }
       admExtractMeta.disabled = true;
       const prevText = admExtractMeta.textContent;
-      admExtractMeta.textContent = "🔍 در حال استخراج…";
+      admExtractMeta.textContent = "در حال استخراج…";
       try {
         const res = await extractBookPublisherAndDate(title, author, b?.id);
         let filledCount = 0;
@@ -6348,9 +6394,9 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
         }
 
         if (filledCount === 2) {
-          showToast(`✅ ${msgs.join(" و ")} استخراج شد.`);
+          showToast(`${msgs.join(" و ")} استخراج شد.`);
         } else if (filledCount === 1) {
-          showToast(`✅ ${msgs[0]} استخراج شد (مورد دیگر قطعی نبود و طبق دستور خالی ماند).`);
+          showToast(`${msgs[0]} استخراج شد (مورد دیگر قطعی نبود و طبق دستور خالی ماند).`);
         } else {
           showToast("ناشر یا تاریخ قطعی در کتاب یافت نشد (طبق دستور، خالی ماندند).");
         }
@@ -6468,7 +6514,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     }
     const label = $("admDetailReplaceText");
     const origText = label ? label.textContent : "";
-    if (label) label.textContent = "⏳ در حال جایگزینی…";
+    if (label) label.textContent = "در حال جایگزینی…";
     if ($("admDetailReplaceLabel")) $("admDetailReplaceLabel").style.pointerEvents = "none";
     try {
       await uploadAndReplaceAdminBook(b, file);
@@ -6502,14 +6548,14 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
         }
         $("admAssignList").innerHTML = users.map(u => {
           const isAssigned = assignedSet.has(u.id);
-          const roleBadge = u.role === "student" ? '<span class="status-chip">🎓 دانشجو</span>' : (u.role === "admin" ? '<span class="status-chip cat-chip">مدیر</span>' : '<span class="status-chip off">کاربر</span>');
+          const roleBadge = u.role === "student" ? '<span class="status-chip" data-ico="graduation">دانشجو</span>' : (u.role === "admin" ? '<span class="status-chip cat-chip">مدیر</span>' : '<span class="status-chip off">کاربر</span>');
           return `<div class="admin-item" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
             <div>
               <strong>${esc(u.name)}</strong> ${roleBadge}<br>
               <span class="muted small" dir="ltr">${esc(u.email)}</span>
             </div>
-            <button type="button" class="${isAssigned ? 'secondary-button' : 'primary-button'}" data-assign-uid="${u.id}" data-action="${isAssigned ? 'unassign' : 'assign'}" style="white-space:nowrap;font-size:12px;padding:4px 10px">
-              ${isAssigned ? '✓ در کتابخانه (حذف)' : '➕ افزودن به کتابخانه'}
+            <button type="button" class="${isAssigned ? 'secondary-button' : 'primary-button'}" data-assign-uid="${u.id}" data-action="${isAssigned ? 'unassign' : 'assign'}" data-ico="${isAssigned ? 'check' : 'plus'}" style="white-space:nowrap;font-size:12px;padding:4px 10px">
+              ${isAssigned ? 'در کتابخانه (حذف)' : 'افزودن به کتابخانه'}
             </button>
           </div>`;
         }).join("");
@@ -6588,7 +6634,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
         <button class="secondary-button" type="button" data-review="${b.id}" data-approve="1">تأیید</button>
         <button class="secondary-button" type="button" data-review="${b.id}" data-approve="0">رد</button></span></div>`).join("")
       : '<p class="muted">موردی در انتظار نیست.</p>';
-    if (!n) { $("admReview").innerHTML = '<div class="adm-rv-empty"><p>موردی در انتظار نیست. 🎉</p></div>'; return; }
+    if (!n) { $("admReview").innerHTML = '<div class="adm-rv-empty"><p>موردی در انتظار نیست.</p></div>'; return; }
     const b = q.list[q.idx], title = String(b.title || "بدون عنوان"), cat = catOf(b), bc = bookCats(b);
     const catChips = bc.length ? bc.map(c => `<span class="adm-chip cat" dir="auto">${esc(catPathOf(c))}</span>`).join("")
       : cat ? `<span class="adm-chip cat" dir="auto">${esc(cat)}</span>` : '<span class="adm-chip">بدون دسته</span>';
@@ -6602,7 +6648,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       ["حجم", b.size ? admSize(b.size) : ""],
     ].filter(([, v]) => v);
     $("admReview").innerHTML = `<article class="adm-rv" data-rv-id="${b.id}">
-      <div class="book-cover-thumb adm-rv-cover" style="background:${bg};color:${fg}">${b.has_cover ? `<img alt="" src="${API}?r=book-cover&id=${b.id}">` : `<div class="cover-name">${esc(title)}</div>`}</div>
+      <div class="book-cover-thumb adm-rv-cover" style="background:${bg};color:${fg}">${b.has_cover ? `<img alt="" src="${API}?r=book-cover&id=${b.id}">` : coverArtHtml(title, b.author)}</div>
       <div class="adm-rv-body">
         <p class="adm-rv-pos muted small">کتاب ${faNum(q.idx + 1)} از ${faNum(n)}</p>
         <h3 class="adm-rv-title" dir="auto">${esc(title)}</h3>
@@ -6617,7 +6663,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
           <span class="adm-rv-nav"><button type="button" class="secondary-button" data-rv="prev" aria-keyshortcuts="K ArrowRight" ${q.idx ? "" : "disabled"}>→ قبلی</button>
           <button type="button" class="secondary-button" data-rv="next" aria-keyshortcuts="J ArrowLeft" ${q.idx < n - 1 ? "" : "disabled"}>بعدی ←</button></span>
         </div>
-        <div class="adm-rv-more"><button type="button" class="text-button" data-rv="preview">📖 پیش‌نمایش متن</button><button type="button" class="text-button" data-rv="details">ویرایش جزئیات</button><a class="text-button" href="${API}?r=book-file&id=${b.id}" download>دانلود</a></div>
+        <div class="adm-rv-more"><button type="button" class="text-button" data-rv="preview" data-ico="book-open">پیش‌نمایش متن</button><button type="button" class="text-button" data-rv="details">ویرایش جزئیات</button><a class="text-button" href="${API}?r=book-file&id=${b.id}" download>دانلود</a></div>
       </div></article>`;
   }
   async function queueAct(act, btn) {

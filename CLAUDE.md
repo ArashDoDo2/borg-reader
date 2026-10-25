@@ -2,7 +2,7 @@
 
 Persian-first EPUB/PDF reader: an offline-capable PWA (static files, no build step) plus an optional PHP 8 API
 for invite-only accounts, cloud sync and a moderated public catalog. Live at https://parsun.com/borg/.
-Current version: see `<meta name="app-version">` in `src/index.html` (8.13.30 when this file was last updated).
+Current version: see `<meta name="app-version">` in `src/index.html` (8.13.31 when this file was last updated).
 
 Owner and final decision-maker: Arash Naderpour. Work only inside the agreed scope; no refactors, extra files
 or deletions beyond what was asked. When something is ambiguous, ask instead of guessing.
@@ -76,5 +76,9 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
   rewritten `main` blocks every deploy until the owner runs `git reset --hard origin/main` on the server (2026-10-25).
 - The service worker precaches with `cache: "reload"`; keep it that way, or a release can ship a stale app.css/app.js from
   the browser's HTTP cache (seen on Chrome for iOS).
+- UI icons: no emoji in the interface. Use the line-icon set: `data-ico="name"` on the element (drawn by a CSS `::before`
+  mask, see the `v8.13.31 icons` block at the end of `app.css`); add a new icon there as a 24×24, stroke-2 SVG. Emoji are only
+  left in stored/exported user data (AI-summary note title, Markdown notes export).
+- Generated covers come from `coverArtHtml(title, author)` only; don't hand-build cover placeholders.
 - Three test suites must stay green: `tests/api_test.py`, `tests/e2e_test.py`, and `tests/webkit_e2e.py --browser chromium`
   locally (WebKit itself runs in CI).

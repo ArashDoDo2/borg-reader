@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.13.30">
-  <meta name="app-released" content="2026-10-25T14:00:00Z">
+  <meta name="app-version" content="8.13.31">
+  <meta name="app-released" content="2026-10-25T16:30:00Z">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data: https://generativelanguage.googleapis.com https://api.openai.com; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -87,7 +87,7 @@
             <p class="teaser-desc">خلاصه‌سازی هوشمند فصل‌ها، توضیح پاراگراف‌های دشوار و پرسش از کتاب با هوش مصنوعی (Google Gemini و OpenAI)؛ کاملاً رایگان، بدون واسطه و با حفظ ۱۰۰٪ حریم خصوصی.</p>
           </div>
         </div>
-        <button id="aiTeaserButton" class="secondary-button teaser-btn ai-teaser-btn" type="button">✨ راهنمای فعال‌سازی و تنظیم کلید</button>
+        <button id="aiTeaserButton" class="secondary-button teaser-btn ai-teaser-btn" type="button" data-ico="sparkles">راهنمای فعال‌سازی و تنظیم کلید</button>
       </div>
 
       <nav class="view-tabs" role="tablist" aria-label="بخش‌ها">
@@ -105,8 +105,8 @@
           </select>
           <div id="librarySearchBox" class="search-box lib-search" role="search"><span aria-hidden="true">⌕</span><input id="searchInput" type="search" placeholder="جستجو در عنوان، نویسنده، ناشر…" autocomplete="off" aria-label="جستجو در کتابخانهٔ من" aria-keyshortcuts="/" enterkeyhint="search"><button id="librarySearchClear" class="lib-search-clear" type="button" aria-label="پاک کردن جستجو" title="پاک کردن جستجو (Esc)" hidden>×</button></div>
           <label class="secondary-button import-button"><svg class="ico" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg><span>افزودن<span class="lbl-long"> کتاب</span></span><input id="epubInputSmall" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" multiple hidden></label>
-          <button id="cleanOpen" class="secondary-button clean-open" type="button" aria-haspopup="dialog" title="حذف عبارت‌های ناخواسته (مثل لینک کانال) از متن همهٔ کتاب‌ها" aria-label="پاک‌سازی متن"><span>🧹 پاک‌سازی<span class="lbl-long"> متن</span></span></button>
-          <button id="libAiSettings" class="secondary-button lib-ai-settings" type="button" aria-haspopup="dialog" title="تنظیمات یا حذف کلید هوش مصنوعی" aria-label="تنظیمات هوش مصنوعی" hidden><span>✨<span class="lbl-long"> هوش مصنوعی</span></span></button>
+          <button id="cleanOpen" class="secondary-button clean-open" type="button" aria-haspopup="dialog" title="حذف عبارت‌های ناخواسته (مثل لینک کانال) از متن همهٔ کتاب‌ها" aria-label="پاک‌سازی متن"><span data-ico="broom">پاک‌سازی<span class="lbl-long"> متن</span></span></button>
+          <button id="libAiSettings" class="secondary-button lib-ai-settings" type="button" aria-haspopup="dialog" title="تنظیمات یا حذف کلید هوش مصنوعی" aria-label="تنظیمات هوش مصنوعی" hidden><span data-ico="sparkles" class="ico-only-narrow"><span class="lbl-long">هوش مصنوعی</span></span></button>
         </div>
       </div>
       <div id="statsCard" class="stats-card" hidden>
@@ -138,7 +138,7 @@
       <div id="viewCatalog" class="view" hidden>
         <div class="section-heading"><div><p class="eyebrow">برای همه</p><h2>کتابخانهٔ عمومی</h2></div>
           <div class="library-controls"><label class="search-box"><span>⌕</span><input id="catalogSearch" type="search" placeholder="جست‌وجو در کتابخانهٔ عمومی…" autocomplete="off"></label></div></div>
-        <p class="muted catalog-hint">برای پیشنهاد یک کتاب، در «کتابخانهٔ من» دکمهٔ ⇪ روی جلد آن را بزن.</p>
+        <p class="muted catalog-hint">برای پیشنهاد یک کتاب، در «کتابخانهٔ من» دکمهٔ پیشنهاد (<span data-ico="share" aria-hidden="true"></span>) روی جلد آن را بزن.</p>
         <div id="catalogLayout" class="catalog-layout">
         <nav id="catNav" class="cat-nav" aria-label="دسته‌های کتابخانهٔ عمومی" hidden>
           <h3 class="cat-nav-title">دسته‌ها</h3>
@@ -194,7 +194,7 @@
             <div id="detailBody">
               <button id="detailAuthor" class="author-link" type="button"></button>
               <div class="detail-actions">
-                <button id="detailRead" class="primary-button" type="button">📖 مطالعهٔ آنلاین</button>
+                <button id="detailRead" class="primary-button" type="button" data-ico="book-open">مطالعهٔ آنلاین</button>
                 <div id="detailAddGroup" class="split-button">
                   <button id="detailAdd" class="secondary-button" type="button">＋ افزودن به کتابخانهٔ من</button>
                   <button id="detailAddMore" class="secondary-button split-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="detailAddMenu" aria-label="افزودن به قفسه‌ها">▾</button>
@@ -205,7 +205,7 @@
                     <button id="detailAddConfirm" class="primary-button" type="button">افزودن به کتابخانه</button>
                   </div>
                 </div>
-                <span id="detailInLibrary" class="book-badge detail-badge" hidden>✓ در کتابخانهٔ تو</span>
+                <span id="detailInLibrary" class="book-badge detail-badge" hidden data-ico="check">در کتابخانهٔ تو</span>
               </div>
               <div id="detailDescWrap" class="detail-desc-wrap">
                 <p id="detailDesc" class="detail-desc clamped"></p>
@@ -315,7 +315,7 @@
               <input id="inviteNote" class="admin-input" placeholder="برای چه کسی؟ (اختیاری)" maxlength="120">
               <select id="inviteRole" class="admin-input" style="max-width:145px;padding:6px 8px" aria-label="نقش کاربر">
                 <option value="user">کاربر عادی</option>
-                <option value="student">🎓 دانشجو</option>
+                <option value="student">دانشجو</option>
               </select>
               <button id="createInvite" class="secondary-button" type="button">ساخت کد دعوت</button>
             </div>
@@ -373,19 +373,19 @@
         <div id="bookSearchResults" class="search-results"></div>
       </div>
       <div id="aiPanel" class="settings-panel ai-panel" role="dialog" aria-label="دستیار هوش مصنوعی" hidden>
-        <div class="sheet-head"><span class="sheet-grab" aria-hidden="true"></span><h2 class="sheet-title">✨ دستیار هوش مصنوعی</h2><button id="aiClose" class="icon-button sheet-close" type="button" aria-label="بستن دستیار"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        <div class="sheet-head"><span class="sheet-grab" aria-hidden="true"></span><h2 class="sheet-title" data-ico="sparkles">دستیار هوش مصنوعی</h2><button id="aiClose" class="icon-button sheet-close" type="button" aria-label="بستن دستیار"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
         <div id="aiPanelBody" class="ai-panel-body">
           <div id="aiSetupPrompt" class="ai-setup-prompt" hidden>
             <p class="ai-setup-text">برای استفاده از خلاصه‌سازی و تحلیل هوشمند، کلید رایگان خود را وارد کنید.</p>
-            <button id="aiOpenSetup" class="primary-button" type="button">✨ تنظیم کلید اختصاصی (رایگان)</button>
+            <button id="aiOpenSetup" class="primary-button" type="button" data-ico="sparkles">تنظیم کلید اختصاصی (رایگان)</button>
           </div>
           <div id="aiMainInterface" class="ai-main-interface" hidden>
             <div class="ai-quick-actions">
-              <button id="aiBtnSummary" class="secondary-button ai-action-btn" type="button">📑 خلاصه این فصل</button>
-              <button id="aiBtnTakeaways" class="secondary-button ai-action-btn" type="button">💡 نکات کلیدی</button>
-              <button id="aiBtnQuestions" class="secondary-button ai-action-btn" type="button">❓ پرسش‌های این فصل</button>
+              <button id="aiBtnSummary" class="secondary-button ai-action-btn" type="button" data-ico="list">خلاصه این فصل</button>
+              <button id="aiBtnTakeaways" class="secondary-button ai-action-btn" type="button" data-ico="bulb">نکات کلیدی</button>
+              <button id="aiBtnQuestions" class="secondary-button ai-action-btn" type="button" data-ico="help">پرسش‌های این فصل</button>
             </div>
-            <div id="aiContextBadge" class="ai-context-badge" hidden style="display:none"><span id="aiContextText"></span><button id="aiClearContext" class="icon-button" type="button" aria-label="حذف متن انتخابی">×</button></div>
+            <div id="aiContextBadge" class="ai-context-badge" hidden style="display:none"><span id="aiContextText" data-ico="pin"></span><button id="aiClearContext" class="icon-button" type="button" aria-label="حذف متن انتخابی">×</button></div>
             <div id="aiConversation" class="ai-conversation">
               <div id="aiResponse" class="ai-response" dir="auto">برای خلاصه‌سازی یا طرح سوال، از دکمه‌های بالا استفاده کنید یا سوال خود را بنویسید.</div>
             </div>
@@ -394,7 +394,7 @@
               <button id="aiPromptSubmit" class="primary-button" type="submit">بپرس</button>
             </form>
             <div class="ai-panel-footer">
-              <button id="aiChangeKey" class="text-button small" type="button">⚙ تنظیمات کلید هوش مصنوعی</button>
+              <button id="aiChangeKey" class="text-button small" type="button" data-ico="settings">تنظیمات کلید هوش مصنوعی</button>
             </div>
           </div>
         </div>
@@ -496,7 +496,7 @@
         <div id="viewer" class="viewer"></div>
         <div id="openingIndicator" class="opening-indicator" role="status" aria-live="polite" hidden><span class="opening-spinner" aria-hidden="true"></span><span>در حال باز کردن کتاب…</span></div>
         <div id="ttsBar" class="tts-bar" role="toolbar" aria-label="خواندن با صدا" hidden>
-          <button id="ttsPlay" type="button" aria-label="مکث">⏸</button>
+          <button id="ttsPlay" type="button" aria-label="مکث" data-ico="pause"></button>
           <button id="ttsStop" type="button" aria-label="توقف">■</button>
           <select id="ttsRate" aria-label="سرعت"><option value="0.8">۰٫۸×</option><option value="1" selected>۱×</option><option value="1.25">۱٫۲۵×</option><option value="1.5">۱٫۵×</option><option value="1.8">۱٫۸×</option></select>
           <select id="ttsVoice" aria-label="صدا"></select>
@@ -512,7 +512,7 @@
           <div class="note-popup-actions"><button id="lookupClose" class="text-button" type="button">بستن</button></div>
         </div>
         <div class="immersive-progress" aria-hidden="true"><span id="immersiveBar"></span></div>
-        <button id="backChip" class="back-chip" type="button" hidden>↩ برگشت به صفحهٔ قبل</button>
+        <button id="backChip" class="back-chip" type="button" hidden data-ico="undo">برگشت به صفحهٔ قبل</button>
         <div id="readerGuide" class="reader-guide" role="dialog" aria-modal="true" aria-labelledby="readerGuideTitle" hidden>
           <div id="readerGuideLeft" class="reader-guide-edge left" aria-hidden="true"></div>
           <div id="readerGuideRight" class="reader-guide-edge right" aria-hidden="true"></div>
@@ -527,14 +527,14 @@
             <button type="button" class="hl-swatch" data-hl="yellow" aria-label="هایلایت زرد"></button>
             <button type="button" class="hl-swatch" data-hl="green" aria-label="هایلایت سبز"></button>
             <button type="button" class="hl-swatch" data-hl="pink" aria-label="هایلایت صورتی"></button>
-            <button type="button" data-sel="note">✎ یادداشت</button>
-            <button type="button" data-sel="quote">🖼 کارت نقل‌قول</button>
-            <button type="button" data-sel="define">📖 معنی</button>
-            <button type="button" data-sel="ai">✨ هوش مصنوعی</button>
-            <button type="button" data-sel="copy">⧉ کپی</button>
+            <button type="button" data-sel="note" data-ico="pencil">یادداشت</button>
+            <button type="button" data-sel="quote" data-ico="image">کارت نقل‌قول</button>
+            <button type="button" data-sel="define" data-ico="book-open">معنی</button>
+            <button type="button" data-sel="ai" data-ico="sparkles">هوش مصنوعی</button>
+            <button type="button" data-sel="copy" data-ico="clipboard">کپی</button>
           </span>
           <span class="sel-edit" hidden>
-            <button type="button" data-sel="edit">✎ ویرایش یادداشت</button>
+            <button type="button" data-sel="edit" data-ico="pencil">ویرایش یادداشت</button>
             <button type="button" data-sel="delete">حذف هایلایت</button>
           </span>
           <button type="button" data-sel="close" aria-label="بستن">×</button>
@@ -567,7 +567,7 @@
       <p id="accountName" class="account-name"></p>
       <p id="accountEmail" class="muted" dir="ltr"></p>
       <p class="muted">کتاب‌ها و محل مطالعه بین همهٔ دستگاه‌هایی که با این حساب وارد شده‌اند همگام می‌شوند.</p>
-      <div class="dialog-actions"><button id="accountAiSettings" class="secondary-button" type="button">✨ تنظیمات هوش مصنوعی</button><button id="syncNow" class="secondary-button" type="button">همگام‌سازی الان</button><button id="logoutButton" class="secondary-button" type="button">خروج</button></div>
+      <div class="dialog-actions"><button id="accountAiSettings" class="secondary-button" type="button" data-ico="sparkles">تنظیمات هوش مصنوعی</button><button id="syncNow" class="secondary-button" type="button">همگام‌سازی الان</button><button id="logoutButton" class="secondary-button" type="button">خروج</button></div>
     </div>
   </dialog>
   <div id="imageViewer" class="image-viewer" role="dialog" aria-label="تصویر" hidden>
@@ -586,7 +586,7 @@
     <div class="admin-row"><input id="newShelfName" class="admin-input" placeholder="قفسهٔ جدید…" maxlength="80"><button id="addShelf" class="secondary-button" type="button">افزودن</button></div>
     <div class="field-head-row" style="margin-top:10px">
       <span class="muted small">معرفی و خلاصهٔ کتاب</span>
-      <button id="bookOptionsAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی">✨ نگارش با هوش مصنوعی</button>
+      <button id="bookOptionsAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی" data-ico="sparkles">نگارش با هوش مصنوعی</button>
     </div>
     <textarea id="bookOptionsDesc" class="admin-input" maxlength="2000" rows="3" dir="auto" placeholder="توضیح یا خلاصهٔ کتاب…" style="width:100%;margin-bottom:8px"></textarea>
     <div id="bookOptionsActions" class="dialog-actions"></div>
@@ -632,7 +632,7 @@
       <label>
         <span class="field-head-row">
           <span>توضیحات</span>
-          <button id="admDetailAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی">✨ نگارش با هوش مصنوعی</button>
+          <button id="admDetailAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی" data-ico="sparkles">نگارش با هوش مصنوعی</button>
         </span>
         <textarea name="description" maxlength="2000" rows="4" dir="auto" placeholder="معرفی یا خلاصهٔ کتاب…"></textarea>
       </label>
@@ -640,7 +640,7 @@
       <label>
         <span class="field-head-row">
           <span>ناشر</span>
-          <button id="admDetailExtractMeta" class="ai-gen-desc-btn" type="button" title="استخراج ناشر و تاریخ انتشار">🔍 استخراج ناشر و تاریخ</button>
+          <button id="admDetailExtractMeta" class="ai-gen-desc-btn" type="button" title="استخراج ناشر و تاریخ انتشار" data-ico="search">استخراج ناشر و تاریخ</button>
         </span>
         <input name="publisher" maxlength="300" dir="auto">
       </label>
@@ -650,18 +650,18 @@
     </form>
     <div class="dialog-actions adm-detail-more">
       <label id="admDetailReplaceLabel" class="secondary-button" style="cursor:pointer" title="آپلود نسخه جدید (فایل EPUB یا PDF) برای جایگزینی این کتاب">
-        <span id="admDetailReplaceText">🔄 جایگزینی با فایل جدید</span>
+        <span id="admDetailReplaceText" data-ico="refresh">جایگزینی با فایل جدید</span>
         <input id="admDetailReplaceInput" type="file" accept=".epub,application/epub+zip,.pdf,application/pdf" multiple hidden>
       </label>
-      <button id="admDetailAssign" class="secondary-button" type="button">👥 تخصیص به کاربر / دانشجو</button>
-      <button id="admDetailRead" class="secondary-button" type="button">📖 مطالعهٔ آنلاین</button>
+      <button id="admDetailAssign" class="secondary-button" type="button" data-ico="users">تخصیص به کاربر / دانشجو</button>
+      <button id="admDetailRead" class="secondary-button" type="button" data-ico="book-open">مطالعهٔ آنلاین</button>
       <a id="admDetailDownload" class="secondary-button" href="#" download>دانلود</a>
       <button id="admDetailDelete" class="secondary-button adm-danger" type="button">حذف کامل</button>
     </div>
   </dialog>
   <dialog id="admAssignDialog" class="account-dialog" aria-labelledby="admAssignTitle" style="max-width:480px">
     <button id="admAssignClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
-    <h2 id="admAssignTitle">👥 تخصیص به کاربر / دانشجو</h2>
+    <h2 id="admAssignTitle" data-ico="users">تخصیص به کاربر / دانشجو</h2>
     <p id="admAssignSub" class="muted small" style="margin-top:4px"></p>
     <div id="admAssignList" class="admin-list" style="max-height:360px;overflow-y:auto;margin:12px 0"></div>
   </dialog>
@@ -709,7 +709,7 @@
       <label>
         <span class="field-head-row">
           <span>توضیح کوتاه (اختیاری)</span>
-          <button id="submitAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی">✨ نگارش با هوش مصنوعی</button>
+          <button id="submitAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی" data-ico="sparkles">نگارش با هوش مصنوعی</button>
         </span>
         <textarea name="description" maxlength="2000" rows="3" dir="auto" placeholder="توضیح یا خلاصهٔ کتاب…"></textarea>
       </label>
@@ -737,7 +737,7 @@
       <label>
         <span class="field-head-row">
           <span>توضیح یا معرفی کوتاه (اختیاری)</span>
-          <button id="admImportUrlAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی">✨ نگارش با هوش مصنوعی</button>
+          <button id="admImportUrlAiDesc" class="ai-gen-desc-btn" type="button" title="نگارش خودکار معرفی کتاب با هوش مصنوعی" data-ico="sparkles">نگارش با هوش مصنوعی</button>
         </span>
         <textarea id="admImportUrlDesc" name="description" maxlength="2000" rows="2" dir="auto" placeholder="توضیح کوتاه دربارهٔ کتاب…"></textarea>
       </label>
@@ -774,13 +774,13 @@
   </dialog>
   <dialog id="aiGuideDialog" class="account-dialog ai-guide-dialog" aria-labelledby="aiGuideTitle">
     <button id="aiGuideClose" class="icon-button dialog-close" type="button" aria-label="بستن">×</button>
-    <h2 id="aiGuideTitle">✨ دستیار هوش مصنوعی با کلید اختصاصی</h2>
+    <h2 id="aiGuideTitle" data-ico="sparkles">دستیار هوش مصنوعی با کلید اختصاصی</h2>
     <div class="ai-guide-body">
       <div class="ai-badges-summary">
-        <span class="ai-chip">⚡ خلاصه‌سازی فصل‌ها</span>
-        <span class="ai-chip">💡 استخراج نکات کلیدی</span>
-        <span class="ai-chip">🔍 توضیح متون دشوار</span>
-        <span class="ai-chip">🔒 ۱۰۰٪ محرمانه و بدون هزینه</span>
+        <span class="ai-chip" data-ico="zap">خلاصه‌سازی فصل‌ها</span>
+        <span class="ai-chip" data-ico="bulb">استخراج نکات کلیدی</span>
+        <span class="ai-chip" data-ico="search">توضیح متون دشوار</span>
+        <span class="ai-chip" data-ico="lock">۱۰۰٪ محرمانه و بدون هزینه</span>
       </div>
       <div class="ai-guide-info">
         <strong>کلید اختصاصی (BYOK) چیست و چرا رایگان است؟</strong>
@@ -817,7 +817,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span id="footerVersion">بُرگ · نسخهٔ ۸.۱۳.۳۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span id="footerVersion">بُرگ · نسخهٔ ۸.۱۳.۳۱</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

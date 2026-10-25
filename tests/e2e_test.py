@@ -400,6 +400,28 @@ async def run(url):
         sc = await pg.locator("#statsCard").bounding_box()
         check("desktop: stats card is a single row", sc is not None and sc["height"] < 90, str(sc))
         check("desktop: tab bar hidden when only one tab", not await pg.is_visible(".view-tabs"))
+        # v8.13.31 (1) generated covers: a book without cover art gets the book-like cover with its title on it.
+        ca = await pg.evaluate("""()=>{const a=document.querySelector('#bookGrid .book-card .cover-art');if(!a)return null;
+            const t=a.querySelector('.ca-title'),r=t.getBoundingClientRect(),c=a.getBoundingClientRect();
+            return {title:t.textContent,inside:r.width>20&&r.height>10&&r.left>=c.left&&r.right<=c.right+0.5,motif:!!a.querySelector('.ca-motif')}}""")
+        check("v8.13.31 covers: generated cover shows the title inside the cover", bool(ca) and ca["inside"] and ca["motif"] and len(ca["title"]) > 0, str(ca))
+        # (2) icons: no colour emoji left in the visible library UI, and icons are drawn (mask set on ::before).
+        emo = await pg.evaluate(r"""()=>(document.body.innerText.match(/[\u2600-\u27BF\u2B50\u23F0-\u23FF]|[\uD83C-\uD83E][\uDC00-\uDFFF]/g)||[]).join('')""")
+        check("v8.13.31 icons: no colour emoji in the visible library", emo == "", emo)
+        mask = await pg.evaluate("""()=>{const e=document.querySelector('#cleanOpen [data-ico]');if(!e)return '';const s=getComputedStyle(e,'::before');return (s.maskImage||s.webkitMaskImage||'').slice(0,30)}""")
+        check("v8.13.31 icons: the clean-up button draws its icon", mask.startswith("url("), mask)
+        # (3) motion: after a reload every card ends fully visible (the entrance survives start-up re-renders) ...
+        await pg.reload(); await pg.wait_for_timeout(1600)
+        ops = await pg.evaluate("""()=>[...document.querySelectorAll('#bookGrid .book-card, #continueShelf .book-card')].map(c=>getComputedStyle(c).opacity)""")
+        check("v8.13.31 motion: all cards fully visible after the entrance", len(ops) > 0 and all(o == "1" for o in ops), str(ops))
+        # ... searching does not replay it ...
+        await pg.fill("#searchInput", "ک"); await pg.wait_for_timeout(500); await pg.fill("#searchInput", ""); await pg.wait_for_timeout(500)
+        check("v8.13.31 motion: search re-renders do not replay the entrance", await pg.locator("#bookGrid .card-enter").count() == 0)
+        # ... and with reduced motion the cards are visible at once.
+        await pg.emulate_media(reduced_motion="reduce"); await pg.reload(); await pg.wait_for_timeout(350)
+        ops = await pg.evaluate("""()=>[...document.querySelectorAll('#bookGrid .book-card')].map(c=>getComputedStyle(c).opacity)""")
+        check("v8.13.31 motion: reduced motion shows the cards immediately", len(ops) > 0 and all(o == "1" for o in ops), str(ops))
+        await pg.emulate_media(reduced_motion="no-preference")
         await pg.click("#continueShelf .now-reading-btn"); await pg.wait_for_timeout(2500)
         check("desktop: now-reading card opens the book", await pg.is_visible("#reader") and bool(await visible_text(pg)))
         await pg.click("#closeReader"); await pg.wait_for_timeout(800)
@@ -728,7 +750,12 @@ async def run(url):
         check("stats: today minutes", await pg.inner_text("#statToday") == "۳۰", await pg.inner_text("#statToday"))
         check("stats: streak of consecutive days", await pg.inner_text("#statStreak") == "۲")
         check("stats: week total", await pg.inner_text("#statWeek") == "۴۰")
-        check("goal updated", "۳۰" in await pg.inner_text("#goalButton") and (await pg.get_attribute("#goalArc", "stroke-dasharray")).startswith("100"))
+        # v8.13.31: the arc is set as a style (so its fill animates); check the rendered value, not the attribute.
+        ARC_JS = "getComputedStyle(document.getElementById('goalArc')).strokeDasharray"
+        try: await poll(lambda: pg.evaluate(ARC_JS + ".startsWith('100')"), 3000)  # the fill animates for 0.9 s
+        except TimeoutError: pass
+        arc = await pg.evaluate(ARC_JS)
+        check("goal updated", "۳۰" in await pg.inner_text("#goalButton") and arc.replace("px", "").startswith("100"), arc)
         await pg.reload(); await pg.wait_for_timeout(1200)
         check("status and shelf survive reload", "خوانده‌شده" in await pg.inner_text("#bookGrid .book-badge") and await pg.locator('#libraryFilters button:has-text("فلسفه")').count() == 1)
         check("v7.3 local features: no JS errors", len(errs) == 0, str(errs[:3]))

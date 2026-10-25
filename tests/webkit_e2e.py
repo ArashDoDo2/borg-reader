@@ -146,6 +146,13 @@ async def touch_device(browser, url, name):
     sample = str(FIX / "sample-fa.epub")
     ok = await import_and_open(pg, url, sample, "کتاب آزمایشی")
     check(f"{name}: imported book is stored and its card appears", ok)
+    if ok:  # v8.13.31: icons are CSS masks and generated covers use container units; check WebKit draws both.
+        r = await pg.evaluate("""()=>{const e=document.querySelector('#cleanOpen [data-ico]'),s=e&&getComputedStyle(e,'::before');
+            const t=document.querySelector('#bookGrid .cover-art .ca-title'),tr=t&&t.getBoundingClientRect();
+            return {mask:s?String(s.webkitMaskImage||s.maskImage||'').slice(0,4):'',iw:s?parseFloat(s.width):0,
+                    title:tr?Math.round(tr.width)+'x'+Math.round(tr.height):'',fs:t?parseFloat(getComputedStyle(t).fontSize):0}}""")
+        check(f"{name}: icons drawn as masks and generated cover title sized by its cover",
+              r["mask"] == "url(" and r["iw"] > 8 and r["fs"] >= 7 and r["title"] and not r["title"].startswith("0x"), str(r))
     if not ok:
         await ctx.close(); return
     lay = await pg.evaluate(LAYOUT_JS)

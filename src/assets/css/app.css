@@ -1,7 +1,7 @@
 @font-face{font-family:"Vazirmatn";src:url("../fonts/Vazirmatn-Variable.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
 :root{color-scheme:light;--bg:#f4f5f1;--paper:#fff;--ink:#172d27;--muted:#74817b;--line:#e4e9e3;--green:#17483c;--green2:#286653;--mint:#e5eee7;--gold:#e5c58b;--shadow:0 16px 44px rgba(23,53,42,.09);--reader-bg:#fffdf8;--reader-ink:#252c28}
 *{box-sizing:border-box}
-:root{--borg-css:"8.13.30"} /* version marker read by the tap trace (bump with app-version) */
+:root{--borg-css:"8.13.31"} /* version marker read by the tap trace (bump with app-version) */
 [hidden]{display:none!important}
 html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:"Vazirmatn",Tahoma,Arial,sans-serif;font-size:14px;line-height:1.85}
@@ -60,8 +60,6 @@ button{cursor:pointer}
 .book-cover-thumb{aspect-ratio:3/4;border-radius:6px 14px 14px 6px;box-shadow:0 6px 18px -2px rgba(23,53,42,.12),0 2px 6px rgba(0,0,0,.04),0 0 0 1px rgba(0,0,0,.04);display:flex;align-items:center;justify-content:center;padding:15px;text-align:center;position:relative;overflow:hidden;border:0;transition:transform .22s cubic-bezier(0.2,0,0,1),box-shadow .22s cubic-bezier(0.2,0,0,1)}
 .book-cover-thumb:before{content:"";position:absolute;inset:0 auto 0 8px;width:3px;background:linear-gradient(90deg,rgba(255,255,255,.45),rgba(0,0,0,.1));pointer-events:none;z-index:1}
 .book-card:hover .book-cover-thumb{transform:translateY(-5px);box-shadow:0 16px 32px -4px rgba(23,53,42,.22),0 4px 12px rgba(0,0,0,.06),0 0 0 1px rgba(0,0,0,.06)}
-.book-cover-thumb .cover-symbol{font-size:28px;opacity:.7;margin-bottom:8px}
-.book-cover-thumb .cover-name{font-weight:800;font-size:16px;line-height:1.7;max-height:6.8em;overflow:hidden}
 .book-meta{padding:12px 3px 0}
 .book-meta h3{font-size:14px;margin:0 0 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700;transition:color .18s}
 .book-card:hover .book-meta h3{color:var(--green2)}
@@ -401,7 +399,6 @@ body.dark .showcase-divider{border-top-color:#384f42}
 .detail-back{padding:8px 14px;font-size:12px}
 .detail-head{display:grid;grid-template-columns:minmax(150px,240px) minmax(0,1fr);gap:clamp(18px,4vw,40px);align-items:start}
 .detail-cover{width:100%;border-radius:10px 18px 18px 10px;box-shadow:var(--shadow)}
-.detail-cover .cover-name{font-size:20px}
 .detail-info h2{margin:0 0 4px;font-size:clamp(21px,3vw,30px);line-height:1.5;letter-spacing:-.3px}
 .author-link{border:0;background:transparent;padding:0;font:inherit;font-size:15px;color:var(--green2);font-weight:700;cursor:pointer}
 .author-link:not(:disabled):hover{text-decoration:underline;text-underline-offset:4px}
@@ -662,7 +659,6 @@ body.dark .import-button,body.dark .import-button:hover{color:#132019}
  .continue-shelf{grid-auto-columns:minmax(120px,38vw);gap:14px;margin-inline:-16px;padding:0 16px 6px;scroll-padding-inline:16px}
  .book-grid{gap:20px 14px}
  .book-cover-thumb{aspect-ratio:2/3;max-height:none;border-radius:6px 12px 12px 6px}
- .book-cover-thumb .cover-name{font-size:15px}
  .book-meta{padding-top:8px}
  .book-meta h3{font-size:13.5px;line-height:1.7}
  .book-meta p{font-size:12px;line-height:1.7}
@@ -1064,7 +1060,6 @@ body.dark .adm-danger{color:#f0a58c}
 .adm-detail-head{display:grid;grid-template-columns:116px minmax(0,1fr);gap:14px;align-items:start;margin-bottom:12px}
 .adm-detail-cover{width:116px;padding:8px}
 .adm-detail-cover img,.adm-rv-cover img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.adm-detail-cover .cover-name{font-size:12px;line-height:1.6}
 .adm-detail .adm-detail-sum h2{margin:0 0 6px;padding-left:40px;font-size:17px;line-height:1.6;overflow-wrap:anywhere}
 .adm-detail-chips{display:flex;flex-wrap:wrap;gap:5px;margin:0 0 8px}
 .adm-detail-info{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin:0;font-size:12px}
@@ -1153,7 +1148,6 @@ body.dark .adm-danger{color:#f0a58c}
  /* review card */
  .adm-rv{grid-template-columns:96px minmax(0,1fr);gap:14px;padding:14px}
  .adm-rv-cover{padding:6px}
- .adm-rv-cover .cover-name{font-size:11px;line-height:1.5}
  .adm-rv-title{font-size:16px}
  .adm-rv-body{display:contents}
  .adm-rv-body>*{grid-column:1/-1}
@@ -1380,8 +1374,6 @@ body.dark .ai-teaser-btn:hover{background:#382b54}
  .continue-shelf .book-card{display:grid;grid-template-columns:54px minmax(0,1fr);gap:0 12px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:14px;background:var(--paper)}
  .continue-shelf .book-cover-thumb{width:54px;max-height:none;padding:4px;border-radius:3px 8px 8px 3px;box-shadow:0 2px 8px rgba(23,53,42,.14),0 0 0 1px rgba(0,0,0,.05)}
  .continue-shelf .book-cover-thumb:before{inset:0 auto 0 4px;width:2px}
- .continue-shelf .book-cover-thumb .cover-symbol{font-size:13px;margin-bottom:2px}
- .continue-shelf .book-cover-thumb .cover-name{font-size:7.5px;line-height:1.4;max-height:4.2em}
  .continue-shelf .book-cover-thumb .format-badge{top:2px;right:2px;padding:0 3px;font-size:7.5px}
  .continue-shelf .cover-progress{height:3px}
  .continue-shelf .book-meta{padding:0 0 0 48px;min-width:0}
@@ -1428,4 +1420,98 @@ body.dark .ai-teaser-btn:hover{background:#382b54}
  .stat-mini b{display:inline;font-size:18px}
  .goal-ring{width:46px;height:46px}
  .goal-ring b{font-size:13px}
+}
+
+/* v8.13.31 generated covers (coverArtHtml): a book-like cover for EPUBs without cover art. Everything is sized in container
+   units of .cover-art (an absolute layer with a definite size, so containment is safe), so one design serves the 54 px
+   phone row, the grid, the «در حال خواندن» card, the book page and the admin panel. */
+.cover-art{position:absolute;inset:0;container-type:inline-size;display:flex;flex-direction:column;align-items:center;justify-content:center;
+ gap:0;padding:14% 13% 12%;text-align:center;color:inherit; /* % = of the cover's width; cqi here would resolve against the viewport */
+ background:radial-gradient(120% 80% at 70% 0%,rgba(255,255,255,.28),transparent 55%),
+  linear-gradient(90deg,rgba(0,0,0,.10),transparent 9%,transparent 92%,rgba(0,0,0,.06)),
+  radial-gradient(140% 100% at 50% 120%,rgba(0,0,0,.10),transparent 60%),
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .2 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+ background-size:auto,auto,auto,160px 160px}
+.ca-frame{position:absolute;inset:6.5cqi 6.5cqi 6.5cqi 9cqi;border:max(1px,.8cqi) solid currentColor;border-radius:2.5cqi;opacity:.32;pointer-events:none}
+.ca-frame::after{content:"";position:absolute;inset:2.2cqi;border:max(1px,.4cqi) solid currentColor;border-radius:1.6cqi;opacity:.6}
+.ca-motif{width:15cqi;height:15cqi;flex-shrink:0;margin-bottom:6cqi;fill:none;stroke:currentColor;stroke-width:1.3;stroke-linejoin:round;opacity:.72}
+.ca-title{font-weight:800;font-size:clamp(7px,12.5cqi,32px);line-height:1.55;text-wrap:balance;overflow-wrap:anywhere;
+ display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;line-clamp:4;overflow:hidden;max-width:100%}
+.ca-rule{width:18cqi;height:max(1px,.8cqi);background:currentColor;opacity:.45;border-radius:1px;margin:6cqi 0 4.5cqi;flex-shrink:0}
+.ca-author{font-weight:500;font-size:clamp(6px,7.2cqi,17px);line-height:1.5;opacity:.82;text-wrap:balance;
+ display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;max-width:100%}
+@container (max-width:100px){.ca-motif,.ca-rule,.ca-author{display:none}.ca-title{font-size:12.5cqi;-webkit-line-clamp:5;line-clamp:5}.ca-frame::after{display:none}}
+.book-cover-thumb:has(.cover-art) .format-badge{z-index:3}
+
+/* v8.13.31 icons: one line-icon set instead of colour emoji (which look different on every OS). An element gets
+   data-ico="name"; the icon is a ::before mask filled with currentColor, so it follows the text colour and dark mode, and
+   JS that replaces an element's textContent (busy labels) never removes it. Shapes: 24x24, stroke 2, round joins. */
+:is([data-ico],.ai-test-status.success,.ai-test-status.error)::before{content:"";display:inline-block;flex-shrink:0;width:1.15em;height:1.15em;
+ vertical-align:-.2em;margin-inline-end:.4em;background-color:currentColor;
+ -webkit-mask:var(--ico) center/contain no-repeat;mask:var(--ico) center/contain no-repeat}
+[data-ico]:empty::before,.ico-only-narrow::before{margin-inline-end:0}
+.ico-only-narrow .lbl-long{margin-inline-start:.4em}
+:is(.primary-button,.secondary-button,.ai-cached-pill,.ai-save-note-btn,.ai-gen-desc-btn)[data-ico]::before{margin-inline-end:0}
+.ai-chip[data-ico]::before{width:1.05em;height:1.05em;margin-inline-end:.35em}
+.status-chip[data-ico]::before{width:1.1em;height:1.1em;vertical-align:-.25em;margin-inline-end:.25em}
+.share-book[data-ico],#ttsPlay[data-ico]{display:inline-grid;place-items:center}
+.share-book[data-ico]::before{width:16px;height:16px}
+#ttsPlay[data-ico]::before{width:18px;height:18px}
+.ai-test-status.success{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8 12.5l2.8 2.8L16.5 9.5'/%3E%3C/svg%3E")}
+.ai-test-status.error{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M9.2 9.2l5.6 5.6M14.8 9.2l-5.6 5.6'/%3E%3C/svg%3E")}
+[data-ico="sparkles"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3.5c.6 3.9 2.1 5.4 6 6-3.9.6-5.4 2.1-6 6-.6-3.9-2.1-5.4-6-6 3.9-.6 5.4-2.1 6-6z'/%3E%3Cpath d='M18.5 15c.3 1.6.9 2.2 2.5 2.5-1.6.3-2.2.9-2.5 2.5-.3-1.6-.9-2.2-2.5-2.5 1.6-.3 2.2-.9 2.5-2.5z'/%3E%3Cpath d='M5.5 16.5v3M4 18h3'/%3E%3C/svg%3E")}
+[data-ico="broom"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 4l-7.5 7.5'/%3E%3Cpath d='M12.5 11.5c-2.6-1.2-5.6 0-6.8 2.7L3.5 20.5l6.3-2.2c2.7-1.2 3.9-4.2 2.7-6.8z'/%3E%3Cpath d='M7.3 19.6l1.2-2.8M10.4 18.1l.5-2'/%3E%3C/svg%3E")}
+[data-ico="share"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 15V4M7.5 8.5L12 4l4.5 4.5'/%3E%3Cpath d='M4.5 14.5v4a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4'/%3E%3C/svg%3E")}
+[data-ico="book-open"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 6.5c-1.8-1.4-4.3-2-8-2v13c3.7 0 6.2.6 8 2 1.8-1.4 4.3-2 8-2v-13c-3.7 0-6.2.6-8 2z'/%3E%3Cpath d='M12 6.5v13'/%3E%3C/svg%3E")}
+[data-ico="check"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 12.5l5 5L19.5 7'/%3E%3C/svg%3E")}
+[data-ico="graduation"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 9L12 4.5 21.5 9 12 13.5z'/%3E%3Cpath d='M6.5 11.2v4.3c0 1.7 2.5 3 5.5 3s5.5-1.3 5.5-3v-4.3'/%3E%3Cpath d='M21.5 9v5'/%3E%3C/svg%3E")}
+[data-ico="list"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6.5h11M9 12h11M9 17.5h11'/%3E%3Cpath d='M4.5 6.5h.01M4.5 12h.01M4.5 17.5h.01' stroke-width='2.6'/%3E%3C/svg%3E")}
+[data-ico="bulb"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 18h6M10.2 21h3.6'/%3E%3Cpath d='M12 3a6 6 0 0 0-3.6 10.8c.7.6 1.1 1.4 1.1 2.2v.5h5V16c0-.8.4-1.6 1.1-2.2A6 6 0 0 0 12 3z'/%3E%3C/svg%3E")}
+[data-ico="help"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M9.6 9.3a2.5 2.5 0 0 1 4.8 1c0 1.7-2.4 2.1-2.4 3.6'/%3E%3Cpath d='M12 17.2h.01' stroke-width='2.6'/%3E%3C/svg%3E")}
+[data-ico="settings"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 7h8.5M17.5 7H20M4 17h2.5M11.5 17H20'/%3E%3Ccircle cx='15' cy='7' r='2.5'/%3E%3Ccircle cx='9' cy='17' r='2.5'/%3E%3C/svg%3E")}
+[data-ico="pause"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='6.5' y='5' width='3.5' height='14' rx='1'/%3E%3Crect x='14' y='5' width='3.5' height='14' rx='1'/%3E%3C/svg%3E")}
+[data-ico="play"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black'%3E%3Cpath d='M8 5.2v13.6a.8.8 0 0 0 1.2.7l10.6-6.8a.8.8 0 0 0 0-1.4L9.2 4.5A.8.8 0 0 0 8 5.2z'/%3E%3C/svg%3E")}
+[data-ico="undo"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 14.5L4 9.5l5-5'/%3E%3Cpath d='M4 9.5h10.5a5.5 5.5 0 0 1 0 11H11'/%3E%3C/svg%3E")}
+[data-ico="pencil"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 20l4.3-1L18.9 8.4a2.1 2.1 0 0 0-3-3L5.3 16 4 20z'/%3E%3Cpath d='M14.5 6.8l3 3'/%3E%3C/svg%3E")}
+[data-ico="image"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3.5' y='4.5' width='17' height='15' rx='2'/%3E%3Ccircle cx='9' cy='9.5' r='1.7'/%3E%3Cpath d='M20.5 15.5l-4.7-4.7-9.3 8.7'/%3E%3C/svg%3E")}
+[data-ico="search"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='10.8' cy='10.8' r='6.8'/%3E%3Cpath d='M16 16l4.5 4.5'/%3E%3C/svg%3E")}
+[data-ico="refresh"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M19.5 11a7.7 7.7 0 0 0-13.9-3.8M4.5 4v4h4'/%3E%3Cpath d='M4.5 13a7.7 7.7 0 0 0 13.9 3.8M19.5 20v-4h-4'/%3E%3C/svg%3E")}
+[data-ico="users"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='9' cy='8' r='3.5'/%3E%3Cpath d='M2.5 20a6.5 6.5 0 0 1 13 0'/%3E%3Cpath d='M16 4.6a3.5 3.5 0 0 1 0 6.8M18.2 14.3a6.5 6.5 0 0 1 3.3 5.7'/%3E%3C/svg%3E")}
+[data-ico="zap"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 2.5L4.5 13.5H12l-1 8 8.5-11H12z'/%3E%3C/svg%3E")}
+[data-ico="lock"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5' y='10.5' width='14' height='10' rx='2'/%3E%3Cpath d='M8 10.5v-3a4 4 0 0 1 8 0v3'/%3E%3C/svg%3E")}
+[data-ico="pin"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 3.5h6M10 3.5V9l-3 3.5h10L14 9V3.5M12 12.5v8'/%3E%3C/svg%3E")}
+[data-ico="clipboard"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='5.5' y='4.5' width='13' height='16.5' rx='2'/%3E%3Crect x='9' y='3' width='6' height='3.5' rx='1'/%3E%3C/svg%3E")}
+[data-ico="check-circle"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8 12.5l2.8 2.8L16.5 9.5'/%3E%3C/svg%3E")}
+[data-ico="x-circle"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M9.2 9.2l5.6 5.6M14.8 9.2l-5.6 5.6'/%3E%3C/svg%3E")}
+[data-ico="bookmark"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.5 3.5h11v17l-5.5-4-5.5 4z'/%3E%3C/svg%3E")}
+[data-ico="books"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='4.5' height='16' rx='.8'/%3E%3Crect x='9.5' y='4' width='4.5' height='16' rx='.8'/%3E%3Cpath d='M15 5.6l3.8-1.1 3.6 14.6-3.8 1z'/%3E%3C/svg%3E")}
+[data-ico="plus"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 5v14M5 12h14'/%3E%3C/svg%3E")}
+[data-ico="x"]{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6.5 6.5l11 11M17.5 6.5l-11 11'/%3E%3C/svg%3E")}
+/* v8.13.31: the selection bar sat at left:50% with no width, so it shrank to the right half of the reader and every label
+   wrapped (pre-existing). It now takes its natural width, still capped by max-width, and labels stay on one line. */
+@media(min-width:701px){.selection-bar{width:max-content}} /* phones keep their full-width wrapping bar */
+.selection-bar button{white-space:nowrap}
+
+/* v8.13.31 motion and depth. Entrance: only for books shown for the first time (see libSeenIds), never on search/filter.
+   Tilt: desktop mouse only (JS sets --rx/--ry/--gx/--gy). All of it is off with prefers-reduced-motion. */
+:root{--glow-a:rgba(40,102,83,.075);--glow-b:rgba(222,194,133,.12)}
+body.dark{--glow-a:rgba(155,201,174,.06);--glow-b:rgba(222,194,133,.05)}
+body{background:radial-gradient(1100px 620px at 88% -8%,var(--glow-a),transparent 62%),radial-gradient(900px 560px at 4% 2%,var(--glow-b),transparent 58%),var(--bg);background-repeat:no-repeat}
+@keyframes borg-card-in{from{opacity:0;transform:translateY(14px) scale(.985)}to{opacity:1;transform:none}}
+@keyframes borg-bar-in{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+.card-enter{animation:borg-card-in .46s cubic-bezier(.2,0,0,1) both;animation-delay:var(--d,0ms)}
+.card-enter .cover-progress span,.card-enter .now-reading-bar span{transform-origin:right center;animation:borg-bar-in .9s cubic-bezier(.2,0,0,1) both;animation-delay:calc(var(--d,0ms) + .25s)}
+.ring-fg{transition:stroke-dasharray .9s cubic-bezier(.2,0,0,1)}
+.book-cover-thumb::after{content:"";position:absolute;inset:0;z-index:2;pointer-events:none;border-radius:inherit;opacity:0;transition:opacity .25s;
+ background:radial-gradient(circle at var(--gx,50%) var(--gy,0%),rgba(255,255,255,.30),rgba(255,255,255,0) 55%)}
+@media(hover:hover) and (pointer:fine){
+ .book-card:hover .book-cover-thumb,.now-reading:hover .book-cover-thumb{transform:perspective(800px) translateY(-6px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));
+  transition:transform .14s ease-out,box-shadow .22s cubic-bezier(.2,0,0,1)}
+ .book-card:hover .book-cover-thumb::after{opacity:1}
+ body.dark .book-cover-thumb::after{background:radial-gradient(circle at var(--gx,50%) var(--gy,0%),rgba(255,255,255,.16),rgba(255,255,255,0) 55%)}
+}
+@media(prefers-reduced-motion:reduce){
+ .card-enter,.card-enter .cover-progress span,.card-enter .now-reading-bar span{animation:none}
+ .book-card:hover .book-cover-thumb,.now-reading:hover .book-cover-thumb{transform:none}
+ .book-cover-thumb::after{display:none}
 }

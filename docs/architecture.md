@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.13.30 (2026-10-26). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.13.31 (2026-10-26). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -104,6 +104,18 @@ Migration rules:
   With books, `.library-section` is a wrapping flex row: promo cards `order:10`, half width each, below the grid. The stats
   card is one row. `.view-tabs` is hidden by a `:has()` rule when fewer than two tabs are visible and the sync chip is hidden
   (all widths; browsers without `:has()` keep the bar).
+- **Generated covers (v8.13.31):** `coverArtHtml(title, author)` → `.cover-art` (absolute layer, `container-type:inline-size`;
+  its own padding is in % because `cqi` on the container itself would resolve against the viewport): paper grain (inline SVG
+  `feTurbulence` data URL), `.ca-frame`, `.ca-motif` (eight-pointed star SVG), `.ca-title` (4 lines max), `.ca-rule`,
+  `.ca-author`; under 100 px only the title. Colours from `paletteFor()` (10 pairs). Used by `bookCardHtml`, `nowReadingHtml`,
+  `catalogCover` (catalog cards and book page) and the two admin covers.
+- **Icons (v8.13.31):** `data-ico="name"` → `::before` with `mask: var(--ico)`, `background: currentColor`; the 28 icon URLs
+  and spacing rules are the `v8.13.31 icons` block at the end of `app.css`. JS that swaps an element's `textContent` keeps the
+  icon. `.ai-test-status.success/.error` get check/x icons from their class.
+- **Library motion (v8.13.31):** `libSeen` (id → first-shown time and stagger slot) gives `.card-enter` + `--d` (delay, negative
+  after re-renders) to cards within 1.3 s of their first appearance; `@keyframes borg-card-in/borg-bar-in`. Cover tilt: pointer
+  events on `#bookGrid`/`#continueShelf` set `--rx/--ry/--gx/--gy` (mouse, fine pointer, no reduced motion; one rAF per
+  frame). The goal ring is set as `style.strokeDasharray` in the next frame so its transition runs.
 - **Library search (v8.5):** `#searchInput` filters the grid live (180 ms debounce) by title, author, publisher and
   shelf names, combined with the filter chips and sort. Query and fields go through `libFold()`: `normalizeForSearch`
   (ی/ي/ى, ک/ك, RLM half-space) then spaces/ZWNJ/bidi marks/tatweel/harakat dropped, Persian/Arabic digits → 0-9,
