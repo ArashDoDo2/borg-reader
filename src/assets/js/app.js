@@ -1886,6 +1886,13 @@
   // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
   const SWIPE_MIN_PX = 48, EDGE_ZONE = 0.25;
   let touchStart = null, suppressClickUntil = 0;
+  // v8.13.25: a touch and the "click" browsers synthesise after it are one gesture. They are paired by state, not by
+  // the wall clock (suppressClickUntil): on Chrome for iOS the click reaches us late, queued behind the chapter
+  // re-layout that setImmersive() starts, and after the time window it used to toggle immersive straight back off.
+  // Set when a touch sequence was consumed as a tap/swipe; cleared by the next touch or by a real mouse/pen pointer.
+  let touchConsumedGesture = false;
+  function onPointerDown(e) { if (e.pointerType && e.pointerType !== "touch") touchConsumedGesture = false; }
+  document.addEventListener("pointerdown", onPointerDown, { passive: true, capture: true });
   function stripBookScripts(doc) {
     try {
       if (!doc || !doc.querySelectorAll) return;
@@ -2010,6 +2017,7 @@
   }
   function onTouchStart(e) {
     diag("touchstart");
+    touchConsumedGesture = false; // a new gesture; its own touchend decides whether the following click is redundant
     if (e.touches && e.touches.length > 1) { touchStart = null; return; }
     const t = e.changedTouches && e.changedTouches[0];
     touchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
@@ -2023,6 +2031,7 @@
     touchStart = null;
     // iOS Safari never fires "click" on plain text inside the book iframe, so edge taps are detected from the touch itself.
     if (Math.abs(dx) < 48 && Math.abs(dy) < 48 && dt < 750) {
+      touchConsumedGesture = true; // even when this tap is dropped as a duplicate below, its click is still redundant
       if (Date.now() < suppressClickUntil) return;
       suppressClickUntil = Date.now() + 650;
       handleTap(e.target, t.clientX, e.view, contents);
@@ -2030,6 +2039,7 @@
     }
     if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 800) {
       suppressClickUntil = Date.now() + 350;
+      touchConsumedGesture = true;
       if (pdf && pdfCanPanX()) return; // a zoomed PDF page is being panned, not turned
       // Finger moving right turns to the next page in an RTL book, like a Persian paper book.
       if (dx > 0) goLeft(); else goRight();
@@ -2059,6 +2069,7 @@
   }
   function onReaderClick(e, contents) {
     diag("click");
+    if (touchConsumedGesture) { diag("clickAfterTouch"); return; } // the touch already handled this gesture, however late the click is
     if (Date.now() < suppressClickUntil) return;
     handleTap(e.target, e.clientX, e.view, contents);
   }
@@ -2101,6 +2112,7 @@
   let viewerTouchStart = null;
   $("viewer").addEventListener("touchstart", e => {
     if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
+    touchConsumedGesture = false;
     const t = e.changedTouches && e.changedTouches[0];
     viewerTouchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
   }, { passive: true });
@@ -2111,6 +2123,7 @@
     const dx = t.clientX - viewerTouchStart.x, dy = t.clientY - viewerTouchStart.y, dt = Date.now() - viewerTouchStart.time;
     viewerTouchStart = null;
     if (Math.abs(dx) < 48 && Math.abs(dy) < 48 && dt < 750) {
+      touchConsumedGesture = true;
       if (Date.now() < suppressClickUntil) return;
       suppressClickUntil = Date.now() + 650;
       handleTap(e.target, t.clientX, window, null);
@@ -2118,6 +2131,7 @@
   }, { passive: true });
   $("viewer").addEventListener("click", e => {
     if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
+    if (touchConsumedGesture) { diag("clickAfterTouch"); return; }
     if (Date.now() < suppressClickUntil) return;
     handleTap(e.target, e.clientX, window, null);
   });
@@ -2486,6 +2500,7 @@
     } catch (_) {}
     doc.addEventListener("wheel", onReaderWheel, { passive: false });
     doc.addEventListener("touchcancel", () => { touchStart = null; }, { passive: true });
+    doc.addEventListener("pointerdown", onPointerDown, { passive: true, capture: true }); // a mouse click inside the book must still count
     doc.addEventListener("touchstart", onTouchStart, { passive: true });
     doc.addEventListener("touchend", e => onTouchEnd(e, contents), { passive: true });
     // Capture phase: runs before epub.js' own link handling, so footnotes open in place instead of jumping.

@@ -87,12 +87,13 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.22 | Fix iOS Chrome black circle rendering glitch & reader interaction lock: enforce `fill="none"` SVG presentation attributes on goal-ring and reader icons, remove premature touch release return in `onTouchEnd` restoring edge taps & immersive full-screen toggle, and enforce `min-width: 0` truncation on `.reader-heading` so long book titles never push reader toolbar buttons off-screen |
 | 8.13.23 | Fix middle tap immersive toggle on iOS Chrome: add 400ms debounce on `setImmersive` to prevent synthetic click reversals, broaden tap tolerance to 48px/750ms without swipe dead zone, add direct touch listeners on chapter `doc`, register container tap fallback on `#viewer`, and enforce `display: none !important` on `.reader.immersive .reader-toolbar` |
 | 8.13.24 | Isolate viewer tap fallback from PDF stage: guard `#viewer` touch and click handlers against `.pdf-stage` and active PDF mode so PDF edge taps and double-tap zoom resets never fire duplicate events, adjust tap ratio to avoid adding `frameLeft` when events originate in top-level window, and lower `setImmersive` debounce to 250ms |
+| 8.13.25 | Root-cause fix for the iOS Chrome middle tap: the click that Chrome synthesises after a touch is paired with its touch by **state** (`touchConsumedGesture`), not by the wall clock. It arrives late there because it queues behind the chapter re-layout (`rendition.resize()` → epub.js `clear()` + `display()`) that `setImmersive(true)` starts, so every time window (350→650 ms, debounce 400→250 ms) let it through and it toggled immersive straight back off. Flag set on a consumed tap/swipe, cleared by the next `touchstart` or a non-touch `pointerdown`; `suppressClickUntil` kept as is (PDF stage untouched). Regression test: touch tap + 900 ms late click in `tests/e2e_test.py` §7 | — needs the owner's real-device check on iPhone Chrome |
 
 ## Open items (not started unless the owner says so)
-1. **Active Bug: Chrome on iOS (iPhone) — Middle tap does not hide toolbars in immersive mode:**
-   Tapping the middle of the reader on iOS Chrome shows the toast `برای نمایش دوبارهٔ نوارها، وسط صفحه را لمس کن.`
-   (confirming `setImmersive(true)` fired), but `.reader-toolbar`, `.page-nav`, and `.reader-bottom` remain visible.
-   Detailed diagnostic notes, evidence, and investigation directions are documented in `docs/context/reader-engine-notes.md`.
+1. **Verify on device (owner):** 8.13.25 fixes the iOS Chrome middle tap by analysis and by a Chromium regression test; it could not
+   be run on a real iPhone. Check: tap middle → bars hide; tap again → bars return; tapping twice quickly still works.
+   If the bars still stay, the remaining hypothesis is a WKWebView repaint issue (class present, screen not updated) — see
+   `docs/context/reader-engine-notes.md`.
 2. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
    real-device check on iPhone/iPad of the 8.6–8.10 mobile changes (taps fixed at the root in 8.6.1).
 3. **Known, not fixed:** with margin «زیاد», swipes may not turn pages on phones.

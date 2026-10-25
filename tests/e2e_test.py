@@ -313,6 +313,35 @@ async def run(url):
         check("swipe left = previous page (RTL)", await page_pos(pg) == q0)
         await swipe(cdp, vb["x"] + 190, vb["x"] + 200, y); await pg.wait_for_timeout(500)
         check("tiny movement is not a swipe", await page_pos(pg) == q0)
+        # v8.13.25 regression: Chrome on iOS delivers the click it synthesises after a touch *late* (queued behind the
+        # chapter re-layout that entering immersive mode starts), past any time-based guard. That click must not undo
+        # the immersive toggle. Reproduced here: a touch tap in the middle, then the "synthetic" click 900 ms later.
+        mx, my = vb["x"] + vb["width"] / 2, y
+        # The 10 px "tiny movement" above counts as a middle tap and may have entered immersive mode; start from a known state
+        # and outside its 650 ms duplicate-tap window.
+        await pg.wait_for_timeout(800)
+        if not await pg.is_visible(".reader-toolbar"):
+            await pg.keyboard.press("Escape"); await pg.wait_for_timeout(600)
+        check("mobile: bars visible before the immersive tap", await pg.is_visible(".reader-toolbar"))
+        await cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": mx, "y": my}]})
+        await cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        await pg.wait_for_timeout(900)
+        imm_before = not await pg.is_visible(".reader-toolbar")
+        LATE_CLICK_JS = """([x, y]) => { const f = document.querySelector('#viewer iframe'); if (!f) return 'no-frame';
+            const w = f.contentWindow, r = f.getBoundingClientRect(), el = w.document.elementFromPoint(x - r.left, y - r.top) || w.document.body;
+            el.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, view: w, clientX: x - r.left, clientY: y - r.top }));
+            return el.tagName; }"""
+        late = await pg.evaluate(LATE_CLICK_JS, [mx, my]); await pg.wait_for_timeout(500)
+        check("mobile: touch tap in the middle enters immersive mode", imm_before)
+        check("mobile: a late synthetic click after the touch does not leave immersive mode (iOS Chrome)",
+              imm_before and not await pg.is_visible(".reader-toolbar"), f"late click target={late}")
+        await cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": mx, "y": my}]})
+        await cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+        await pg.wait_for_timeout(900)
+        check("mobile: a second touch tap leaves immersive mode", await pg.is_visible(".reader-toolbar"))
+        await pg.mouse.click(mx, my); await pg.wait_for_timeout(600)
+        check("mobile: a real mouse click after touch input still toggles immersive mode", not await pg.is_visible(".reader-toolbar"))
+        await pg.mouse.click(mx, my); await pg.wait_for_timeout(600)
         check("mobile navigation: no JS errors", len(errs) == 0, str(errs[:2]))
         await ctx.close()
 
