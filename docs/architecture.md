@@ -470,8 +470,6 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   immersive mode; the e2e «tiny movement is not a swipe» check only asserts the page did not turn.
 - Two taps within 650 ms: the second is dropped as a duplicate (`suppressClickUntil`).
 - The AI companion's model calls are not covered by tests (§4g).
-- The e2e check «catalog: back from the book page keeps the loaded books and the scroll position» fails in some headless
-  containers (scroll restoration), while it passes in CI.
 - Direction detection follows the majority script; a per-book override exists since 8.6.5 (not synced).
 - Very large books: locations generation and direction detection run on open; not profiled on 50 MB+ files.
 

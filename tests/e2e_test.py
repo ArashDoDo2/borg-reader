@@ -2803,8 +2803,11 @@ async def run(url):
               any("per=6" in u and "author=" + _quote("نویسنده 0") in u for u in rel_reqs) and all("page=" in u for u in rel_reqs)
               and 0 < len(rel) <= 6 and "کتاب نمونه 70" not in rel, f"{rel} {rel_reqs}")
         n_before = len(cat_reqs())
-        await P.go_back(); await P.wait_for_timeout(700)
+        await P.go_back(); await P.wait_for_timeout(150)
+        y_early = await P.evaluate("window.scrollY")  # v8.13.31: restored at once, not by a smooth scroll from the top
+        await P.wait_for_timeout(550)
         y1 = await P.evaluate("window.scrollY"); t1 = await P.evaluate(CARD_TOP)
+        check("v8.13.31 catalog: back restores the position at once (no smooth scroll from the top)", abs(y_early - y0) < 100, f"y {y0} -> {y_early} after 150 ms")
         check("v8.9 catalog: back from the book page keeps the loaded books and the scroll position",
               await P.is_visible("#viewCatalog") and await ncards(P) == CAT_N and abs(t1 - t0) < 100 and len(cat_reqs()) == n_before,
               f"y {y0}->{y1}, card top {t0}->{t1}, cards={await ncards(P)}, new requests={cat_reqs()[n_before:]}")

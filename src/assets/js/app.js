@@ -4940,6 +4940,14 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     }, { rootMargin: "0px 0px 600px 0px" }).observe($("catalogMore"));
   }
   $("catalogMoreButton").addEventListener("click", () => { catalogState.failed = false; loadMoreCatalog(); });
+  /** v8.13.31: restore a scroll position at once. html has scroll-behavior:smooth, so a plain scrollTo() animated from the
+   *  top of the catalog down to the saved card every time the reader came back from a book page. */
+  function jumpScroll(y) {
+    const root = document.documentElement, prev = root.style.scrollBehavior;
+    root.style.scrollBehavior = "auto";
+    window.scrollTo(0, y);
+    root.style.scrollBehavior = prev;
+  }
   /** Show the catalog view: from memory when the same list was loaded recently (back from a book page), else load. */
   function showCatalog() {
     const st = catalogState;
@@ -4950,8 +4958,8 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     const y = st.scrollY;
     st.scrollY = null;
     if (y != null) {
-      window.scrollTo(0, y);
-      requestAnimationFrame(() => { window.scrollTo(0, y); queueCatalogCheck(); });
+      jumpScroll(y);
+      requestAnimationFrame(() => { jumpScroll(y); queueCatalogCheck(); });
     } else queueCatalogCheck();
   }
   function catalogCategories() {
