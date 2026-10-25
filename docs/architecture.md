@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.8.1 (2026-10-20). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.13.25 (2026-10-25). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -53,13 +53,17 @@ v8.3 text cleanup adds `sourceHash` (SHA-256 of the file as first imported, so r
 duplicate), `cleanedAt`, and for synced books `cleanPending` (new file not yet swapped in on the server) +
 `cleanAnns` (uids of re-anchored annotations to re-push after the swap).
 
-localStorage: `ketabkhane-reader-preferences` → `{font, lineHeight, fontSize, theme (light/sepia/dark/black/auto),
-align, librarySort, libraryFilter, dailyGoal, margin, para, flow, spread, digits, taps, wake, ttsRate, ttsVoice, pdfFit
-("page" | "width"; unset = width on phones, page on desktop), pdfInvert (dark/black themes invert PDF pages, default on)}`;
+localStorage: `ketabkhane-reader-preferences` → `{font, lineHeight, fontSize, theme (light/mint/sepia/amber/dark/black/auto —
+v8.11 added «نعنایی» mint, a low-glare daytime page, and «کهربایی» amber, a blue-light-free night page),
+align, librarySort, libraryFilter, dailyGoal, margin, para, flow, spread, digits, taps, wake, autoImmersive (v8.10.4: hide the
+bars on the first page turn), ttsRate, ttsVoice, pdfFit
+("page" | "width"; unset = width on phones, page on desktop), pdfInvert (dark/black/amber themes invert PDF pages, default on)}`;
 `ketab-theme`; `borg-clean-rules` (v8.3 cleanup rules: `[{id, type: "phrase" | "line", text} | {id, type: "telegram"}]`;
 mirrored to the server for an admin since v8.7, §4a);
-`borg-reading-days`/`-other`/`-pushed` (stats); `borg-device-id`; `borg-debug` (diagnostics only,
-read by the WebKit probe; empty for real users).
+`borg-reading-days`/`-other`/`-pushed` (stats); `borg-sec-per-page` (measured reading speed for «زمان باقی‌مانده»); `borg-device-id`;
+`borg-ai-config` (v8.12, §4g: `{provider: "gemini" | "openai", apiKey, model, apiVersion}` — the key never leaves the browser);
+`borg_ai_<bookId>_<chapter>_<type>` (v8.13.10: cached AI chapter summaries `{content, timestamp, chapter, bookId}`);
+`borg-debug` (diagnostics only, read by the WebKit probe and the e2e tests; empty for real users).
 
 Migration rules:
 - Never delete/recreate the database; bump `DB_VERSION` and migrate step by step in `onupgradeneeded`.
@@ -216,6 +220,17 @@ lists and the `#catalogEditDialog` editor were removed (replaced by the books ta
   reviewed book leaves the local list and the next one is shown without a reload. «فهرست» switches to the compact
   `#pendingList` (approve/reject/details per row).
 - **CSS:** one block `/* v8.9 admin */` at the end of `app.css` (palette variables, `body.dark` variants).
+- **Import by URL («دریافت با لینک», v8.13.0):** the books tab posts `admin-import-url {url, title?, author?, description?,
+  categories?, status: approved|pending|none, add_to_library, clean}`; the server downloads the file itself (§9).
+- **Replace file («🔄 جایگزینی با فایل جدید», v8.13.14):** in the admin book detail, a new EPUB/PDF goes through
+  `upload-init/chunk/complete` and then `book-replace {old_book_id, new_book_id}` (§9), so catalog entry, libraries and
+  annotations follow the new file.
+- **AI helpers (v8.13.9/8.13.12, need the admin's own key, §4g):** «✨ نگارش با هوش مصنوعی» drafts the catalog description
+  in the edit form; «🔍 استخراج ناشر و تاریخ» reads the EPUB OPF and colophon text and asks the model for publisher/date
+  with a strict no-guessing prompt (empty when not found).
+- **Roles (v8.13.13):** the users tab toggles `student` ↔ `user` (`user-update {role}`, admins excluded); invites carry a
+  role; the book detail lists assigned users (`admin-book-users`) and assigns/unassigns a server book to a user
+  (`admin-assign-book {book_id, user_id, action}`), which is how a student gets books. See §4h.
 
 ## 4f. Categories (v8.10, client side)
 A fixed two-level list (category → subcategory) kept by the admin; a book can have several. `GET categories` →
@@ -251,6 +266,31 @@ Books carry `categories: [{id, name, parent_id, parent_name}]` (`bookCats()`; `c
   add_category | remove_category, category_id, ids | filter}` (remove asks with the name and count).
 - **CSS:** one block `/* v8.10 categories */` at the end of `app.css`.
 
+## 4g. AI reading companion («دستیار هوش مصنوعی», v8.12–v8.13, client side only)
+Bring-your-own-key: nothing is proxied through the Borg server and no key is stored there. Config in `borg-ai-config` (§3).
+- **Providers:** Google Gemini (`generativelanguage.googleapis.com`, default) and OpenAI (`api.openai.com`, `gpt-4o-mini`).
+  Gemini models are discovered at setup with `ListModels` (`v1beta`, then `v1`), filtered to text generation (no TTS/audio/
+  embedding/image/video/realtime models) and ranked fast-first (`gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-2.0-flash`,
+  …); the chosen model is saved. Calls stream (`streamGenerateContent`, SSE) with `thinkingBudget: 0`; the Interactions API
+  (`callGeminiInteractions`) is used for models that need it; thought tokens are discarded, text is collected across
+  `delta`/`parts`. Replies are rendered through `formatAiMarkdown` (bold, italic, code, lists, headings, rules — escaped first).
+- **Panel `#aiPanel`** (toolbar `#aiToggle`, Escape priority after the selection bar): `#aiSetupPrompt` when no key, else
+  summary / takeaways / questions buttons for the current chapter, a free prompt (`#aiPromptForm`), and a context badge
+  («📌 تمرکز روی متن انتخابی») when opened from the selection bar with selected text. A chapter summary is cached per
+  book+chapter in localStorage and restored when the panel reopens; «📌 ذخیره در یادداشت‌های کتاب» stores a reply as a
+  book note (annotation, synced like any other). The library shows a teaser card until a key is configured (`hasAiKey()`),
+  then a compact «✨ هوش مصنوعی» button; a guide dialog (`openAiGuideDialog`) explains how to get a free key.
+- **Tests:** the e2e suite blocks every non-localhost request, so the model calls themselves are not exercised; the panel,
+  setup state and caching are only checked manually. Adding a route mock for the Gemini endpoints is the open gap (§8).
+
+## 4h. Roles: admin, user, student (v8.13.13)
+`users.role` is `admin` | `user` | `student` (invites carry the role). A **student** (placement students) has a private
+shelf only: the server answers `catalog` and `categories` with empty lists, refuses `catalog-submit` and the paged catalog
+(403), and `can_read_book()` grants only the books in the student's `user_books` (an approved catalog entry is not enough).
+Books reach a student through the admin's assign action (§4e) or the student's own uploads. The client hides the catalog
+tab and redirects `#catalog…` hashes for students, labels the account «🎓 دانشجو», and hides the «ثبت در کتابخانهٔ عمومی»
+book option. Admins keep full access; `user` is unchanged.
+
 ## 4b. Reader engine (v8)
 Details and history of each workaround: `docs/context/reader-engine-notes.md`.
 - **Open sequence:** read file → `ePub(bytes)` → `detectBookDirection()` sets `bookDir` (ADR 0008) →
@@ -258,7 +298,11 @@ Details and history of each workaround: `docs/context/reader-engine-notes.md`.
   serialize hook adds the load veil (after `book.opened`) → content hooks (`onBookContent`: half-space fix,
   Persian digits, footnote/image click handlers; fonts stylesheet then veil removal) → theme (`applyReaderStyles`).
 - **Navigation:** `goLeft/goRight` map to forward/back through `bookIsRtl()`. Mouse wheel/trackpad (8.6.3, `onReaderWheel`, listeners on the book document and `#viewer`): summed deltas ≥ 40 px turn one page, then locked until 250 ms of quiet; vertical = forward/back, horizontal = physical; off in scrolled flow or with pref `wheel: false`. Taps are recognised on `touchend`
-  (iOS) and on `click` (mouse) through one `handleTap()`; edge zones 25%, middle tap toggles immersive.
+  (touch: < 48 px movement, < 750 ms) and on `click` (mouse) through one `handleTap()`; edge zones 25%, middle tap toggles
+  immersive. The click a browser synthesises after a touch is paired with its touch by state (`touchConsumedGesture`,
+  v8.13.25: set when a touch ended as a tap/swipe, cleared by the next `touchstart` or a non-touch `pointerdown`), with a
+  650 ms `suppressClickUntil` window kept as a second guard; listeners sit on the chapter document (epub.js re-emits them),
+  directly on the document, and as a fallback on `#viewer`. `orientationchange` re-paginates after 200 ms.
 - **Reading features:** TTS (`speechSynthesis`, sentence queue with `.tts-hl` highlight, follows pages),
   footnote popups, word lookup / copy / quote card from the selection bar, highlights in 4 colours, notes,
   multiple bookmarks, in-book search with Persian normalisation, image viewer, wake lock, layout options
@@ -342,9 +386,9 @@ Versioning: bump `app-version` meta, footer text in `index.html` and `CACHE_NAME
 Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is untouched; migrations are additive).
 
 ## 7. Testing
-- `tests/api_test.py` (105 checks): PHP built-in server + SQLite via `BORG_CONFIG`; auth, CSRF, rate limits,
+- `tests/api_test.py` (430 checks): PHP built-in server + SQLite via `BORG_CONFIG`; auth, CSRF, rate limits,
   upload/dedupe, permissions, progress, annotations, shelves, stats, catalog moderation, admin, migrations.
-- `tests/e2e_test.py` (~215 checks): serves `src/` under `/borg/` with `php -S` and a SQLite config, blocks every
+- `tests/e2e_test.py` (~540 checks, 32 sections): serves `src/` under `/borg/` with `php -S` and a SQLite config, blocks every
   non-local request. Covers import, render, TOC, fonts in the iframe, paging, progress, annotations, settings,
   persistence, offline, corrupt files, mobile layout, keyboard, edge taps, swipe (CDP touch), immersive mode,
   accounts/sync between two browsers, catalog/admin, v8 reading features, v8.1 catalog page and preview, and
@@ -359,7 +403,10 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   dark invert, two-page spread, cleanup skips PDFs, 120-page responsiveness (one canvas in the DOM), phone 390 px:
   fit width, RTL taps and swipes, Persian search, pinch zoom, pan instead of turn, double tap reset; no errors or
   external requests.
-- `tests/webkit_e2e.py` (~19 checks, gates the deploy): WebKit with iPad (820×1180) and iPhone (390×844) touch contexts
+- e2e section 7 (mobile) also holds the v8.13.25 regression: a CDP touch tap in the middle, then a `click` dispatched into
+  the chapter iframe 900 ms later (what Chrome on iOS does) must not leave immersive mode; a real mouse click afterwards
+  must still toggle it. Fails on 8.13.24.
+- `tests/webkit_e2e.py` (~25 checks, gates the deploy): WebKit with iPad (820×1180) and iPhone (390×844) touch contexts
   and a desktop one: import (IndexedDB), text laid out inside the viewer (frame width), touch edge taps turn exactly one
   page, middle tap immersive, TOC jump heading in view + header title, veil lifted, seek bar, back chip, English LTR book
   with nested TOC, no page errors; v8.8: a hand-written text PDF on iPhone (canvas pixels, text layer, edge taps).
@@ -391,7 +438,14 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   nothing sent when logged out, local wins when both differ.
 
 ## 8. Known gaps
-- No WebKit/Safari gate in CI yet; iOS behaviour is verified by the owner on devices after release.
+- CI gates on Chromium and WebKit (Playwright), but not on Chrome for iOS (a WKWebView with Chrome's own gesture
+  recognisers and late synthetic clicks, see 8.13.15–8.13.25): iOS Chrome behaviour is verified by the owner on a device.
+- A 10 px finger movement counts as a tap (48 px tolerance since 8.13.23), so a slightly moving middle tap toggles
+  immersive mode; the e2e «tiny movement is not a swipe» check only asserts the page did not turn.
+- Two taps within 650 ms: the second is dropped as a duplicate (`suppressClickUntil`).
+- The AI companion's model calls are not covered by tests (§4g).
+- The e2e check «catalog: back from the book page keeps the loaded books and the scroll position» fails in some headless
+  containers (scroll restoration), while it passes in CI.
 - Direction detection follows the majority script; a per-book override exists since 8.6.5 (not synced).
 - Very large books: locations generation and direction detection run on open; not profiled on 50 MB+ files.
 
@@ -402,8 +456,15 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   library-remove upload-init upload-chunk upload-complete book-file book-cover book-meta book-replace progress annotations
   shelves stats catalog catalog-submit catalog-pending catalog-review catalog-remove catalog-add` (books.php);
   `admin-stats users user-update user-reset-password user-delete invite-revoke catalog-all catalog-update
-  books-all admin-books admin-bulk book-delete settings client-error errors errors-clear` (admin.php); `api-tokens api-token-create
+  books-all admin-books admin-bulk book-delete settings client-error errors errors-clear`, v8.13: `admin-import-url
+  admin-assign-book admin-book-users` (admin.php); `categories category-save category-delete category-order` (v8.10); `api-tokens api-token-create
   api-token-revoke clean-rules api-book` (apibook.php, v8.7; cleanup engine in clean.php).
+- **Import by URL (`admin-import-url`, v8.13.0, admin + CSRF):** `validate_safe_download_url` resolves the host and refuses
+  private/reserved ranges, loopback and link-local addresses (SSRF guard); the download (curl, `CURLOPT_FOLLOWLOCATION`
+  off, redirects re-validated and capped at 5, 45 s timeout, `max_book_bytes` cap) goes to `upload_dir()`; the format is
+  detected from the bytes; EPUBs are validated and cleaned with the stored rules (`clean: false` skips); dedupe by `sha256`
+  (`duplicate: true`); new rows get `source = 'admin'`; then catalog status `approved | pending | none`, categories, and
+  optionally the admin's library. Title falls back to OPF → file name → «بدون عنوان».
 - **Config:** `/home/<user>/borg-config/config.php` (outside the web root; `BORG_CONFIG` overrides in tests):
   `db_dsn`, `db_user`, `db_pass`, `setup_key`, optional `storage_dir` (default `~/borg-storage`), `max_book_bytes`,
   `catalog_requires_approval` (default true), `session_days`.

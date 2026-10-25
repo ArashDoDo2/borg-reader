@@ -2,7 +2,7 @@
 
 Persian-first EPUB/PDF reader: an offline-capable PWA (static files, no build step) plus an optional PHP 8 API
 for invite-only accounts, cloud sync and a moderated public catalog. Live at https://parsun.com/borg/.
-Current version: see `<meta name="app-version">` in `src/index.html` (8.10.0 when this file was last updated).
+Current version: see `<meta name="app-version">` in `src/index.html` (8.13.25 when this file was last updated).
 
 Owner and final decision-maker: Arash Naderpour. Work only inside the agreed scope; no refactors, extra files
 or deletions beyond what was asked. When something is ambiguous, ask instead of guessing.
@@ -20,8 +20,10 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
   - `index.html`, `assets/js/app.js` (all client logic, one IIFE), `assets/css/`, `assets/fonts/`, `assets/vendor/`
     (epub.js 0.3.93, JSZip 3.10.1, pdf.js 4.10.38 legacy in `vendor/pdfjs`, lazy-loaded, not precached), `service-worker.js`, `offline.html`, `manifest.webmanifest`.
   - `api/` — PHP API: `index.php` (router), `lib/core.php` (config, DB, migrations, sessions, CSRF, rate limits),
-    `lib/books.php` (upload, library, progress, annotations, shelves, stats, paged catalog, categories), `lib/admin.php`
-    (admin panel routes: admin-books, admin-bulk, categories CRUD, users, invites, API keys, error reports),
+    `lib/books.php` (upload, library, progress, annotations, shelves, stats, paged catalog, categories, role gating —
+    `student` sees no catalog), `lib/admin.php`
+    (admin panel routes: admin-books, admin-bulk, admin-import-url (server-side download, SSRF-guarded), book assignment
+    to users, categories CRUD, users/roles, invites, API keys, error reports),
     `lib/apibook.php` (`POST api-book` for the owner's other program, API keys), `lib/clean.php` (server text cleanup,
     same results as the browser's). External API guide: `docs/api-books.md`.
 - `tests/api_test.py` — API tests (PHP built-in server + SQLite). `tests/e2e_test.py` — Playwright/Chromium
@@ -63,3 +65,10 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
   without the fix.
 - Reader direction is per book (declared → detected from text → language tag → RTL). Never hard-code RTL in the
   reader again; use `bookDir` / `bookIsRtl()`.
+- The AI companion is bring-your-own-key and client-side only (`borg-ai-config` in localStorage). Never route model calls
+  or keys through the PHP API.
+- Touch input in the reader: never pair a touch with its synthetic click by a time window alone (see
+  `touchConsumedGesture` and the 8.13.15–8.13.25 history in `docs/context/reader-engine-notes.md`). Chrome on iOS is not
+  covered by CI; ask the owner to check on a device.
+- Three test suites must stay green: `tests/api_test.py`, `tests/e2e_test.py`, and `tests/webkit_e2e.py --browser chromium`
+  locally (WebKit itself runs in CI).

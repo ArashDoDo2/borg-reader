@@ -1,6 +1,7 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-25, version **8.13.24** (live at https://parsun.com/borg/).
+Last updated: 2026-10-25, version **8.13.25** on `main` (CI tests green; the cPanel deploy step failed, so the live site at
+https://parsun.com/borg/ is still **8.13.24** until the owner redeploys — see open item 1).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -90,6 +91,11 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.25 | Root-cause fix for the iOS Chrome middle tap: the click that Chrome synthesises after a touch is paired with its touch by **state** (`touchConsumedGesture`), not by the wall clock. It arrives late there because it queues behind the chapter re-layout (`rendition.resize()` → epub.js `clear()` + `display()`) that `setImmersive(true)` starts, so every time window (350→650 ms, debounce 400→250 ms) let it through and it toggled immersive straight back off. Flag set on a consumed tap/swipe, cleared by the next `touchstart` or a non-touch `pointerdown`; `suppressClickUntil` kept as is (PDF stage untouched). Regression test: touch tap + 900 ms late click in `tests/e2e_test.py` §7 | — needs the owner's real-device check on iPhone Chrome |
 
 ## Open items (not started unless the owner says so)
+0. **Deploy blocked (owner):** since run 40168747739 (the 8.13.24 docs commit, 2026-10-25 06:20 UTC) the deploy job fails
+   at «Pull branch on the server» (cPanel UAPI `VersionControl/update`), also on rerun; tests pass. Two pushes a minute
+   apart (06:19 / 06:20) probably left the server clone with a stale `.git/index.lock` or an unfinished pull. Check cPanel →
+   Git Version Control → Manage → Pull or Deploy for the real error, clear it, then rerun the failed job of run 40172498038
+   (`gh run rerun 40172498038 -R ArashDoDo2/borg-reader --failed`) or push the next commit.
 1. **Verify on device (owner):** 8.13.25 fixes the iOS Chrome middle tap by analysis and by a Chromium regression test; it could not
    be run on a real iPhone. Check: tap middle → bars hide; tap again → bars return; tapping twice quickly still works.
    If the bars still stay, the remaining hypothesis is a WKWebView repaint issue (class present, screen not updated) — see

@@ -17,8 +17,9 @@ Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/ap
   → `tests/webkit_e2e.py` (CI job `webkit`, gates the deploy) checks frame width and that text intersects the viewer;
   `tests/webkit_probe.py` adds per-variant diagnostics when it fails.
 - **Edge taps do nothing on iPhone/iPad** → iOS Safari does not fire `click` on plain text inside the iframe. →
-  `onTouchEnd` recognises a tap (<10 px, <500 ms) and calls `handleTap`; the follow-up synthetic click is swallowed
-  for 700 ms (no double turn). → e2e edge-tap checks; verified with mobile Chromium touch emulation.
+  `onTouchEnd` recognises a tap (< 48 px, < 750 ms since 8.13.23; was 10 px / 500 ms) and calls `handleTap`; the follow-up
+  synthetic click is paired with the touch by state (`touchConsumedGesture`, 8.13.25) plus a 650 ms window (no double
+  turn). → e2e edge-tap checks; verified with mobile Chromium touch emulation.
 - **Chrome on iOS: middle tap showed the immersive toast but the bars stayed (8.13.15–8.13.24)** → Chrome for iOS, unlike
   Safari, *does* fire the synthetic `click` on plain text inside the chapter iframe, and it fires it late: `setImmersive(true)`
   schedules `rendition.resize()`, which in epub.js 0.3.93 is `manager.clear()` (the tapped iframe is destroyed) + `display(cfi)`
