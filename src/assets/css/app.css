@@ -1,7 +1,7 @@
 @font-face{font-family:"Vazirmatn";src:url("../fonts/Vazirmatn-Variable.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
 :root{color-scheme:light;--bg:#f4f5f1;--paper:#fff;--ink:#172d27;--muted:#74817b;--line:#e4e9e3;--green:#17483c;--green2:#286653;--mint:#e5eee7;--gold:#e5c58b;--shadow:0 16px 44px rgba(23,53,42,.09);--reader-bg:#fffdf8;--reader-ink:#252c28}
 *{box-sizing:border-box}
-:root{--borg-css:"8.13.29"} /* version marker read by the tap trace (bump with app-version) */
+:root{--borg-css:"8.13.30"} /* version marker read by the tap trace (bump with app-version) */
 [hidden]{display:none!important}
 html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:"Vazirmatn",Tahoma,Arial,sans-serif;font-size:14px;line-height:1.85}
@@ -1397,9 +1397,10 @@ body.dark .ai-teaser-btn:hover{background:#382b54}
    and no tab bar when there is only one tab. */
 .view-tabs:not(:has([role=tab]:not([hidden])~[role=tab]:not([hidden]))):not(:has(.sync-chip:not([hidden]))){display:none}
 @media(min-width:701px){
- .continue-shelf.has-now-reading{display:flex;align-items:stretch;gap:18px}
- .continue-shelf.has-now-reading>.book-card{flex:0 0 150px}
- .continue-shelf.has-now-reading>.now-reading{flex:1 1 480px;min-width:0;display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 28px;align-items:center;padding:22px 24px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(135deg,var(--paper) 30%,var(--mint) 100%);box-shadow:0 12px 32px -12px rgba(23,53,42,.22);position:relative}
+ .continue-shelf.has-now-reading{display:flex;flex-direction:column;align-items:stretch;gap:18px;overflow:visible;padding-bottom:0}
+ .continue-rest{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(130px,160px);gap:18px;overflow-x:auto;padding-bottom:10px;scroll-snap-type:x proximity}
+ .continue-rest .book-card{scroll-snap-align:start}
+ .continue-shelf.has-now-reading>.now-reading{min-width:0;display:grid;grid-template-columns:150px minmax(0,1fr);gap:0 28px;align-items:center;padding:22px 24px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(135deg,var(--paper) 30%,var(--mint) 100%);box-shadow:0 12px 32px -12px rgba(23,53,42,.22);position:relative}
  body.dark .continue-shelf.has-now-reading>.now-reading{box-shadow:0 12px 32px -12px rgba(0,0,0,.6)}
  .now-reading .book-cover-thumb{width:150px}
  .now-reading:hover .book-cover-thumb{transform:translateY(-4px) rotate(-1.5deg)}

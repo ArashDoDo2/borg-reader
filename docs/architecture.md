@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.13.29 (2026-10-26). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.13.30 (2026-10-26). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -99,7 +99,8 @@ Migration rules:
   Empty library keeps the hero and the full cards.
 - **Desktop library (v8.13.29, `min-width:701px`):** `renderLibrary` renders the newest unfinished book as `nowReadingHtml`
   (`.book-card.now-reading`: 150 px cover, title, author, `chapter · ٪ · آخرین مطالعه`, progress bar, «ادامهٔ مطالعه»; same
-  `data-open`/`data-options` handling as other cards) and the rest as small cards (`#continueShelf.has-now-reading`, flex).
+  `data-open`/`data-options` handling as other cards) on a row of its own, and the rest as small cards in `.continue-rest`,
+  the horizontal scrolling shelf, below it (`#continueShelf.has-now-reading`, flex column; v8.13.30).
   With books, `.library-section` is a wrapping flex row: promo cards `order:10`, half width each, below the grid. The stats
   card is one row. `.view-tabs` is hidden by a `:has()` rule when fewer than two tabs are visible and the sync chip is hidden
   (all widths; browsers without `:has()` keep the bar).

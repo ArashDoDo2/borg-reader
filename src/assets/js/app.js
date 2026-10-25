@@ -623,7 +623,11 @@
       // Desktop: the newest unfinished book as a wide card, the rest as small cards beside it. Phones: compact rows (CSS).
       const wide = !window.matchMedia("(max-width:700px)").matches;
       $("continueShelf").classList.toggle("has-now-reading", wide && reading.length > 0);
-      $("continueShelf").innerHTML = reading.map((b, i) => wide && i === 0 ? nowReadingHtml(b, prog.get(b.id)) : bookCardHtml(b, prog.get(b.id))).join("");
+      // 8.13.30: the wide card takes a row of its own; the other unfinished books scroll horizontally below it.
+      const rest = reading.slice(wide ? 1 : 0).map(b => bookCardHtml(b, prog.get(b.id))).join("");
+      $("continueShelf").innerHTML = wide && reading.length
+        ? nowReadingHtml(reading[0], prog.get(reading[0].id)) + (rest ? `<div class="continue-rest">${rest}</div>` : "")
+        : rest;
       updateStorageInfo();
       $("emptyState").classList.toggle("visible", books.length === 0);
       // v8.6: the welcome hero is a first-run screen; once the library holds books it is hidden (CSS).
