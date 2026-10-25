@@ -403,16 +403,6 @@ async def run(url):
         await pg.click("#continueShelf .now-reading-btn"); await pg.wait_for_timeout(2500)
         check("desktop: now-reading card opens the book", await pg.is_visible("#reader") and bool(await visible_text(pg)))
         await pg.click("#closeReader"); await pg.wait_for_timeout(800)
-        # 8.13.30 regression: with a second unfinished book the wide card keeps its row (8.13.29 squeezed it beside
-        # fixed-width small cards); the other unfinished books scroll in a shelf below it.
-        await pg.set_input_files("#epubInput", sample2); await pg.wait_for_timeout(2000)
-        await pg.click("#bookGrid .book-card >> nth=0"); await pg.wait_for_timeout(2500)
-        await pg.keyboard.press("ArrowLeft"); await pg.wait_for_timeout(900)
-        await pg.click("#closeReader"); await pg.wait_for_timeout(900)
-        nr2 = await pg.locator("#continueShelf .now-reading").bounding_box()
-        small = await pg.locator("#continueShelf .continue-rest .book-card").first.bounding_box()
-        check("desktop: with two unfinished books the wide card keeps its full row", nr2 is not None and nr2["width"] > 600 and 150 < nr2["height"] < 320, str(nr2))
-        check("desktop: the other unfinished book sits in the shelf below the wide card", small is not None and nr2 is not None and small["y"] >= nr2["y"] + nr2["height"] - 1 and small["width"] < 200, f"{small}")
         badge = await pg.inner_text("#bookGrid .book-badge")
         check("progress shown on the card", "٪" in badge or "شروع" in badge, badge)
         await pg.reload(); await pg.wait_for_timeout(1000)
@@ -434,6 +424,16 @@ async def run(url):
         await pg.select_option("#librarySort", "added"); await pg.wait_for_timeout(400)
         titles = await pg.locator("#bookGrid .book-card h3").all_inner_texts()
         check("sort by newest added", titles[0] == "الف کتاب دوم", str(titles))
+        # 8.13.30 regression: with a second unfinished book the wide card keeps its row (8.13.29 squeezed it beside
+        # fixed-width small cards); the other unfinished books scroll in a shelf below it. (Both books exist here; the
+        # second one is opened last on purpose, after the sort checks above.)
+        await pg.click("#bookGrid .book-card >> nth=0"); await pg.wait_for_timeout(2500)
+        await pg.keyboard.press("ArrowLeft"); await pg.wait_for_timeout(900)
+        await pg.click("#closeReader"); await pg.wait_for_timeout(900)
+        nr2 = await pg.locator("#continueShelf .now-reading").bounding_box()
+        small = await pg.locator("#continueShelf .continue-rest .book-card").first.bounding_box()
+        check("desktop: with two unfinished books the wide card keeps its full row", nr2 is not None and nr2["width"] > 600 and 150 < nr2["height"] < 320, str(nr2))
+        check("desktop: the other unfinished book sits in the shelf below the wide card", small is not None and nr2 is not None and small["y"] >= nr2["y"] + nr2["height"] - 1 and small["width"] < 200, f"{small}")
         check("storage usage shown", "مگابایت" in await pg.inner_text("#storageInfo"), await pg.inner_text("#storageInfo"))
         check("settings/library: no JS errors", len(errs) == 0, str(errs[:2]))
         await ctx.close()
