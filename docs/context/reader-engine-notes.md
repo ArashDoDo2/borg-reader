@@ -19,6 +19,26 @@ Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/ap
 - **Edge taps do nothing on iPhone/iPad** → iOS Safari does not fire `click` on plain text inside the iframe. →
   `onTouchEnd` recognises a tap (<10 px, <500 ms) and calls `handleTap`; the follow-up synthetic click is swallowed
   for 700 ms (no double turn). → e2e edge-tap checks; verified with mobile Chromium touch emulation.
+- **[KNOWN BUG] Chrome on iOS (iPhone): Middle tap does not hide top/bottom toolbars (immersive toggle)**
+  - *Symptom:* On Chrome for iOS, tapping the center of an open EPUB book displays the Persian confirmation toast:
+    `برای نمایش دوبارهٔ نوارها، وسط صفحه را لمس کن.`
+    However, the top reader toolbar (`.reader-toolbar`), chapter navigation (`.page-nav`), and bottom bar (`.reader-bottom`)
+    remain visible on screen simultaneously with the toast. On Safari iOS, desktop browsers, and Android, middle tap correctly hides the toolbars.
+  - *Key Evidence & Observations:*
+    1. The toast appears *only* if `setImmersive(true)` executes in `src/assets/js/app.js:1968`. Therefore, the touch/tap is recognized and `setImmersive(true)` does run.
+    2. In `src/assets/css/app.css:147`, the rule is `.reader.immersive .reader-toolbar,.reader.immersive .page-nav,.reader.immersive .reader-bottom{display:none!important}`. If the `#reader` element retained the `immersive` class, standard CSS specificity ensures `.reader-toolbar` cannot be displayed.
+    3. The bottom progress bar `.immersive-progress` (which shows when `.reader.immersive` is active) is absent in screenshots.
+    4. Conclusion: `#reader` does *not* possess the `immersive` class when the user observes the screen. It is being immediately toggled back off (`setImmersive(false)`) by a secondary event, or a layout/reflow event removes it, while the toast remains visible for its 3-second timeout.
+  - *Primary Theories for Next Investigation:*
+    1. **Synthetic Click Bounce:** Chrome on iOS (running on WKWebView) emits a delayed synthetic `click` event after `touchend` (often 300–700ms later). If the click event lands on the iframe `contents` or `#viewer`, it triggers `onReaderClick` → `handleTap` → `middle()` → `setImmersive(false)`, immediately undoing the immersive state. Notice that any suppression mechanism (like `suppressClickUntil` or `lastTouchAt`) must be carefully isolated so it does *not* break PDF stage clicks/double-taps in `tests/e2e_test.py`.
+    2. **Multiple Event Listeners:** Direct `doc` touch listeners in `onBookContent`, epub.js `rendition.on("touchend")`, and container `#viewer` touch/click listeners can dispatch multiple tap invocations for a single user interaction if event propagation and suppression windows are misaligned.
+    3. **Iframe Coordinate & Selection Checks:** In `handleTap()`, check if `getSelection()` or coordinate calculations (`(frameLeft + clientX - box.left) / box.width`) classify the tap into an edge zone or return early under certain viewport scales.
+    4. **Viewport / Desktop Mode:** Chrome on iOS may report a desktop viewport (980px) if "Request Desktop Site" is toggled or due to specific meta viewport handling, affecting `@media(max-width:700px)` rules.
+  - *Files Involved:*
+    - `src/assets/js/app.js`: `setImmersive()`, `handleTap()`, `onTouchStart()`, `onTouchEnd()`, `onReaderClick()`, `$("viewer")` touch/click listeners.
+    - `src/assets/css/app.css`: line 147 (`.reader.immersive .reader-toolbar...`), line 794 (`@media(max-width:700px)`).
+    - `tests/webkit_e2e.py`: `tap_at()`, `middle tap toggles immersive mode (and back)`.
+    - `tests/e2e_test.py`: PDF click and double-tap zoom reset checks (must remain green).
 - **"Saving book failed" in some Safari modes** → IndexedDB refuses Blobs. → `put()` falls back to storing an
   ArrayBuffer (`fileBuffer`); `fileOf()` rebuilds a File.
 - The about:srcdoc "Blocked script execution" console message is expected (scripts in books are disabled).

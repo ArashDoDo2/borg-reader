@@ -89,9 +89,13 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.24 | Isolate viewer tap fallback from PDF stage: guard `#viewer` touch and click handlers against `.pdf-stage` and active PDF mode so PDF edge taps and double-tap zoom resets never fire duplicate events, adjust tap ratio to avoid adding `frameLeft` when events originate in top-level window, and lower `setImmersive` debounce to 250ms |
 
 ## Open items (not started unless the owner says so)
-1. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
+1. **Active Bug: Chrome on iOS (iPhone) — Middle tap does not hide toolbars in immersive mode:**
+   Tapping the middle of the reader on iOS Chrome shows the toast `برای نمایش دوبارهٔ نوارها، وسط صفحه را لمس کن.`
+   (confirming `setImmersive(true)` fired), but `.reader-toolbar`, `.page-nav`, and `.reader-bottom` remain visible.
+   Detailed diagnostic notes, evidence, and investigation directions are documented in `docs/context/reader-engine-notes.md`.
+2. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
    real-device check on iPhone/iPad of the 8.6–8.10 mobile changes (taps fixed at the root in 8.6.1).
-2. **Known, not fixed:** with margin «زیاد», swipes may not turn pages on phones.
+3. **Known, not fixed:** with margin «زیاد», swipes may not turn pages on phones.
 3. **Server setting (owner):** production health (2026-10-20): PHP 8.4.26, zip/dom on, schema 9, `upload_max_filesize`
    128M but `post_max_size` 32M. Browser uploads are chunked (2 MB) and unaffected; `api-book` sends the whole file in
    one request, so books over ~32 MB are rejected until `post_max_size` is raised to 128M (cPanel MultiPHP INI Editor).
