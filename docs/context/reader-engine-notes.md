@@ -40,7 +40,7 @@ Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/ap
   an old `app.css` across releases while `index.html` (network-first) was fresh. → 8.13.27: precache requests use
   `cache: "reload"`; `--borg-css` marker in `app.css`; the trace prints marker, rule count and whether the parsed sheet has
   the immersive rule. Lesson: when a class is present and a `!important` rule does not apply, check *which* stylesheet the
-  device parsed before touching event code.
+  device parsed before touching event code. Owner-verified fixed on the iPhone with 8.13.27.
 - **"Saving book failed" in some Safari modes** → IndexedDB refuses Blobs. → `put()` falls back to storing an
   ArrayBuffer (`fileBuffer`); `fileOf()` rebuilds a File.
 - The about:srcdoc "Blocked script execution" console message is expected (scripts in books are disabled).

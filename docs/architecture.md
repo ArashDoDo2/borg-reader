@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.13.26 (2026-10-25). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.13.28 (2026-10-25). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -93,6 +93,10 @@ Migration rules:
 - **Library (v6.2):** "continue reading" shelf (books with a saved CFI and < 100%, newest first), progress bar and
   badge on every card, sort by newest added / last read / title. Duplicate imports are refused by size + SHA-256.
   After the first import the app requests persistent storage; usage is shown under the grid.
+- **Phone library, books first (v8.13.28, `max-width:700px`):** with books present (`body.lib-has-books`) `.library-section`
+  is a flex column and the catalog/AI promo cards get `order:10` (below the grid) with their description hidden;
+  `#continueShelf` cards are compact rows (54 px cover beside the meta), at most 3 (`renderLibrary` checks `matchMedia`).
+  Empty library keeps the hero and the full cards. Desktop unchanged.
 - **Library search (v8.5):** `#searchInput` filters the grid live (180 ms debounce) by title, author, publisher and
   shelf names, combined with the filter chips and sort. Query and fields go through `libFold()`: `normalizeForSearch`
   (ی/ي/ى, ک/ك, RLM half-space) then spaces/ZWNJ/bidi marks/tatweel/harakat dropped, Persian/Arabic digits → 0-9,

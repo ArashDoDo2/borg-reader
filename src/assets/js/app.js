@@ -596,7 +596,7 @@
       $("bookGrid").innerHTML = filtered.map(b => bookCardHtml(b, prog.get(b.id), query)).join("");
       // While searching the «ادامهٔ مطالعه» shelf is hidden: the grid is the single result list the count refers to.
       const reading = query ? [] : books.filter(b => { const p = prog.get(b.id); return p && p.cfi && (p.percentage || 0) < 100; })
-        .sort((a, b) => lastRead(b) - lastRead(a)).slice(0, 8);
+        .sort((a, b) => lastRead(b) - lastRead(a)).slice(0, window.matchMedia("(max-width:700px)").matches ? 3 : 8); // phones: compact rows (CSS), three at most
       $("continueSection").hidden = reading.length === 0;
       $("continueShelf").innerHTML = reading.map(b => bookCardHtml(b, prog.get(b.id))).join("");
       updateStorageInfo();

@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-25, version **8.13.27** (live at https://parsun.com/borg/ once its run deploys; 8.13.26 is live).
+Last updated: 2026-10-25, version **8.13.28** (8.13.27 live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -89,18 +89,16 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.24 | Isolate viewer tap fallback from PDF stage: guard `#viewer` touch and click handlers against `.pdf-stage` and active PDF mode so PDF edge taps and double-tap zoom resets never fire duplicate events, adjust tap ratio to avoid adding `frameLeft` when events originate in top-level window, and lower `setImmersive` debounce to 250ms |
 | 8.13.25 | Root-cause fix for the iOS Chrome middle tap: the click that Chrome synthesises after a touch is paired with its touch by **state** (`touchConsumedGesture`), not by the wall clock. It arrives late there because it queues behind the chapter re-layout (`rendition.resize()` → epub.js `clear()` + `display()`) that `setImmersive(true)` starts, so every time window (350→650 ms, debounce 400→250 ms) let it through and it toggled immersive straight back off. Flag set on a consumed tap/swipe, cleared by the next `touchstart` or a non-touch `pointerdown`; `suppressClickUntil` kept as is (PDF stage untouched). Regression test: touch tap + 900 ms late click in `tests/e2e_test.py` §7 | — needs the owner's real-device check on iPhone Chrome |
 | 8.13.26 | On-device tap trace (`?taptrace` in the URL or borg-debug `{"taps":true}`): a fixed overlay lists every reader input event (touchstart/end/cancel, click, pointerdown, source main/frame), what `handleTap`/`setImmersive` did with it and, 1 s after each toggle, the `immersive` class, the toolbar's computed display and the viewer height — so iOS Chrome can be diagnosed without a console. Footer shows the release time (`meta app-released`, device time zone) next to the version | — owner tests 8.13.25 on iPhone Chrome and, if the bars still stay, screenshots the overlay |
-| 8.13.27 | The iPhone Chrome trace (8.13.26) showed `setImmersive(true) applied` and, 1 s later, `class=true toolbar display=flex`: the JS was right all along, the **stylesheet in that browser does not apply the immersive rule**. Service worker precache now fetches with `cache: "reload"` (was `cache.addAll(urls)` → browser HTTP cache → a release could ship a stale `app.css`); `--borg-css` version marker in `app.css`; the trace prints the marker, the rule count and whether the parsed sheet contains `.reader.immersive .reader-toolbar` | — owner: footer ۸.۱۳.۲۷, then `?taptrace` screenshot |
+| 8.13.27 | The iPhone Chrome trace (8.13.26) showed `setImmersive(true) applied` and, 1 s later, `class=true toolbar display=flex`: the JS was right all along, the **stylesheet in that browser does not apply the immersive rule**. Service worker precache now fetches with `cache: "reload"` (was `cache.addAll(urls)` → browser HTTP cache → a release could ship a stale `app.css`); `--borg-css` version marker in `app.css`; the trace prints the marker, the rule count and whether the parsed sheet contains `.reader.immersive .reader-toolbar` | — owner confirmed on iPhone Chrome: immersive mode works with 8.13.27 (stale stylesheet was the cause) |
+| 8.13.28 | Phone library, books first (`max-width:700px`, desktop unchanged): once the library has books the catalog and AI promo cards move below the grid as shorter strips (description hidden; `.library-section` becomes a flex column, teasers `order:10`); «ادامهٔ مطالعه» is compact rows (54 px cover beside title/author/progress, at most 3 on phones, `matchMedia` in `renderLibrary`). First book on the first screen (page 1788 → 1405 px with one book). e2e §5 geometry checks | — owner's look on the phone |
 
 ## Open items (not started unless the owner says so)
 0. **Deploys were blocked 2026-10-25 06:20–09:40 UTC:** a commit (`0ab3057`, an earlier iOS attempt) had been pushed, pulled by the
    server, then removed from GitHub's `main`; the server's fast-forward pull failed on every run. Fixed by the owner on the
    server: `git fetch origin && git reset --hard origin/main && git config pull.ff only`. Rule added to CLAUDE.md.
-1. **iPhone Chrome immersive bug — root cause found, fix pending verification (owner):** the on-device trace proved the JS
-   path is correct (`setImmersive(true) applied`, class stays) and the toolbar's computed display is still `flex` — the
-   stylesheet Chrome parsed does not apply `.reader.immersive .reader-toolbar{display:none!important}`. Working hypothesis:
-   a stale `app.css` precached from Chrome's HTTP cache (8.13.27 fixes the precache). Verify: footer ۸.۱۳.۲۷ (reload once
-   if the update banner appears), open a book, tap the middle. If the bars still stay, screenshot `?taptrace`: the new line
-   `css marker=… rules=… immersive-rule=…` says whether the parsed sheet is 8.13.27 and contains the rule.
+1. **iPhone Chrome immersive bug — closed (8.13.27, owner-verified 2026-10-25 21:26 AEDT).** Cause: the service worker
+   precached a stale `app.css` from Chrome's HTTP cache; the JS was never wrong. Keep `cache: "reload"` in the precache.
+   The `?taptrace` overlay stays available for future touch issues.
 2. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
    real-device check on iPhone/iPad of the 8.6–8.10 mobile changes (taps fixed at the root in 8.6.1).
 3. **Known, not fixed:** with margin «زیاد», swipes may not turn pages on phones.

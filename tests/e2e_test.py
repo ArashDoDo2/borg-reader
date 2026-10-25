@@ -236,6 +236,19 @@ async def run(url):
         await pg.set_input_files("#epubInput", sample); await pg.wait_for_timeout(1800)
         await pg.click(".book-card"); await pg.wait_for_timeout(2500)
         check("mobile: book visible", bool(await visible_text(pg)))
+        # v8.13.28: on a phone with books, the library comes first (promo cards below the grid, shortened) and
+        # «ادامهٔ مطالعه» is a compact row, so the first book is on the first screen.
+        await pg.keyboard.press("ArrowLeft"); await pg.wait_for_timeout(1200)   # RTL book: next page
+        await pg.keyboard.press("Escape"); await pg.wait_for_timeout(900)       # closes the reader
+        check("mobile: Escape closes the reader", await pg.is_visible("#bookGrid"))
+        row = await pg.locator("#continueShelf .book-card").first.bounding_box()
+        grid = await pg.locator("#bookGrid").bounding_box()
+        teaser = await pg.locator("#catalogTeaser").bounding_box()
+        check("mobile: continue-reading card is a compact row", row is not None and row["height"] < 130 and row["width"] > 300, str(row))
+        check("mobile: promo cards sit below the book grid when the library has books",
+              teaser is not None and grid is not None and teaser["y"] > grid["y"] + grid["height"] - 1, f"teaser={teaser} grid={grid}")
+        check("mobile: first book starts on the first screen", grid is not None and grid["y"] < 844, str(grid))
+        check("mobile: promo description hidden in the compact strip", not await pg.is_visible("#catalogTeaser .teaser-desc"))
         await ctx.close()
 
         # 6. Desktop navigation: keyboard, edge taps, immersive mode
