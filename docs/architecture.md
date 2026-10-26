@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.13.31 (2026-10-26). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.13.32 (2026-10-26). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -304,8 +304,8 @@ Bring-your-own-key: nothing is proxied through the Borg server and no key is sto
   book+chapter in localStorage and restored when the panel reopens; «📌 ذخیره در یادداشت‌های کتاب» stores a reply as a
   book note (annotation, synced like any other). The library shows a teaser card until a key is configured (`hasAiKey()`),
   then a compact «✨ هوش مصنوعی» button; a guide dialog (`openAiGuideDialog`) explains how to get a free key.
-- **Tests:** the e2e suite blocks every non-localhost request, so the model calls themselves are not exercised; the panel,
-  setup state and caching are only checked manually. Adding a route mock for the Gemini endpoints is the open gap (§8).
+- **Tests:** e2e §33 (8.13.32) answers every `generativelanguage.googleapis.com` request with a route mock: key setup,
+  a streamed chapter summary over the Interactions API, the cache, saving a reply as a note, and the invalid-key error.
 
 ## 4h. Roles: admin, user, student (v8.13.13)
 `users.role` is `admin` | `user` | `student` (invites carry the role). A **student** (placement students) has a private
@@ -322,11 +322,12 @@ Details and history of each workaround: `docs/context/reader-engine-notes.md`.
   serialize hook adds the load veil (after `book.opened`) → content hooks (`onBookContent`: half-space fix,
   Persian digits, footnote/image click handlers; fonts stylesheet then veil removal) → theme (`applyReaderStyles`).
 - **Navigation:** `goLeft/goRight` map to forward/back through `bookIsRtl()`. Mouse wheel/trackpad (8.6.3, `onReaderWheel`, listeners on the book document and `#viewer`): summed deltas ≥ 40 px turn one page, then locked until 250 ms of quiet; vertical = forward/back, horizontal = physical; off in scrolled flow or with pref `wheel: false`. Taps are recognised on `touchend`
-  (touch: < 48 px movement, < 750 ms) and on `click` (mouse) through one `handleTap()`; edge zones 25%, middle tap toggles
+  (touch: < `TAP_SLOP_PX` = 24 px movement, < 750 ms; every tap counts since 8.13.32) and on `click` (mouse) through one
+  `handleTap()`; on the edge zones the 2nd click of a double click does not select a word (`onReaderMouseDown`, 8.13.32); edge zones 25%, middle tap toggles
   immersive. The click a browser synthesises after a touch is paired with its touch by state (`touchConsumedGesture`,
   v8.13.25: set when a touch ended as a tap/swipe, cleared by the next `touchstart` or a non-touch `pointerdown`), with a
   650 ms `suppressClickUntil` window kept as a second guard; listeners sit on the chapter document (epub.js re-emits them),
-  directly on the document, and as a fallback on `#viewer`. `orientationchange` re-paginates after 200 ms. `tapTrace()`
+  directly on the document, and on `#viewer` for the margin around the frame (same handlers, taps and swipes, 8.13.32). `orientationchange` re-paginates after 200 ms. `tapTrace()`
   (v8.13.26, `?taptrace` or borg-debug `taps`) writes every input event, `handleTap` decision and `setImmersive` outcome to a
   fixed overlay, for browsers without a console.
 - **Reading features:** TTS (`speechSynthesis`, sentence queue with `.tts-hl` highlight, follows pages),
@@ -466,10 +467,6 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
 ## 8. Known gaps
 - CI gates on Chromium and WebKit (Playwright), but not on Chrome for iOS (a WKWebView with Chrome's own gesture
   recognisers and late synthetic clicks, see 8.13.15–8.13.25): iOS Chrome behaviour is verified by the owner on a device.
-- A 10 px finger movement counts as a tap (48 px tolerance since 8.13.23), so a slightly moving middle tap toggles
-  immersive mode; the e2e «tiny movement is not a swipe» check only asserts the page did not turn.
-- Two taps within 650 ms: the second is dropped as a duplicate (`suppressClickUntil`).
-- The AI companion's model calls are not covered by tests (§4g).
 - Direction detection follows the majority script; a per-book override exists since 8.6.5 (not synced).
 - Very large books: locations generation and direction detection run on open; not profiled on 50 MB+ files.
 

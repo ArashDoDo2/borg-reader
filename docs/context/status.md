@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-26, version **8.13.31** (8.13.30 live at https://parsun.com/borg/).
+Last updated: 2026-10-26, version **8.13.32** (8.13.31 live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -93,26 +93,28 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.28 | Phone library, books first (`max-width:700px`, desktop unchanged): once the library has books the catalog and AI promo cards move below the grid as shorter strips (description hidden; `.library-section` becomes a flex column, teasers `order:10`); «ادامهٔ مطالعه» is compact rows (54 px cover beside title/author/progress, at most 3 on phones, `matchMedia` in `renderLibrary`). First book on the first screen (page 1788 → 1405 px with one book). e2e §5 geometry checks | — owner: «خیلی بهتر شده» |
 | 8.13.29 | Desktop library (`min-width:701px`): the newest unfinished book is a wide «در حال خواندن» card (`nowReadingHtml`: cover, title, author, chapter · percent · last read, progress bar, «ادامهٔ مطالعه» button; other unfinished books as small cards beside it); promo cards below the grid side by side (`.library-section` flex-wrap, teasers `order:10`, half width); stats card one row; the tab bar is hidden when only one tab is visible (`:has()`, all widths). Progress records now keep `chapter` (local only; sync pull preserves it). e2e §6 checks | — owner: «داغونه» with 8 unfinished books (fixed in 8.13.30) |
 | 8.13.30 | Fix 8.13.29: with several unfinished books the fixed-width small cards squeezed the wide card to ~50 px. The wide card now takes a row of its own; the other unfinished books are in `.continue-rest`, the original horizontal scrolling shelf, below it. e2e §6 regression with two unfinished books | |
-| 8.13.31 | Visual pass, owner-approved items 1–3. **(1) Generated covers** (`coverArtHtml`, used by the library, now-reading card, catalog, book page and admin): palette colour + light paper grain, double inner frame, eight-pointed star motif, balanced title, divider, author (the «نویسنده نامشخص» placeholder is not printed); sized in container units of `.cover-art`, compact mode under 100 px; palette gained four deeper tones (existing books get re-assigned colours once). **(2) Icons:** ~85 emoji replaced by a 28-icon line set (`data-ico`, CSS mask, `currentColor`); busy/toast texts lose their emoji. Also fixed a pre-existing selection-bar bug (it shrank to half the reader and every label wrapped) on wide screens. **(3) Motion and depth:** staggered entrance only for books shown for the first time (survives start-up re-renders via negative delays), progress bars and the goal ring fill in, cover tilt + glare under a mouse, faint background glow; all off with `prefers-reduced-motion`. e2e §6: 6 checks; webkit_e2e: icons/cover check on iPad and iPhone. Also fixed (found because CI failed the catalog back-navigation check): `html{scroll-behavior:smooth}` made the catalog's scroll restore animate from the top to the saved card on every «back» from a book page; `jumpScroll()` now restores at once (e2e §31 check at 150 ms). The check had always failed in the agent container and passed in CI only when the animation happened to end within 700 ms | — owner's look |
+| 8.13.31 | Visual pass, owner-approved items 1–3. **(1) Generated covers** (`coverArtHtml`, used by the library, now-reading card, catalog, book page and admin): palette colour + light paper grain, double inner frame, eight-pointed star motif, balanced title, divider, author (the «نویسنده نامشخص» placeholder is not printed); sized in container units of `.cover-art`, compact mode under 100 px; palette gained four deeper tones (existing books get re-assigned colours once). **(2) Icons:** ~85 emoji replaced by a 28-icon line set (`data-ico`, CSS mask, `currentColor`); busy/toast texts lose their emoji. Also fixed a pre-existing selection-bar bug (it shrank to half the reader and every label wrapped) on wide screens. **(3) Motion and depth:** staggered entrance only for books shown for the first time (survives start-up re-renders via negative delays), progress bars and the goal ring fill in, cover tilt + glare under a mouse, faint background glow; all off with `prefers-reduced-motion`. e2e §6: 6 checks; webkit_e2e: icons/cover check on iPad and iPhone. Also fixed (found because CI failed the catalog back-navigation check): `html{scroll-behavior:smooth}` made the catalog's scroll restore animate from the top to the saved card on every «back» from a book page; `jumpScroll()` now restores at once (e2e §31 check at 150 ms). The check had always failed in the agent container and passed in CI only when the animation happened to end within 700 ms | — owner: «اوکی شد» |
+| 8.13.32 | Reader input, measured on Chromium (desktop 1280 px two-page spread, phone 390 px): **(a) quick page turns** — 5 quick taps turned 2 pages (a 650 ms "duplicate" window in `onTouchEnd` dropped real taps; synthetic clicks are already handled by state since 8.13.25), 5 quick mouse clicks turned 2 spreads (the 2nd click of a double click selected a word and `handleTap` only cleared it). Now every tap counts, and `onReaderMouseDown` blocks double-click word selection in the edge zones only (book frame and PDF stage). **(b) margin «زیاد»:** swipes starting in the margin around the book frame did nothing (the `#viewer` fallback handled taps only); it now uses the same `onTouchStart`/`onTouchEnd` as the text. **(c)** tap slop 48 → 24 px (`TAP_SLOP_PX`). **(d)** e2e §33: AI companion against a mocked Gemini (key setup, streamed summary with the chapter text, cache, save as note, invalid-key error, no external requests). e2e §6/§7 regression checks fail on 8.13.31 | |
 
 ## Open items (not started unless the owner says so)
-0. **Deploys were blocked 2026-10-25 06:20–09:40 UTC:** a commit (`0ab3057`, an earlier iOS attempt) had been pushed, pulled by the
-   server, then removed from GitHub's `main`; the server's fast-forward pull failed on every run. Fixed by the owner on the
-   server: `git fetch origin && git reset --hard origin/main && git config pull.ff only`. Rule added to CLAUDE.md.
-1. **iPhone Chrome immersive bug — closed (8.13.27, owner-verified 2026-10-25 21:26 AEDT).** Cause: the service worker
-   precached a stale `app.css` from Chrome's HTTP cache; the JS was never wrong. Keep `cache: "reload"` in the precache.
-   The `?taptrace` overlay stays available for future touch issues.
+1. **Server setting (owner, said 2026-10-26 he will do it later):** production health (2026-10-20): PHP 8.4.26, zip/dom on,
+   schema 9, `upload_max_filesize` 128M but `post_max_size` 32M. Browser uploads are chunked (2 MB) and unaffected;
+   `api-book` sends the whole file in one request, so books over ~32 MB are rejected until `post_max_size` is raised to
+   128M (cPanel MultiPHP INI Editor).
 2. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
    real-device check on iPhone/iPad of the 8.6–8.10 mobile changes (taps fixed at the root in 8.6.1).
-3. **Known, not fixed:** with margin «زیاد», swipes may not turn pages on phones.
-3. **Server setting (owner):** production health (2026-10-20): PHP 8.4.26, zip/dom on, schema 9, `upload_max_filesize`
-   128M but `post_max_size` 32M. Browser uploads are chunked (2 MB) and unaffected; `api-book` sends the whole file in
-   one request, so books over ~32 MB are rejected until `post_max_size` is raised to 128M (cPanel MultiPHP INI Editor).
+3. **Visual pass, items 4–6 (proposed 2026-10-26, waiting for the owner's choice):** a Persian display font for headings
+   (needs the owner to pick one; must be bundled locally); a "book" feel in the reader (page-edge shadow, paper grain in
+   sepia, read chapters marked in the TOC); details (skeleton while the library loads, 7-day sparkline in the stats).
 4. Text cleanup limits: a phrase split across formatting tags is not matched; the "too broad" override is per rule,
    not per book. PDFs: no highlights/notes/TTS/cleanup yet (ADR 0009). Categories: no per-category icons (ADR 0010).
 5. Later candidates: upload resume, performance on very large books, Android app wrapper (needs owner's package name,
    signing key, Play account).
 6. Ideas deferred on purpose: ratings and comments in the catalog (too few users), "send to Kindle" (needs SMTP).
+
+**Recently closed** (details in the table above): deploys blocked by a rewritten `main` (2026-10-25, owner fixed the server
+clone; rule in CLAUDE.md) · iPhone Chrome middle tap (8.13.27, stale stylesheet) · swipes from the margin with «زیاد»,
+quick taps/clicks dropping page turns, 48 px tap slop, no tests for the AI companion (all 8.13.32).
 
 ## Decisions the owner already made (don't re-ask)
 - One production branch, no staging. Speed matters: ship, keep tests green, fix forward with a new revision.

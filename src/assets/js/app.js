@@ -1865,6 +1865,7 @@
     st.stage.addEventListener("touchmove", onPdfTouchMove, { passive: false });
     st.stage.addEventListener("touchend", onPdfTouchEnd);
     st.stage.addEventListener("click", e => { markActivity(); onReaderClick(e, null); });
+    st.stage.addEventListener("mousedown", onReaderMouseDown);
     if (window.ResizeObserver) {
       let last = "";
       st.ro = new ResizeObserver(() => {
@@ -1937,7 +1938,9 @@
   $("prefPdfInvert").addEventListener("change", e => { readerPrefs.pdfInvert = e.target.checked; saveReaderPrefs(); syncSettingsUI(); });
 
   // ---- Reader navigation (v6.1): keyboard, swipe, edge tap zones, TOC drawer, immersive mode ----
-  const SWIPE_MIN_PX = 48, EDGE_ZONE = 0.25;
+  // TAP_SLOP_PX (v8.13.32): a touch that moved less than this is a tap. Was 48 px since 8.13.23 (a guess while hunting the
+  // iOS Chrome bug, whose cause was a stale stylesheet); 24 px keeps finger wobble a tap but a short drag no longer is.
+  const SWIPE_MIN_PX = 48, EDGE_ZONE = 0.25, TAP_SLOP_PX = 24;
   let touchStart = null, suppressClickUntil = 0;
   // v8.13.25: a touch and the "click" browsers synthesise after it are one gesture. They are paired by state, not by
   // the wall clock (suppressClickUntil): on Chrome for iOS the click reaches us late, queued behind the chapter
@@ -2122,9 +2125,11 @@
     touchStart = null;
     tapTrace(`touchend ${evSrc(e)} dx=${Math.round(dx)} dy=${Math.round(dy)} dt=${dt}`);
     // iOS Safari never fires "click" on plain text inside the book iframe, so edge taps are detected from the touch itself.
-    if (Math.abs(dx) < 48 && Math.abs(dy) < 48 && dt < 750) {
-      touchConsumedGesture = true; // even when this tap is dropped as a duplicate below, its click is still redundant
-      if (Date.now() < suppressClickUntil) { tapTrace("  tap dropped (duplicate window)"); return; }
+    if (Math.abs(dx) < TAP_SLOP_PX && Math.abs(dy) < TAP_SLOP_PX && dt < 750) {
+      // v8.13.32: every tap counts. The 650 ms "duplicate" window dropped real quick taps (3 of 5 when turning pages fast);
+      // the click a browser synthesises after a touch is already ignored by state (touchConsumedGesture), and a second
+      // listener for the same touch finds touchStart cleared above. suppressClickUntil stays as the click-side guard.
+      touchConsumedGesture = true;
       suppressClickUntil = Date.now() + 650;
       handleTap(e.target, t.clientX, e.view, contents);
       return;
@@ -2166,6 +2171,20 @@
     tapTrace(`click ${evSrc(e)} handled`);
     handleTap(e.target, e.clientX, e.view, contents);
   }
+  /** v8.13.32: fast clicks on an edge each turn a page. The browser treats the 2nd click as a double click and selects a
+   *  word, which handleTap then only cleared — one page turn lost per double click. Selection by double click is blocked
+   *  only in the edge zones, where a single click already turns the page; the middle keeps normal word selection. */
+  function onReaderMouseDown(e) {
+    if (e.button !== 0 || e.detail < 2) return;
+    const edges = readerPrefs.taps !== false && (!!pdf || readerPrefs.flow !== "scrolled");
+    if (!edges) return;
+    const box = $("viewer").getBoundingClientRect();
+    if (!box.width) return;
+    let frameLeft = 0;
+    try { if (!pdf && e.view && e.view !== window && e.view.frameElement) frameLeft = e.view.frameElement.getBoundingClientRect().left; } catch (_) {}
+    const ratio = (frameLeft + e.clientX - box.left) / box.width;
+    if (ratio < EDGE_ZONE || ratio > 1 - EDGE_ZONE) e.preventDefault();
+  }
   function handleTap(target, clientX, view, contents) {
     diag("tap"); diag("tapHasFrame", !!((view && view.frameElement) || (contents && contents.window && contents.window.frameElement)));
     if (settingsOpen() || searchOpen() || aiOpen()) { closeSettings(false); closeSearch(false); closeAi(false); return; }
@@ -2203,27 +2222,13 @@
   document.addEventListener("keydown", handleReaderKey);
   // Wheel over the margins/bars around the book (inside the book the iframe listener in onBookContent handles it).
   $("viewer").addEventListener("wheel", onReaderWheel, { passive: false });
-  let viewerTouchStart = null;
-  $("viewer").addEventListener("touchstart", e => {
-    if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
-    touchConsumedGesture = false;
-    const t = e.changedTouches && e.changedTouches[0];
-    viewerTouchStart = t ? { x: t.clientX, y: t.clientY, time: Date.now() } : null;
-  }, { passive: true });
-  $("viewer").addEventListener("touchend", e => {
-    if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
-    const t = e.changedTouches && e.changedTouches[0];
-    if (!viewerTouchStart || !t) return;
-    const dx = t.clientX - viewerTouchStart.x, dy = t.clientY - viewerTouchStart.y, dt = Date.now() - viewerTouchStart.time;
-    viewerTouchStart = null;
-    tapTrace(`viewer touchend dx=${Math.round(dx)} dy=${Math.round(dy)} dt=${dt}`);
-    if (Math.abs(dx) < 48 && Math.abs(dy) < 48 && dt < 750) {
-      touchConsumedGesture = true;
-      if (Date.now() < suppressClickUntil) { tapTrace("  viewer tap dropped (duplicate window)"); return; }
-      suppressClickUntil = Date.now() + 650;
-      handleTap(e.target, t.clientX, window, null);
-    }
-  }, { passive: true });
+  // Touches on the viewer around the book frame (its margin, «حاشیه»): v8.13.32 routes them through the same handlers as
+  // touches on the text, so swipes that start in the margin turn the page too (before, only taps were handled here, so
+  // with margin «زیاد» a swipe from the screen edge did nothing). Touches inside the frame never reach this listener.
+  const onViewerSurface = e => !pdf && !(e.target && e.target.closest && e.target.closest(".pdf-stage"));
+  $("viewer").addEventListener("touchstart", e => { if (onViewerSurface(e)) onTouchStart(e); }, { passive: true });
+  $("viewer").addEventListener("touchend", e => { if (onViewerSurface(e)) onTouchEnd(e, null); }, { passive: true });
+  $("viewer").addEventListener("touchcancel", e => { if (onViewerSurface(e)) touchStart = null; }, { passive: true });
   $("viewer").addEventListener("click", e => {
     if (pdf || (e.target && e.target.closest && e.target.closest(".pdf-stage"))) return;
     if (touchConsumedGesture) { diag("clickAfterTouch"); tapTrace("viewer click ignored (after touch)"); return; }
@@ -2598,6 +2603,7 @@
     doc.addEventListener("touchcancel", () => { tapTrace("touchcancel (doc)"); touchStart = null; }, { passive: true });
     doc.addEventListener("pointerdown", onPointerDown, { passive: true, capture: true }); // a mouse click inside the book must still count
     doc.addEventListener("touchstart", onTouchStart, { passive: true });
+    doc.addEventListener("mousedown", onReaderMouseDown);
     doc.addEventListener("touchend", e => onTouchEnd(e, contents), { passive: true });
     // Capture phase: runs before epub.js' own link handling, so footnotes open in place instead of jumping.
     doc.addEventListener("click", e => {

@@ -79,6 +79,13 @@ async def open_settings(pg):
 async def _contains(pg, sel, text): return text in (await pg.inner_text(sel))
 async def _count_gt(pg, sel, n): return await pg.locator(sel).count() > n
 
+# v8.13.32: reading position as (chapter, page within the chapter) from the reader's own labels.
+READER_POS_JS = """()=>{const t=(document.getElementById('timeLeft')||{}).textContent||'';
+  const m=t.replace(/[۰-۹]/g,d=>'۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).match(/صفحهٔ (\\d+)/);
+  return [((document.getElementById('chapterLabel')||{}).textContent||'').trim(), m?Number(m[1]):-1]}"""
+async def reader_pos(pg):
+    return tuple(await pg.evaluate(READER_POS_JS))
+
 async def page_pos(pg):
     """Position of the first visible block: -1 for a chapter heading, else the paragraph number."""
     import re
@@ -355,6 +362,44 @@ async def run(url):
         await pg.mouse.click(mx, my); await pg.wait_for_timeout(600)
         check("mobile: a real mouse click after touch input still toggles immersive mode", not await pg.is_visible(".reader-toolbar"))
         await pg.mouse.click(mx, my); await pg.wait_for_timeout(600)
+        # v8.13.32: quick taps each turn a page (a 650 ms "duplicate" window used to drop 3 of 5).
+        ex = vb["x"] + vb["width"] * 0.1
+        async def tap_edge(gap):
+            await cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": ex, "y": my}]})
+            await pg.wait_for_timeout(60)
+            await cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+            await pg.wait_for_timeout(gap)
+        r0 = await reader_pos(pg)
+        for _ in range(5): await tap_edge(180)
+        await pg.wait_for_timeout(1200); r1 = await reader_pos(pg)
+        check("v8.13.32 mobile: five quick taps turn five pages", r0[0] == r1[0] and r1[1] - r0[1] == 5, f"{r0} -> {r1}")
+        # A 34 px drag in the middle is neither a tap (no bars toggle) nor a swipe (was a tap up to 48 px).
+        bars = await pg.is_visible(".reader-toolbar")
+        await swipe(cdp, mx - 17, mx + 17, my); await pg.wait_for_timeout(700)
+        check("v8.13.32 mobile: a 34 px drag does not toggle the bars", await pg.is_visible(".reader-toolbar") == bars and await reader_pos(pg) == r1)
+        # With margin «زیاد», swipes that start in the margin (outside the book frame) turn the page in both directions.
+        if not await pg.is_visible(".reader-toolbar"):   # (on old code the drag above toggled the bars off)
+            await pg.keyboard.press("Escape"); await pg.wait_for_timeout(500)
+        await pg.click("#settingsToggle"); await pg.wait_for_timeout(400)
+        await pg.click('[data-margin="l"]'); await pg.wait_for_timeout(900)
+        await pg.keyboard.press("Escape"); await pg.wait_for_timeout(500)
+        prev = None   # the new margin re-paginates the chapter; read the start position once it has settled
+        for _ in range(10):
+            cur = await reader_pos(pg)
+            if cur == prev: break
+            prev = cur; await pg.wait_for_timeout(300)
+        vb2 = await pg.locator("#viewer").bounding_box()
+        pad = await pg.evaluate("parseFloat(getComputedStyle(document.getElementById('viewer')).paddingLeft)")
+        r2 = await reader_pos(pg)
+        await swipe(cdp, vb2["x"] + 3, vb2["x"] + 223, my); await pg.wait_for_timeout(900)
+        r3 = await reader_pos(pg)
+        await swipe(cdp, vb2["x"] + vb2["width"] - 3, vb2["x"] + vb2["width"] - 223, my); await pg.wait_for_timeout(900)
+        r4 = await reader_pos(pg)
+        check("v8.13.32 mobile: margin «زیاد» — swipes starting in the margin turn the page both ways",
+              pad > 15 and r3[0] == r2[0] == r4[0] and r3[1] > r2[1] and r4[1] < r3[1], f"margin={pad}px {r2} -> {r3} -> {r4}")
+        await pg.click("#settingsToggle"); await pg.wait_for_timeout(400)
+        await pg.click('[data-margin="m"]'); await pg.wait_for_timeout(700)
+        await pg.keyboard.press("Escape"); await pg.wait_for_timeout(400)
         check("mobile navigation: no JS errors", len(errs) == 0, str(errs[:2]))
         await ctx.close()
 
@@ -424,6 +469,23 @@ async def run(url):
         await pg.emulate_media(reduced_motion="no-preference")
         await pg.click("#continueShelf .now-reading-btn"); await pg.wait_for_timeout(2500)
         check("desktop: now-reading card opens the book", await pg.is_visible("#reader") and bool(await visible_text(pg)))
+        # v8.13.32: fast clicks on an edge turn as many pages as slow ones (the 2nd click of a double click used to select a word
+        # and turn nothing) and leave no selection. Compared with slow clicks, so the two-page spread does not matter.
+        dvb = await pg.locator("#viewer").bounding_box(); cx, cy = dvb["x"] + dvb["width"] * 0.06, dvb["y"] + dvb["height"] * 0.5
+        s0 = await reader_pos(pg)
+        for _ in range(5):
+            await pg.mouse.click(cx, cy); await pg.wait_for_timeout(700)
+        s_slow = await reader_pos(pg)
+        for _ in range(5):
+            await pg.keyboard.press("ArrowRight"); await pg.wait_for_timeout(500)   # RTL book: back
+        s_back = await reader_pos(pg)
+        for n in range(1, 6):
+            await pg.mouse.move(cx, cy); await pg.mouse.down(click_count=n); await pg.mouse.up(click_count=n); await pg.wait_for_timeout(140)
+        await pg.wait_for_timeout(1200)
+        s_fast = await reader_pos(pg)
+        sel_len = await pg.evaluate("(()=>{const f=document.querySelector('#viewer iframe');return f?String(f.contentWindow.getSelection()).trim().length:0})()")
+        check("v8.13.32 desktop: five fast edge clicks turn as many pages as five slow ones, no word selected",
+              s_slow != s0 and s_back == s0 and s_fast == s_slow and sel_len == 0, f"start {s0} slow {s_slow} back {s_back} fast {s_fast} sel={sel_len}")
         await pg.click("#closeReader"); await pg.wait_for_timeout(800)
         badge = await pg.inner_text("#bookGrid .book-badge")
         check("progress shown on the card", "٪" in badge or "شروع" in badge, badge)
@@ -3329,6 +3391,80 @@ async def run(url):
         errs32 = [e for e in errs32 if "status of 409" not in e]  # the mocked duplicate / has_children answers
         check("v8.10 categories: no JS errors (besides the two mocked 409 answers), no external requests", not errs32 and not ext32, str((errs32 + ext32)[:3]))
         await ctx32.close()
+
+        # 33. v8.13.32 AI companion (BYOK, client-side) against a mocked Gemini: key setup, a chapter summary streamed over
+        # the Interactions API, the summary cache, saving a reply as a book note, and the error path. Every request to
+        # generativelanguage.googleapis.com is answered here; nothing leaves the machine.
+        import json as _json33
+        ext33, errs33 = [], []
+        ctx33, A = await new_ctx(b, url, ext33, errs33)
+        ai_reqs, ai_mode = [], {"fail": False}
+        async def gemini(route):
+            req = route.request
+            ai_reqs.append({"url": req.url, "method": req.method, "key": req.headers.get("x-goog-api-key", ""), "body": req.post_data or ""})
+            if ai_mode["fail"]:
+                await route.fulfill(status=400, content_type="application/json",
+                                    body=_json33.dumps({"error": {"message": "API key not valid. Please pass a valid API key."}})); return
+            if req.method == "GET":
+                await route.fulfill(status=200, content_type="application/json",
+                                    body=_json33.dumps({"models": [{"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent"]}]})); return
+            streamed = '"stream":true' in (req.post_data or "").replace(" ", "") or "alt=sse" in req.url
+            if not streamed:   # e.g. the key test: a plain JSON answer, as the real API gives without streaming
+                await route.fulfill(status=200, content_type="application/json", body=_json33.dumps({"output_text": "سلام"}, ensure_ascii=False)); return
+            ev = lambda t: "data: " + _json33.dumps({"event_type": "content.delta", "delta": {"type": "text", "text": t}}, ensure_ascii=False) + "\n\n"
+            await route.fulfill(status=200, headers={"content-type": "text/event-stream; charset=utf-8"},
+                                body=(ev("**خلاصهٔ آزمایشی:** ") + ev("نکتهٔ اول این فصل.") + "data: [DONE]\n\n").encode("utf-8"))
+        await ctx33.route("https://generativelanguage.googleapis.com/**", gemini)
+        await A.set_viewport_size({"width": 1280, "height": 800})
+        await A.goto(url); await A.wait_for_timeout(800)
+        await A.set_input_files("#epubInput", sample); await A.wait_for_timeout(2000)
+        # Key setup through the guide dialog: a test call is made with the typed key, then the key is stored locally only.
+        await A.click("#aiTeaserButton"); await A.wait_for_timeout(400)
+        await A.fill("#aiApiKeyInput", "test-key-33")
+        await A.click("#aiTestAndSave")
+        try: await poll(lambda: A.evaluate("document.getElementById('aiTestStatus').classList.contains('success')"), 5000)
+        except TimeoutError: pass
+        cfg = _json33.loads(await A.evaluate("localStorage.getItem('borg-ai-config') || '{}'"))
+        st_icon = await A.evaluate("(()=>{const s=getComputedStyle(document.getElementById('aiTestStatus'),'::before');return (s.maskImage||s.webkitMaskImage||'').slice(0,4)})()")
+        check("v8.13.32 AI: key test succeeds against the mocked API and the key is stored in this browser",
+              cfg.get("apiKey") == "test-key-33" and len(ai_reqs) >= 1 and all(r["key"] == "test-key-33" for r in ai_reqs) and st_icon == "url(",
+              f"cfg={cfg} reqs={len(ai_reqs)} icon={st_icon}")
+        try: await poll(lambda: A.evaluate("!document.getElementById('aiGuideDialog').open"), 3000)
+        except TimeoutError: await A.keyboard.press("Escape")
+        # A chapter summary: the request carries the chapter text; the streamed reply is rendered as formatted text.
+        await A.click("#bookGrid .book-card"); await A.wait_for_timeout(2500)
+        n0 = len(ai_reqs)
+        await A.click("#aiToggle"); await A.wait_for_timeout(400)
+        await A.click("#aiBtnSummary")
+        try: await poll(lambda: A.evaluate("(document.getElementById('aiResponse').textContent||'').includes('نکتهٔ اول این فصل')"), 6000)
+        except TimeoutError: pass
+        resp_html = await A.inner_html("#aiResponse")
+        new = ai_reqs[n0:]
+        check("v8.13.32 AI: chapter summary is requested with the chapter text and the streamed reply is shown",
+              "نکتهٔ اول این فصل" in resp_html and "<strong>خلاصهٔ آزمایشی:</strong>" in resp_html
+              and any("interactions" in r["url"] and "پاراگراف" in r["body"] for r in new), f"{resp_html[:160]} | {[r['url'][:60] for r in new]}")
+        # The summary is cached per chapter: closing and reopening the panel shows it again without a new request.
+        await A.click("#aiClose"); await A.wait_for_timeout(300)
+        n1 = len(ai_reqs)
+        await A.click("#aiToggle"); await A.wait_for_timeout(500)
+        check("v8.13.32 AI: cached chapter summary is restored without a new request",
+              await A.is_visible(".ai-cached-pill") and "نکتهٔ اول این فصل" in await A.inner_text("#aiResponse") and len(ai_reqs) == n1)
+        # Saving the reply as a book note.
+        anns0 = len(await A.evaluate(IDB_JS, ["annotations"]))
+        await A.click("#aiSaveNoteBtn"); await A.wait_for_timeout(800)
+        anns1 = await A.evaluate(IDB_JS, ["annotations"])
+        check("v8.13.32 AI: a reply can be saved as a book note",
+              len(anns1) == anns0 + 1 and "در یادداشت‌ها ذخیره شد" in await A.inner_text("#aiSaveNoteBtn"), f"{anns0} -> {len(anns1)}")
+        # Error path: an invalid key is reported in Persian, with the error icon, and nothing breaks.
+        ai_mode["fail"] = True
+        await A.click("#aiBtnTakeaways")
+        try: await poll(lambda: A.evaluate("!!document.querySelector('#aiResponse [data-ico=\"x-circle\"]')"), 6000)
+        except TimeoutError: pass
+        err_txt = await A.inner_text("#aiResponse")
+        check("v8.13.32 AI: an invalid key is reported in Persian with the error icon",
+              "کلید نامعتبر" in err_txt and await A.locator('#aiResponse [data-ico="x-circle"]').count() == 1, err_txt[:160])
+        check("v8.13.32 AI: no JS errors, nothing leaves the machine", not ext33 and not [e for e in errs33 if "status of 400" not in e], str((ext33 + errs33)[:3]))
+        await ctx33.close()
         await b.close()
 
 def main():
