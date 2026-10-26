@@ -36,5 +36,5 @@ python3 tests/webkit_e2e.py --browser chromium   # منطق آزمون‌های 
 `service-worker.js` بالا ببرید. جزئیات: `CLAUDE.md` و `docs/architecture.md`.
 
 ## مجوزها
-epub.js (BSD-2-Clause)، JSZip (MIT یا GPLv3)، pdf.js (Apache-2.0)، فونت‌های Vazirmatn، شبنم، پرستو، Noto Naskh Arabic و Amiri (SIL OFL 1.1) —
+epub.js (BSD-2-Clause)، JSZip (MIT یا GPLv3)، pdf.js (Apache-2.0)، فونت‌های Vazirmatn، شبنم، پرستو، Noto Naskh Arabic، Amiri و Mirza (SIL OFL 1.1) —
 فایل مجوز هرکدام کنار خودش در `src/assets/` است.

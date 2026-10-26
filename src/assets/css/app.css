@@ -1,7 +1,7 @@
 @font-face{font-family:"Vazirmatn";src:url("../fonts/Vazirmatn-Variable.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}
 :root{color-scheme:light;--bg:#f4f5f1;--paper:#fff;--ink:#172d27;--muted:#74817b;--line:#e4e9e3;--green:#17483c;--green2:#286653;--mint:#e5eee7;--gold:#e5c58b;--shadow:0 16px 44px rgba(23,53,42,.09);--reader-bg:#fffdf8;--reader-ink:#252c28}
 *{box-sizing:border-box}
-:root{--borg-css:"8.13.32"} /* version marker read by the tap trace (bump with app-version) */
+:root{--borg-css:"8.13.33"} /* version marker read by the tap trace (bump with app-version) */
 [hidden]{display:none!important}
 html{scroll-behavior:smooth}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:"Vazirmatn",Tahoma,Arial,sans-serif;font-size:14px;line-height:1.85}
@@ -1515,3 +1515,54 @@ body{background:radial-gradient(1100px 620px at 88% -8%,var(--glow-a),transparen
  .book-card:hover .book-cover-thumb,.now-reading:hover .book-cover-thumb{transform:none}
  .book-cover-thumb::after{display:none}
 }
+
+/* v8.13.33 display font: Mirza 700 (OFL, assets/fonts/MIRZA-OFL.txt), a book-type Naskh for headings only —
+   brand, welcome headline, «کتابخانه», the «در حال خواندن» title, the book page title, the empty-state title and the
+   titles on generated covers.
+   Interface text, buttons and dialogs stay in Vazirmatn. The Latin file loads only when a Latin heading appears.
+   size-adjust evens out its smaller drawing size next to Vazirmatn; letter-spacing must stay 0 for joined script. */
+@font-face{font-family:"Borg Display";src:url("../fonts/Mirza-700-arabic.woff2") format("woff2");font-weight:700;font-display:swap;size-adjust:106%;
+ unicode-range:U+0600-06FF,U+0750-077F,U+0870-088E,U+0890-0891,U+0897-08E1,U+08E3-08FF,U+200C-200E,U+2010-2011,U+204F,U+2E41,U+FB50-FDFF,U+FE70-FE74,U+FE76-FEFC}
+@font-face{font-family:"Borg Display";src:url("../fonts/Mirza-700-latin.woff2") format("woff2");font-weight:700;font-display:swap;size-adjust:104%;
+ unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+:root{--font-display:"Borg Display","Vazirmatn",Tahoma,serif}
+.brand>span:not(.brand-mark),.brand-mark,.hero h1,.section-heading h2,.now-reading-body h3,#detailTitle,.empty-state h3,.ca-title{
+ font-family:var(--font-display);font-weight:700;letter-spacing:0}
+.brand>span:not(.brand-mark){font-size:21px}
+.hero h1{line-height:1.5}
+
+/* v8.13.33 «حس کتاب» in the reader (EPUB, paginated): a soft shade along the page edges, and on a two-page spread a spine
+   shadow down the middle; an overlay that never takes input. Sepia gets a faint paper grain (var set by app.js, shared
+   with the page inside the book frame). Read chapters are muted and ticked in the TOC. */
+.reader:not(.is-pdf) .viewer{position:relative}
+.reader.is-paged .viewer::after{content:"";position:absolute;inset:0;z-index:2;pointer-events:none;border-radius:inherit;
+ box-shadow:inset 18px 0 22px -20px rgba(0,0,0,.22),inset -18px 0 22px -20px rgba(0,0,0,.22)}
+.reader.is-paged.is-spread .viewer::after{
+ background:linear-gradient(90deg,transparent calc(50% - 46px),rgba(0,0,0,.035) calc(50% - 22px),rgba(0,0,0,.11) calc(50% - 2px),rgba(0,0,0,.16) 50%,
+  rgba(0,0,0,.11) calc(50% + 2px),rgba(0,0,0,.035) calc(50% + 22px),transparent calc(50% + 46px))}
+.reader:is(.theme-dark,.theme-black,.theme-amber).is-paged .viewer::after{box-shadow:inset 18px 0 22px -20px rgba(0,0,0,.6),inset -18px 0 22px -20px rgba(0,0,0,.6)}
+.reader:is(.theme-dark,.theme-black,.theme-amber).is-paged.is-spread .viewer::after{
+ background:linear-gradient(90deg,transparent calc(50% - 46px),rgba(0,0,0,.12) calc(50% - 22px),rgba(0,0,0,.3) calc(50% - 2px),rgba(0,0,0,.4) 50%,
+  rgba(0,0,0,.3) calc(50% + 2px),rgba(0,0,0,.12) calc(50% + 22px),transparent calc(50% + 46px))}
+.reader.theme-sepia:not(.is-pdf) .viewer{background-image:var(--paper-grain)}
+.toc-link.toc-read:not(.active){color:var(--muted)}
+.toc-link.toc-read:not(.active)::after{content:"";display:inline-block;width:.95em;height:.95em;margin-inline-start:.45em;vertical-align:-.15em;
+ background-color:currentColor;opacity:.75;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 12.5l5 5L19.5 7'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 12.5l5 5L19.5 7'/%3E%3C/svg%3E") center/contain no-repeat}
+
+/* v8.13.33 details. Library skeleton: shown only while the library is loading (body.lib-loading) and only if that takes
+   longer than ~0.2 s, so a fast device never sees a flash; replaced by the first render. 7-day bars in the stats. */
+.skel-card{display:none}
+body.lib-loading .skel-card{display:block;opacity:0;animation:borg-skel-in .3s ease .2s forwards}
+.skel-cover{aspect-ratio:3/4;border-radius:6px 14px 14px 6px;background:var(--line)}
+.skel-line{height:11px;border-radius:6px;background:var(--line);margin:12px 3px 0;width:72%}
+.skel-line.short{width:44%;margin-top:8px}
+.skel-cover,.skel-line{background-image:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.45) 50%,transparent 70%);background-size:220% 100%;
+ animation:borg-skel-shine 1.4s ease-in-out infinite}
+body.dark .skel-cover,body.dark .skel-line{background-image:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.06) 50%,transparent 70%)}
+@keyframes borg-skel-in{to{opacity:1}}
+@keyframes borg-skel-shine{from{background-position:120% 0}to{background-position:-20% 0}}
+.spark{display:block;width:70px;height:22px;margin-top:5px;fill:var(--green2);opacity:.85}
+.spark rect{opacity:.45}.spark rect.spark-today{opacity:1}.spark rect.spark-zero{opacity:.25}
+@media(min-width:701px){.stat-mini .spark{display:inline-block;margin:0 6px 0 0;vertical-align:middle;width:56px;height:18px}}
+@media(max-width:700px){.stats-card{position:relative}.stat-mini .spark{position:absolute;top:18px;left:14px;width:84px;height:26px;margin:0}} /* phones: in the free end of the goal row */
+@media(prefers-reduced-motion:reduce){body.lib-loading .skel-card{animation:none;opacity:1}.skel-cover,.skel-line{animation:none}}

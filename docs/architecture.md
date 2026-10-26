@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.13.32 (2026-10-26). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.13.33 (2026-10-26). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -116,6 +116,11 @@ Migration rules:
   after re-renders) to cards within 1.3 s of their first appearance; `@keyframes borg-card-in/borg-bar-in`. Cover tilt: pointer
   events on `#bookGrid`/`#continueShelf` set `--rx/--ry/--gx/--gy` (mouse, fine pointer, no reduced motion; one rAF per
   frame). The goal ring is set as `style.strokeDasharray` in the next frame so its transition runs.
+- **Display font (v8.13.33):** `@font-face "Borg Display"` = Mirza 700 (`Mirza-700-arabic.woff2` precached, `-latin` on
+  demand by `unicode-range`), `--font-display`; used by `.brand`, `.hero h1`, `.section-heading h2`, `.now-reading-body h3`,
+  `#detailTitle`, `.empty-state h3`, `.ca-title`. `size-adjust` balances it against Vazirmatn.
+- **Library details (v8.13.33):** six `.skel-card` placeholders are in the `#bookGrid` markup and only shown under
+  `body.lib-loading` after 0.2 s; the first render replaces them. `#statSpark` (SVG, 7 bars) is drawn by `renderStats`.
 - **Library search (v8.5):** `#searchInput` filters the grid live (180 ms debounce) by title, author, publisher and
   shelf names, combined with the filter chips and sort. Query and fields go through `libFold()`: `normalizeForSearch`
   (ی/ي/ى, ک/ك, RLM half-space) then spaces/ZWNJ/bidi marks/tatweel/harakat dropped, Persian/Arabic digits → 0-9,
@@ -330,6 +335,10 @@ Details and history of each workaround: `docs/context/reader-engine-notes.md`.
   directly on the document, and on `#viewer` for the margin around the frame (same handlers, taps and swipes, 8.13.32). `orientationchange` re-paginates after 200 ms. `tapTrace()`
   (v8.13.26, `?taptrace` or borg-debug `taps`) writes every input event, `handleTap` decision and `setImmersive` outcome to a
   fixed overlay, for browsers without a console.
+- **Book feel (v8.13.33):** `updatePageFeel()` (on `relocated`/`resized`) sets `is-paged` (not scrolled, not PDF) and
+  `is-spread` (`rendition.manager.layout.divisor > 1`) on `#reader`; `.viewer::after` draws the edge shading and the spine
+  (no pointer events). Sepia adds `PAPER_GRAIN` to the frame's `html`/`body` theme and, via `--paper-grain`, to the viewer
+  margin. `updateChapter`/the PDF equivalent mark earlier TOC entries `toc-read`.
 - **Reading features:** TTS (`speechSynthesis`, sentence queue with `.tts-hl` highlight, follows pages),
   footnote popups, word lookup / copy / quote card from the selection bar, highlights in 4 colours, notes,
   multiple bookmarks, in-book search with Persian normalisation, image viewer, wake lock, layout options

@@ -193,6 +193,18 @@
     if (bLabel) bLabel.textContent = `${brightness.toLocaleString("fa-IR")}٪`;
     applyDimmer(brightness);
   }
+  // v8.13.33: a faint warm paper grain for the sepia page. One definition, used inside the book frame (theme) and for the
+  // viewer margin around it (CSS var --paper-grain on #reader), so the two always match.
+  const PAPER_GRAIN = "url(\"data:image/svg+xml," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .32 0 0 0 0 .22 0 0 0 0 .1 0 0 0 .11 0'/></filter><rect width='100%' height='100%' filter='url(#g)'/></svg>") + "\")";
+  document.getElementById("reader").style.setProperty("--paper-grain", PAPER_GRAIN);
+  /** v8.13.33: «حس کتاب» — classes for the page shading: is-paged (not the scrolled flow) and is-spread (two pages a screen). */
+  function updatePageFeel() {
+    const reader = $("reader");
+    let spread = false;
+    try { spread = !pdf && !!rendition && !!rendition.manager && !!rendition.manager.layout && rendition.manager.layout.divisor > 1; } catch (_) {}
+    reader.classList.toggle("is-paged", !pdf && readerPrefs.flow !== "scrolled");
+    reader.classList.toggle("is-spread", spread);
+  }
   function applyReaderStyles() {
     syncSettingsUI();
     if (!rendition) return;
@@ -204,13 +216,14 @@
     const isLightTone = effectiveTheme() === "light" || effectiveTheme() === "mint" || effectiveTheme() === "sepia";
     const linkColor = isLightTone ? (effectiveTheme() === "mint" ? "#246e4c" : "#397a67") : (effectiveTheme() === "amber" ? "#e09d58" : "#8fd1b5");
     const isScrolled = readerPrefs.flow === "scrolled";
+    const grain = effectiveTheme() === "sepia" ? { "background-image": PAPER_GRAIN } : { "background-image": "none" };
     rendition.themes.default({
-      html: {
+      html: Object.assign({
         "background": background,
         "overscroll-behavior": "none",
         "touch-action": isScrolled ? "pan-y" : "manipulation",
         "scrollbar-width": "none"
-      },
+      }, grain),
       body: Object.assign({
         "font-family": selectedFontStack(),
         "font-weight": fontWeight,
@@ -220,7 +233,7 @@
         "overscroll-behavior": "none",
         "touch-action": isScrolled ? "pan-y" : "manipulation",
         "scrollbar-width": "none"
-      }, DEBUG.noDir ? {} : { "direction": bookDir }),
+      }, grain, DEBUG.noDir ? {} : { "direction": bookDir }),
       p: { "text-align": align, "margin": paraGap, "line-height": lineHeight, "font-weight": fontWeight },
       img: { "cursor": "zoom-in" },
       "img.borg-blockimg": { "display": "block", "margin-left": "auto", "margin-right": "auto" },
@@ -465,6 +478,17 @@
     for (let i = 0; i < 7; i++) { const x = new Date(); x.setDate(x.getDate() - i); week += secondsOn(dayKey(x)); }
     $("statStreak").textContent = fa(streak);
     $("statWeek").textContent = fa(Math.floor(week / 60));
+    // v8.13.33: the last 7 days as small bars, in reading direction: oldest on the right, today (highlighted) on the left.
+    const days = [];
+    for (let i = 6; i >= 0; i--) { const x = new Date(); x.setDate(x.getDate() - i); days.push(Math.floor(secondsOn(dayKey(x)) / 60)); }
+    const top = Math.max(goal, ...days), spark = $("statSpark");
+    if (spark) {
+      spark.innerHTML = days.map((m, k) => {
+        const h = m ? Math.max(3, Math.round(m / top * 20)) : 2, x = 60 - k * 10;
+        return `<rect class="${k === 6 ? "spark-today" : ""}${m ? "" : " spark-zero"}" x="${x}" y="${22 - h}" width="7" height="${h}" rx="1.5"/>`;
+      }).join("");
+      spark.setAttribute("aria-label", `دقیقه‌های مطالعه در ۷ روز گذشته، از قدیمی به امروز: ${days.map(fa).join("، ")}`);
+    }
     $("statFinished").textContent = fa(books.filter(b => b.status === "finished").length);
   }
   // ---- Time left in chapter (from this reader's own page speed) ----
@@ -958,6 +982,7 @@
       const on = !!entry && entry.i === i;
       if (b.classList.contains("active") !== on) changed = true;
       b.classList.toggle("active", on);
+      b.classList.toggle("toc-read", !!entry && i < entry.i); // v8.13.33: chapters before the current one (TOC order)
       if (on) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
     });
     // Desktop: the TOC is always visible, keep the current chapter in view.
@@ -1195,8 +1220,10 @@
     lastTurnAt = 0; markActivity(); updateWakeLock();
     if (!record.preview && (!record.status || record.status === "want")) setBookMeta(record.id, { status: "reading" }).then(r => { if (r && currentBook && currentBook.id === r.id) currentBook = r; });
     renderedHighlights = new Set();
+    rendition.on("resized", () => updatePageFeel());
     rendition.on("relocated", async location => {
       if (token !== openToken || !location?.start) return;
+      updatePageFeel();
       const pct = percentFor(location.start.cfi, location.start.percentage);
       showProgress(pct);
       updateChapter(location);
@@ -1296,7 +1323,7 @@
     bookDir = "rtl";
     updatePageNavDirection();
     applyDimmer(100);
-    $("reader").classList.remove("toc-open", "immersive", "book-ltr");
+    $("reader").classList.remove("toc-open", "immersive", "book-ltr", "is-paged", "is-spread");
     closeSettings(false);
     closeSearch(false);
     closeAi(false);
@@ -1677,9 +1704,11 @@
     const pageLabel = vis.length > 1 ? `صفحهٔ ${faNum(first)}–${faNum(last)} از ${faNum(N)}` : `صفحهٔ ${faNum(first)} از ${faNum(N)}`;
     const entry = pdfOutlineFor(st, last), label = entry ? entry.label : pageLabel;
     $("chapterLabel").textContent = label; $("chapterLabel").title = label; $("readerChapter").textContent = label;
+    const entryAt = entry ? st.outline.indexOf(entry) : -1;
     $("tocList").querySelectorAll(".toc-link[data-page]").forEach((b, i) => {
       const on = !!entry && st.outline[i] === entry;
       b.classList.toggle("active", on);
+      b.classList.toggle("toc-read", entryAt > i); // v8.13.33
       if (on) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
     });
     $("prevPage").disabled = first <= 1;

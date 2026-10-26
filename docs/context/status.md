@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-26, version **8.13.32** (8.13.31 live at https://parsun.com/borg/).
+Last updated: 2026-10-26, version **8.13.33** (8.13.32 live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -95,6 +95,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.30 | Fix 8.13.29: with several unfinished books the fixed-width small cards squeezed the wide card to ~50 px. The wide card now takes a row of its own; the other unfinished books are in `.continue-rest`, the original horizontal scrolling shelf, below it. e2e §6 regression with two unfinished books | |
 | 8.13.31 | Visual pass, owner-approved items 1–3. **(1) Generated covers** (`coverArtHtml`, used by the library, now-reading card, catalog, book page and admin): palette colour + light paper grain, double inner frame, eight-pointed star motif, balanced title, divider, author (the «نویسنده نامشخص» placeholder is not printed); sized in container units of `.cover-art`, compact mode under 100 px; palette gained four deeper tones (existing books get re-assigned colours once). **(2) Icons:** ~85 emoji replaced by a 28-icon line set (`data-ico`, CSS mask, `currentColor`); busy/toast texts lose their emoji. Also fixed a pre-existing selection-bar bug (it shrank to half the reader and every label wrapped) on wide screens. **(3) Motion and depth:** staggered entrance only for books shown for the first time (survives start-up re-renders via negative delays), progress bars and the goal ring fill in, cover tilt + glare under a mouse, faint background glow; all off with `prefers-reduced-motion`. e2e §6: 6 checks; webkit_e2e: icons/cover check on iPad and iPhone. Also fixed (found because CI failed the catalog back-navigation check): `html{scroll-behavior:smooth}` made the catalog's scroll restore animate from the top to the saved card on every «back» from a book page; `jumpScroll()` now restores at once (e2e §31 check at 150 ms). The check had always failed in the agent container and passed in CI only when the animation happened to end within 700 ms | — owner: «اوکی شد» |
 | 8.13.32 | Reader input, measured on Chromium (desktop 1280 px two-page spread, phone 390 px): **(a) quick page turns** — 5 quick taps turned 2 pages (a 650 ms "duplicate" window in `onTouchEnd` dropped real taps; synthetic clicks are already handled by state since 8.13.25), 5 quick mouse clicks turned 2 spreads (the 2nd click of a double click selected a word and `handleTap` only cleared it). Now every tap counts, and `onReaderMouseDown` blocks double-click word selection in the edge zones only (book frame and PDF stage). **(b) margin «زیاد»:** swipes starting in the margin around the book frame did nothing (the `#viewer` fallback handled taps only); it now uses the same `onTouchStart`/`onTouchEnd` as the text. **(c)** tap slop 48 → 24 px (`TAP_SLOP_PX`). **(d)** e2e §33: AI companion against a mocked Gemini (key setup, streamed summary with the chapter text, cache, save as note, invalid-key error, no external requests). e2e §6/§7 regression checks fail on 8.13.31 | |
+| 8.13.33 | Visual pass items 4–6 (owner left the font choice to the agent). **Display font:** Mirza 700 (OFL, bundled Arabic + Latin, 41+13 KB; Arabic precached) for the brand, welcome headline, «کتابخانه», the now-reading title, book page title, empty state and generated-cover titles — chosen over Markazi Text (too close to the current look), Lalezar/Kufam (heavy), Aref Ruqaa/Gulzar (calligraphic, hard on long titles) and Reem Kufi (its package lacks Persian letters) after rendering all of them with the app's own headings. **Book feel (EPUB, paginated):** soft page-edge shading, spine shadow on the two-page spread (`is-paged`/`is-spread` on `#reader`, from epub.js `layout.divisor`), faint warm paper grain in sepia on the page and its margin (`PAPER_GRAIN`, one definition), earlier chapters muted and ticked in the TOC (`toc-read`, EPUB and PDF). **Details:** library skeleton while loading (only if it takes > 0.2 s), 7-day bars in the stats (today on the left, highlighted; on phones in the goal row). e2e §34, webkit font check | — owner's look |
 
 ## Open items (not started unless the owner says so)
 1. **Server setting (owner, said 2026-10-26 he will do it later):** production health (2026-10-20): PHP 8.4.26, zip/dom on,
@@ -103,18 +104,16 @@ Read this first when picking the project up. Technical detail is in `docs/archit
    128M (cPanel MultiPHP INI Editor).
 2. **Waiting for the owner:** screenshot of the WebKit `NotFoundError` details from «خطاهای کاربران» (seen in 8.6.5);
    real-device check on iPhone/iPad of the 8.6–8.10 mobile changes (taps fixed at the root in 8.6.1).
-3. **Visual pass, items 4–6 (proposed 2026-10-26, waiting for the owner's choice):** a Persian display font for headings
-   (needs the owner to pick one; must be bundled locally); a "book" feel in the reader (page-edge shadow, paper grain in
-   sepia, read chapters marked in the TOC); details (skeleton while the library loads, 7-day sparkline in the stats).
-4. Text cleanup limits: a phrase split across formatting tags is not matched; the "too broad" override is per rule,
+3. Text cleanup limits: a phrase split across formatting tags is not matched; the "too broad" override is per rule,
    not per book. PDFs: no highlights/notes/TTS/cleanup yet (ADR 0009). Categories: no per-category icons (ADR 0010).
-5. Later candidates: upload resume, performance on very large books, Android app wrapper (needs owner's package name,
+4. Later candidates: upload resume, performance on very large books, Android app wrapper (needs owner's package name,
    signing key, Play account).
-6. Ideas deferred on purpose: ratings and comments in the catalog (too few users), "send to Kindle" (needs SMTP).
+5. Ideas deferred on purpose: ratings and comments in the catalog (too few users), "send to Kindle" (needs SMTP).
 
 **Recently closed** (details in the table above): deploys blocked by a rewritten `main` (2026-10-25, owner fixed the server
 clone; rule in CLAUDE.md) · iPhone Chrome middle tap (8.13.27, stale stylesheet) · swipes from the margin with «زیاد»,
-quick taps/clicks dropping page turns, 48 px tap slop, no tests for the AI companion (all 8.13.32).
+quick taps/clicks dropping page turns, 48 px tap slop, no tests for the AI companion (all 8.13.32) · visual pass 1–6
+(8.13.31, 8.13.33).
 
 ## Decisions the owner already made (don't re-ask)
 - One production branch, no staging. Speed matters: ship, keep tests green, fix forward with a new revision.

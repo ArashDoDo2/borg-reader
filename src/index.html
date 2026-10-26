@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.13.32">
-  <meta name="app-released" content="2026-10-26T03:00:00Z">
+  <meta name="app-version" content="8.13.33">
+  <meta name="app-released" content="2026-10-26T05:30:00Z">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data: https://generativelanguage.googleapis.com https://api.openai.com; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -113,7 +113,7 @@
         <div class="stats-goal"><div class="goal-ring"><svg viewBox="0 0 36 36" fill="none" aria-hidden="true"><circle cx="18" cy="18" r="15.5" class="ring-bg" fill="none"/><circle id="goalArc" cx="18" cy="18" r="15.5" class="ring-fg" stroke-dasharray="0 100" fill="none"/></svg><b id="statToday">۰</b></div>
           <div><strong>مطالعهٔ امروز</strong><br><button id="goalButton" class="text-button goal-button" type="button">هدف: ۲۰ دقیقه</button></div></div>
         <div class="stat-mini"><b id="statStreak">۰</b><span>روز پیاپی</span></div>
-        <div class="stat-mini"><b id="statWeek">۰</b><span>دقیقه در ۷ روز</span></div>
+        <div class="stat-mini"><b id="statWeek">۰</b><span>دقیقه در ۷ روز</span><svg id="statSpark" class="spark" viewBox="0 0 70 22" role="img" aria-label="" focusable="false"></svg></div>
         <div class="stat-mini"><b id="statFinished">۰</b><span>کتاب تمام‌شده</span></div>
       </div>
       <div id="libraryFilters" class="filter-chips" role="group" aria-label="فیلتر کتابخانه"></div>
@@ -122,7 +122,7 @@
         <h3 class="shelf-title">ادامهٔ مطالعه</h3>
         <div id="continueShelf" class="continue-shelf"></div>
       </div>
-      <div id="bookGrid" class="book-grid"></div>
+      <div id="bookGrid" class="book-grid"><div class="skel-card" aria-hidden="true"><div class="skel-cover"></div><div class="skel-line"></div><div class="skel-line short"></div></div><div class="skel-card" aria-hidden="true"><div class="skel-cover"></div><div class="skel-line"></div><div class="skel-line short"></div></div><div class="skel-card" aria-hidden="true"><div class="skel-cover"></div><div class="skel-line"></div><div class="skel-line short"></div></div><div class="skel-card" aria-hidden="true"><div class="skel-cover"></div><div class="skel-line"></div><div class="skel-line short"></div></div><div class="skel-card" aria-hidden="true"><div class="skel-cover"></div><div class="skel-line"></div><div class="skel-line short"></div></div><div class="skel-card" aria-hidden="true"><div class="skel-cover"></div><div class="skel-line"></div><div class="skel-line short"></div></div></div>
       <p id="storageInfo" class="storage-info" aria-live="polite"></p>
       <div id="emptyState" class="empty-state">
         <div class="empty-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M12 7v5M9.5 9.5h5"/></svg></div>
@@ -817,7 +817,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span id="footerVersion">بُرگ · نسخهٔ ۸.۱۳.۳۲</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span id="footerVersion">بُرگ · نسخهٔ ۸.۱۳.۳۳</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

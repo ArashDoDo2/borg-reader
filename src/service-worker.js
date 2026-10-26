@@ -1,5 +1,5 @@
 // Bump this name on every release so old caches are removed.
-const CACHE_NAME = "borg-shell-v8.13.32";
+const CACHE_NAME = "borg-shell-v8.13.33";
 // Files shared to the app (Android share sheet) wait here until the page imports them.
 const SHARE_CACHE = "borg-share";
 const APP_SHELL = [
@@ -13,6 +13,7 @@ const APP_SHELL = [
   "./assets/vendor/jszip.min.js",
   "./assets/vendor/epub.min.js",
   "./assets/fonts/Vazirmatn-Variable.woff2",
+  "./assets/fonts/Mirza-700-arabic.woff2",
   "./assets/icon-192.png",
   "./assets/icon-512.png"
 ];

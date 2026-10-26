@@ -151,6 +151,8 @@ async def touch_device(browser, url, name):
             const t=document.querySelector('#bookGrid .cover-art .ca-title'),tr=t&&t.getBoundingClientRect();
             return {mask:s?String(s.webkitMaskImage||s.maskImage||'').slice(0,4):'',iw:s?parseFloat(s.width):0,
                     title:tr?Math.round(tr.width)+'x'+Math.round(tr.height):'',fs:t?parseFloat(getComputedStyle(t).fontSize):0}}""")
+        fok = await pg.evaluate("""async()=>{await document.fonts.ready;return document.fonts.check('700 28px "Borg Display"','کتابخانه')}""")
+        check(f"{name}: the bundled display font (Mirza) loads", fok)
         check(f"{name}: icons drawn as masks and generated cover title sized by its cover",
               r["mask"] == "url(" and r["iw"] > 8 and r["fs"] >= 7 and r["title"] and not r["title"].startswith("0x"), str(r))
     if not ok:

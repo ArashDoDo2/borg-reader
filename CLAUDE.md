@@ -2,7 +2,7 @@
 
 Persian-first EPUB/PDF reader: an offline-capable PWA (static files, no build step) plus an optional PHP 8 API
 for invite-only accounts, cloud sync and a moderated public catalog. Live at https://parsun.com/borg/.
-Current version: see `<meta name="app-version">` in `src/index.html` (8.13.32 when this file was last updated).
+Current version: see `<meta name="app-version">` in `src/index.html` (8.13.33 when this file was last updated).
 
 Owner and final decision-maker: Arash Naderpour. Work only inside the agreed scope; no refactors, extra files
 or deletions beyond what was asked. When something is ambiguous, ask instead of guessing.
@@ -80,5 +80,7 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
   mask, see the `v8.13.31 icons` block at the end of `app.css`); add a new icon there as a 24×24, stroke-2 SVG. Emoji are only
   left in stored/exported user data (AI-summary note title, Markdown notes export).
 - Generated covers come from `coverArtHtml(title, author)` only; don't hand-build cover placeholders.
+- Headings use the display font via `var(--font-display)` (Mirza 700, bundled, `MIRZA-OFL.txt`); interface text stays Vazirmatn.
+  Never set letter-spacing on Persian text in the display font.
 - Three test suites must stay green: `tests/api_test.py`, `tests/e2e_test.py`, and `tests/webkit_e2e.py --browser chromium`
   locally (WebKit itself runs in CI).

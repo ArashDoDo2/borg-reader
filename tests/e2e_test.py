@@ -2382,6 +2382,8 @@ async def run(url):
           return {vw:Math.round(v.width),pw:Math.round(p.width),pr:Math.round(p.right),sw:document.documentElement.scrollWidth,vh:Math.round(v.height)}}""")
         check("v8.8 PDF mobile 390px: the Persian page fits the viewer width, nothing overflows the screen",
               bool(pxm) and pxm["dark"] > 100 and abs(geo["pw"] - geo["vw"]) <= 4 and geo["pr"] <= 390 and geo["sw"] <= 390 and geo["vh"] > 400, f"{geo} {pxm}")
+        try: await poll(lambda: M.evaluate("document.getElementById('bookSeek').dir === 'rtl'"), 4000)  # set when the PDF finishes opening
+        except TimeoutError: pass
         check("v8.8 PDF: a Persian PDF is detected RTL (seek bar RTL) and titled from its outline",
               await M.get_attribute("#bookSeek", "dir") == "rtl" and await M.inner_text("#readerChapter") == "فصل نخست", await M.inner_text("#readerChapter"))
         mb = await M.locator("#viewer").bounding_box()
@@ -2628,6 +2630,8 @@ async def run(url):
               and await Q.locator("#admCatList option").count() == 3, str(bc[:1]))
         try: await poll(lambda: _contains(Q, "#toast", "انجام شد"), 4000)
         except TimeoutError: pass
+        try: await poll(lambda: Q.evaluate("!document.getElementById('admBulkBar') || document.getElementById('admBulkBar').hidden || !document.getElementById('admBulkBar').offsetParent"), 4000)
+        except TimeoutError: pass  # the bar closes after the page reloads
         check("v8.9 bulk: toast with the affected count, selection cleared, page reloaded",
               "انجام شد: ۵ کتاب" in await Q.inner_text("#toast") and not await Q.is_visible("#admBulkBar"), await Q.inner_text("#toast"))
         await Q.check("#admSelPage"); await Q.wait_for_timeout(200)
@@ -3465,6 +3469,53 @@ async def run(url):
               "کلید نامعتبر" in err_txt and await A.locator('#aiResponse [data-ico="x-circle"]').count() == 1, err_txt[:160])
         check("v8.13.32 AI: no JS errors, nothing leaves the machine", not ext33 and not [e for e in errs33 if "status of 400" not in e], str((ext33 + errs33)[:3]))
         await ctx33.close()
+
+        # 34. v8.13.33 visual pass 4–6: display font for headings, «حس کتاب» in the reader (page shading, spread spine,
+        # sepia grain, read chapters ticked in the TOC), library skeleton while loading, 7-day bars in the stats.
+        SEED34 = """(()=>{const z=n=>String(n).padStart(2,'0'),k=d=>`${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;const o={};
+          [12,0,25,8,31,18,9].forEach((m,i)=>{const d=new Date();d.setDate(d.getDate()-(6-i));o[k(d)]=m*60});
+          try{localStorage.setItem('borg-reading-days',JSON.stringify(o))}catch(e){}})()"""
+        ext34, errs34 = [], []
+        ctx34, V = await new_ctx(b, url, ext34, errs34)
+        await ctx34.add_init_script(SEED34)
+        await V.set_viewport_size({"width": 1280, "height": 800})
+        await V.goto(url); await V.wait_for_timeout(800)
+        await V.set_input_files("#epubInput", sample); await V.wait_for_timeout(2000)
+        f = await V.evaluate("""async()=>{await document.fonts.ready;const ff=e=>getComputedStyle(document.querySelector(e)).fontFamily;
+            return {ok:document.fonts.check('700 28px "Borg Display"','کتابخانه'), h2:ff('.section-heading h2'), brand:ff('.brand>span:not(.brand-mark)')}}""")
+        check("v8.13.33 font: the bundled display font loads and is used for headings",
+              f["ok"] and "Borg Display" in f["h2"] and "Borg Display" in f["brand"], str(f))
+        check("v8.13.33 skeleton: no placeholder left once the library is shown",
+              await V.locator("#bookGrid .skel-card").count() == 0 and await V.locator("#bookGrid .book-card").count() == 1)
+        bars = await V.evaluate("""()=>[...document.querySelectorAll('#statSpark rect')].map(r=>[Number(r.getAttribute('x')),Number(r.getAttribute('height')),r.getAttribute('class')||''])""")
+        hs = [h for _, h, _ in sorted(bars, key=lambda r: -r[0])]   # oldest (right) -> today (left)
+        today = [r for r in bars if "spark-today" in r[2]]
+        check("v8.13.33 stats: 7 bars for the last 7 days, tallest on the busiest day, today on the left and highlighted",
+              len(bars) == 7 and hs.index(max(hs)) == 4 and "spark-zero" in sorted(bars, key=lambda r: -r[0])[1][2]
+              and len(today) == 1 and today[0][0] == min(r[0] for r in bars), str(bars))
+        # Reader: page shading and the spine on the two-page spread; earlier chapters ticked in the TOC.
+        await V.click("#bookGrid .book-card"); await V.wait_for_timeout(2500)
+        cls = await V.evaluate("document.getElementById('reader').className")
+        spine = await V.evaluate("getComputedStyle(document.getElementById('viewer'),'::after').backgroundImage")
+        check("v8.13.33 reader: page shading on, spine shadow on the two-page spread", "is-paged" in cls and "is-spread" in cls and "gradient" in spine, f"{cls} | {spine[:60]}")
+        await V.locator("#tocList .toc-link").nth(1).click(); await V.wait_for_timeout(1500)
+        toc = await V.evaluate("""()=>[...document.querySelectorAll('#tocList .toc-link')].map(b=>[b.classList.contains('toc-read'),b.classList.contains('active')])""")
+        check("v8.13.33 reader: chapters before the current one are marked as read in the TOC", toc[:2] == [[True, False], [False, True]], str(toc))
+        # Sepia: the same paper grain on the page inside the frame and on the viewer margin; other themes have none.
+        GRAIN = """()=>{const f=document.querySelector('#viewer iframe');const b=f&&f.contentDocument.body;
+            return [b?getComputedStyle(b).backgroundImage.slice(0,4):'', getComputedStyle(document.getElementById('viewer')).backgroundImage.slice(0,4)]}"""
+        await V.click("#settingsToggle"); await V.wait_for_timeout(300); await V.click('[data-theme="sepia"]'); await V.wait_for_timeout(700)
+        sepia = await V.evaluate(GRAIN)
+        await V.click('[data-theme="light"]'); await V.wait_for_timeout(700)
+        light = await V.evaluate(GRAIN)
+        check("v8.13.33 reader: sepia paper grain on page and margin, none in the light theme", sepia == ["url(", "url("] and light == ["none", "none"], f"sepia={sepia} light={light}")
+        await V.keyboard.press("Escape"); await V.wait_for_timeout(300)
+        # Phone: single page — shading but no spine.
+        await V.set_viewport_size({"width": 390, "height": 844}); await V.wait_for_timeout(1500)
+        cls = await V.evaluate("document.getElementById('reader').className")
+        check("v8.13.33 reader: a single page on a phone has no spine", "is-paged" in cls and "is-spread" not in cls, cls)
+        check("v8.13.33: no JS errors, no external requests", not errs34 and not ext34, str((errs34 + ext34)[:3]))
+        await ctx34.close()
         await b.close()
 
 def main():
