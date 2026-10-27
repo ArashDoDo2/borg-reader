@@ -10,7 +10,28 @@ Exit code is non-zero when any check fails.
 """
 import argparse, asyncio, os, sys
 from pathlib import Path
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, Page
+
+# v8.13.34: choosing ONE book file opens it straight away (the app's «اولین تجربه» rule). Most sections import a book only
+# as setup for something else and were written for "import, then the library", so after a single-file import this shim
+# closes the reader again and the section carries on in the library as before. Sections that test the new behaviour pass
+# keep_open=True (see open_sample and the «v8.13.34» checks). Multi-file imports never open a book, so they pass through.
+_set_input_files = Page.set_input_files
+async def _set_input_files_then_library(self, selector, files, keep_open=False, **kw):
+    await _set_input_files(self, selector, files, **kw)
+    single = isinstance(files, (str, Path)) or (isinstance(files, (list, tuple)) and len(files) == 1)
+    if keep_open or not single or selector not in ("#epubInput", "#epubInputSmall"):
+        return
+    OPEN = "!document.getElementById('reader').classList.contains('hidden')"
+    for _ in range(18):   # up to ~3.6 s for the book to open (it does not for broken files)
+        if await self.evaluate(OPEN): break
+        await asyncio.sleep(0.2)
+    if await self.evaluate(OPEN):
+        await self.evaluate("document.getElementById('closeReader').click()")
+        for _ in range(15):
+            if not await self.evaluate(OPEN): break
+            await asyncio.sleep(0.2)
+Page.set_input_files = _set_input_files_then_library
 
 ROOT = Path(__file__).resolve().parent.parent
 FIX = ROOT / "tests" / "fixtures"
@@ -95,8 +116,10 @@ async def page_pos(pg):
 
 async def open_sample(pg, url, sample):
     await pg.goto(url); await pg.wait_for_timeout(800)
-    await pg.set_input_files("#epubInput", sample); await pg.wait_for_timeout(1800)
-    await pg.click(".book-card"); await pg.wait_for_timeout(2500)
+    await pg.set_input_files("#epubInput", sample, keep_open=True)   # v8.13.34: the book opens by itself
+    try: await poll(lambda: pg.evaluate("!document.getElementById('reader').classList.contains('hidden')"), 6000)
+    except TimeoutError: await pg.click(".book-card")
+    await pg.wait_for_timeout(2500)
 
 def make_epub(path, title, ident, author, publisher="", date="", direction="rtl", lang="fa", paras=40):
     """A small two-chapter Persian EPUB like the fixtures, with optional publisher and date metadata."""
@@ -502,6 +525,10 @@ async def run(url):
         await pg.select_option("#librarySort", "title"); await pg.wait_for_timeout(400)
         titles = await pg.locator("#bookGrid .book-card h3").all_inner_texts()
         check("sort by title", titles == ["الف کتاب دوم", "کتاب آزمایشی"], str(titles))
+        # v8.13.34: importing one file opens it, so «الف کتاب دوم» is now the last read; read the other one again.
+        await pg.locator("#bookGrid .book-card", has_text="کتاب آزمایشی").click()
+        await poll(lambda: visible_text(pg), 10000)
+        await pg.click("#closeReader"); await pg.wait_for_timeout(600)
         await pg.select_option("#librarySort", "read"); await pg.wait_for_timeout(400)
         titles = await pg.locator("#bookGrid .book-card h3").all_inner_texts()
         check("sort by last read", titles[0] == "کتاب آزمایشی", str(titles))
@@ -1718,8 +1745,9 @@ async def run(url):
         ctxQ, Q = await new_ctx(b, url, extQ, errsQ)
         await ctxQ.add_init_script("try{localStorage.setItem('borg-debug','{\"stats\":1}')}catch(e){}")
         await Q.goto(url); await Q.wait_for_timeout(800)
-        await Q.set_input_files("#epubInput", big20)
-        await poll(lambda: _count_gt(Q, "#bookGrid .book-card", 0), 20000); await Q.wait_for_timeout(800)
+        # Two files at once: nothing opens (v8.13.34), so the first open below is still the uncached one.
+        await Q.set_input_files("#epubInput", [big20, str(FIX / "sample-fa.epub")])
+        await poll(lambda: _count_gt(Q, "#bookGrid .book-card", 1), 20000); await Q.wait_for_timeout(800)
         WATCH_OPEN_JS = """() => { window.__open = []; const el = document.getElementById('openingIndicator');
           const rec = () => { const r = el.getBoundingClientRect(), f = document.querySelector('#viewer iframe');
             window.__open.push({ hidden: el.hidden, vis: !el.hidden && r.width > 0 && r.height > 0, text: el.textContent,
@@ -1729,7 +1757,7 @@ async def run(url):
         async def open_big():
             await Q.evaluate(WATCH_OPEN_JS)
             t0 = time.perf_counter()
-            await Q.click("#bookGrid .book-card")
+            await Q.locator("#bookGrid .book-card", has_text="کتاب بزرگ ۲۰").click()
             async def shown(): return bool(await visible_text(Q)) and await Q.evaluate(TEXT_SHOWN_JS)
             await poll(shown, 15000, 50)
             dt = time.perf_counter() - t0
@@ -3516,6 +3544,56 @@ async def run(url):
         check("v8.13.33 reader: a single page on a phone has no spine", "is-paged" in cls and "is-spread" not in cls, cls)
         check("v8.13.33: no JS errors, no external requests", not errs34 and not ext34, str((errs34 + ext34)[:3]))
         await ctx34.close()
+
+        # 35. v8.13.34 «اولین تجربه»: without any account, choosing one book file opens it at once; choosing the same file
+        # again opens the copy already in the library (no second card); choosing several files only adds them.
+        ext35, errs35 = [], []
+        ctx35, F = await new_ctx(b, url, ext35, errs35, is_mobile=True, has_touch=True)
+        await F.set_viewport_size({"width": 390, "height": 844})
+        await F.goto(url); await F.wait_for_timeout(800)
+        OPEN35 = "!document.getElementById('reader').classList.contains('hidden')"
+        check("v8.13.34 first visit: no dialog asks to log in", await F.evaluate("document.querySelectorAll('dialog[open]').length") == 0)
+        await F.set_input_files("#epubInput", sample, keep_open=True)
+        try: await poll(lambda: F.evaluate(OPEN35), 6000)
+        except TimeoutError: pass
+        await F.wait_for_timeout(1500)
+        check("v8.13.34 one file chosen: the book opens straight away with its text on screen",
+              await F.evaluate(OPEN35) and bool(await visible_text(F)) and await F.locator("#bookGrid .book-card").count() == 1)
+        await F.evaluate("document.getElementById('closeReader').click()"); await F.wait_for_timeout(800)
+        await F.set_input_files("#epubInput", sample, keep_open=True)
+        try: await poll(lambda: F.evaluate(OPEN35), 6000)
+        except TimeoutError: pass
+        await F.wait_for_timeout(800)
+        check("v8.13.34 the same file again: the existing copy opens, no second card, the reader is told",
+              await F.evaluate(OPEN35) and await F.locator("#bookGrid .book-card").count() == 1 and "قبلاً در کتابخانه" in await F.inner_text("#toast"),
+              await F.inner_text("#toast"))
+        await F.evaluate("document.getElementById('closeReader').click()"); await F.wait_for_timeout(800)
+        two = [make_epub(Path(tempfile.mkdtemp()) / f"m{i}.epub", f"کتاب چندتایی {i}", f"multi-35-{i}", "نویسنده") for i in (1, 2)]
+        await F.set_input_files("#epubInput", two); await F.wait_for_timeout(4000)
+        check("v8.13.34 several files chosen: they are added, nothing opens", not await F.evaluate(OPEN35) and await F.locator("#bookGrid .book-card").count() == 3)
+        check("v8.13.34: no JS errors, no external requests", not errs35 and not ext35, str((errs35 + ext35)[:3]))
+        # Regression (v8.13.34): closing the reader while epub.js is still opening the book threw inside epub.js
+        # ("reading 'package' / 'navigation' / 'length' of undefined") because the book was destroyed under queued work.
+        # Now that one file opens at once, "choose a file, go straight back" is a normal path. Close at several moments,
+        # then reopen at once: no errors, and the reopened book shows its text.
+        n_before = len(errs35)
+        for delay in (0, 30, 80, 160, 320):
+            await F.evaluate("document.querySelector('#bookGrid .book-card').click()")
+            for _ in range(60):
+                if await F.evaluate(OPEN35): break
+                await asyncio.sleep(0.02)
+            await F.wait_for_timeout(delay)
+            await F.evaluate("document.getElementById('closeReader').click()")
+        await F.wait_for_timeout(300)
+        await F.evaluate("document.querySelector('#bookGrid .book-card').click()")
+        try: await poll(lambda: visible_text(F), 10000)
+        except TimeoutError: pass
+        await F.wait_for_timeout(3500)
+        race = errs35[n_before:]
+        check("v8.13.34 closing the reader while a book is still opening: no errors, and reopening shows the text",
+              not race and await F.evaluate(OPEN35) and bool(await visible_text(F)), str(race[:2])[:300])
+        await F.evaluate("document.getElementById('closeReader').click()"); await F.wait_for_timeout(500)
+        await ctx35.close()
         await b.close()
 
 def main():

@@ -76,6 +76,15 @@ Persian EPUBs. Each entry: symptom → cause → fix (where in `src/assets/js/ap
 - Escape is layered (selection bar → popups → search → settings → TOC drawer → immersive → close reader).
 - Hooks: `rendition.hooks.content` runs per loaded chapter (fonts, half-space fix, digits, footnote/image
   handlers). `openToken` guards every async step against a reader that was closed or replaced.
+- **Closing while a book is still opening (8.13.34)**: `book.destroy()` does not stop work epub.js already started:
+  the rendition queue (`start`, `_display`), the locations queue, `book.unpack()` after `book.opened` (navigation loads
+  later), and any `Section.load()` whose file is still being read (it then reads its cleared `hooks`). Destroying under
+  them throws "reading 'package' / 'navigation' / 'length' / 'content' of undefined". Since one chosen file opens at once,
+  "choose a file, then go straight back" became a normal path. → `trackBookLoads(book)` (right after `ePub()`) counts
+  in-flight `book.load()` calls, including `book.locations.request`, which epub.js binds before we can wrap `book.load`.
+  `retireBook(book, rendition)` (in `closeReader`, and when `openReader` replaces a book) stops both queues, then destroys
+  once `book.ready` has settled and no load is in flight (3 s cap). Note that epub.js `Queue.running` is a boolean, not a
+  promise. The reader is hidden at once; only the cleanup waits. → e2e section 35 (close at 0–320 ms, then reopen).
 
 - **In-book links**: epub.js follows links with an `onclick` it sets itself; if that ever misses, the browser navigates
   the iframe to the link resolved against the app URL (e.g. https://parsun.com/feed_4/…), i.e. out of the book. Since

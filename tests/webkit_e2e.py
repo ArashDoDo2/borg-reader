@@ -123,11 +123,13 @@ async def import_and_open(pg, url, path, title):
     await pg.goto(url); await pg.wait_for_timeout(800)
     await pg.set_input_files("#epubInput", path)
     card = pg.locator("#bookGrid .book-card", has_text=title)
-    try:
-        await poll(lambda: card.first.is_visible(), 15000)
+    OPEN = "!document.getElementById('reader').classList.contains('hidden')"
+    try:   # v8.13.34: one chosen file opens by itself; older flow: its card appears and is clicked
+        await poll(lambda: pg.evaluate(OPEN + " || [...document.querySelectorAll('#bookGrid .book-card')].some(c=>c.offsetParent)"), 15000)
     except TimeoutError:
         return False
-    await card.first.click()
+    if not await pg.evaluate(OPEN):
+        await card.first.click()
     try:
         await poll(lambda: pg.evaluate("()=>{const l=(" + LAYOUT_JS + ")();return !!(l&&l.hit)}"), 15000)
     except TimeoutError:

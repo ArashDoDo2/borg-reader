@@ -812,8 +812,9 @@
       if (!db) throw new UserError("ذخیره‌سازی مرورگر آماده نیست.");
       say("در حال بررسی کتاب…");
       const contentHash = await sha256(await file.arrayBuffer());
-      if (contentHash && await findDuplicate(file.size, contentHash)) {
-        const dup = new UserError("این کتاب قبلاً در کتابخانه هست."); dup.duplicate = true; throw dup;
+      const existing = contentHash ? await findDuplicate(file.size, contentHash) : null;
+      if (existing) {
+        const dup = new UserError("این کتاب قبلاً در کتابخانه هست."); dup.duplicate = true; dup.bookId = existing.id; throw dup;
       }
       const metadata = isPdf ? await extractPdfMetadata(file) : await extractMetadata(file);
       const record = {
@@ -841,22 +842,32 @@
         sync();
       }
       say(cleaned ? `کتاب به کتابخانه اضافه شد؛ ${faNum(cleaned)} مورد حذف شد` : "کتاب به کتابخانه همین دستگاه اضافه شد.");
-      return { ok: true, cleaned };
+      return { ok: true, cleaned, id: record.id };
     } catch (err) {
       // Expected outcomes (duplicate, broken file, …) are UserErrors and are not logged as app errors.
       if (!(err instanceof UserError)) { console.error(err); reportError("import", err, "import"); }
       say(err instanceof UserError ? err.message : "افزودن کتاب انجام نشد.");
-      return { ok: false, duplicate: !!(err && err.duplicate), message: err instanceof UserError ? err.message : "افزودن کتاب انجام نشد." };
+      return { ok: false, duplicate: !!(err && err.duplicate), id: (err && err.bookId) || null, message: err instanceof UserError ? err.message : "افزودن کتاب انجام نشد." };
     } finally {
       if (!quiet) resetInputs();
     }
   }
   // Several files at once (multi-select, drag & drop): one after another, progress in a toast, one summary at the end.
   let importingMany = false;
+  /** v8.13.34 «اولین تجربه»: one file chosen (picker, drag & drop, share, "open with") = the reader wants to read it now.
+   *  Open it straight away — a new book, or the copy already in the library when it is a duplicate. No account involved. */
+  async function importAndOpen(file) {
+    const r = await importFile(file);
+    if (!r || !r.id) return r;
+    if (r.duplicate) showToast("این کتاب قبلاً در کتابخانه‌ات بود؛ همان را باز کردم.");
+    try { await openReader(r.id); }
+    catch (err) { console.error(err); reportError("reader", err, "openReader:afterImport"); showToast("بازکردن کتاب ناموفق بود؛ از کتابخانه دوباره امتحان کن."); }
+    return r;
+  }
   async function importFiles(list) {
     const files = Array.from(list || []).filter(Boolean);
     if (!files.length) return;
-    if (files.length === 1) return importFile(files[0]);
+    if (files.length === 1) return importAndOpen(files[0]);
     if (importingMany) { showToast("افزودن کتاب‌های قبلی هنوز تمام نشده است."); return; }
     importingMany = true;
     let added = 0, dups = 0, cleanedSum = 0; const failed = [];
@@ -1140,7 +1151,7 @@
     tocFlat = []; resetSeek();
     $("prevPage").disabled = true; $("nextPage").disabled = false;
     showProgress(0);
-    if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
+    if (bookInstance) { retireBook(bookInstance, rendition); bookInstance = null; rendition = null; }
     const bookFile = fileOf(record);
     if (!bookFile) { hideOpening(); showToast("فایل این کتاب روی دستگاه پیدا نشد."); return; }
     // The saved position is read while the file is (they are independent).
@@ -1149,6 +1160,7 @@
     const epubBytes = await bookFile.arrayBuffer();
     if (token !== openToken) return;
     bookInstance = ePub(epubBytes);
+    trackBookLoads(bookInstance);
     bookInstance.on("openFailed", err => {
       console.error("EPUB openFailed:", err);
       reportError("epub", err, "reader:openFailed");
@@ -1307,6 +1319,39 @@
       req.onsuccess = () => resolve(req.result || null); req.onerror = () => reject(req.error);
     });
   }
+  /** v8.13.34: tear a book down safely, also when the reader is closed while the book is still opening (an imported book
+   *  opens at once, so "choose a file, then go straight back" is a normal path now). book.destroy() does not stop work
+   *  epub.js already started: the rendition and locations queues, book.unpack() after book.opened, and any section whose
+   *  file is still being read (Section.load then reads its cleared hooks) — "reading 'package' / 'navigation' / 'length' /
+   *  'content' of undefined", also seen in the server error log. So: stop both queues, then destroy only once book.ready
+   *  has settled and no book.load() is in flight (counted by trackBookLoads, 3 s cap). The reader is hidden at once;
+   *  only the cleanup waits. */
+  function trackBookLoads(book) {
+    let n = 0;
+    const wrap = load => function (...args) {
+      n++;
+      let p;
+      try { p = load.apply(this, args); } catch (err) { n--; throw err; }
+      // Count down a task later, so the caller's own continuation (Section.load → hooks) has run first.
+      Promise.resolve(p).then(() => setTimeout(() => n--, 0), () => setTimeout(() => n--, 0));
+      return p;
+    };
+    book.load = wrap(book.load);
+    if (book.locations) book.locations.request = wrap(book.locations.request || (path => book.load(path))); // bound before the wrap
+    book.borgLoadsInFlight = () => n;
+  }
+  function retireBook(book, rend) {
+    if (!book) return;
+    for (const q of [rend && rend.q, book.locations && book.locations.q]) { try { if (q) q.stop(); } catch (_) {} }
+    const deadline = Date.now() + 3000;
+    const idle = () => !book.borgLoadsInFlight || book.borgLoadsInFlight() === 0;
+    const finish = () => {
+      if (idle() || Date.now() > deadline) { try { book.destroy(); } catch (_) {} }
+      else setTimeout(finish, 50);
+    };
+    const ready = book.ready && typeof book.ready.then === "function" ? Promise.resolve(book.ready).catch(() => {}) : Promise.resolve();
+    Promise.race([ready, new Promise(r => setTimeout(r, 3000))]).then(() => setTimeout(finish, 0));
+  }
   async function closeReader() {
     const wasPreview = !!(currentBook && currentBook.preview);
     if (pdf && currentBook && !currentBook.preview) {
@@ -1336,7 +1381,7 @@
     renderSyncChip();
     document.body.style.overflow = "";
     document.body.classList.remove("reader-open");
-    if (bookInstance) { try { bookInstance.destroy(); } catch (_) {} }
+    retireBook(bookInstance, rendition);
     bookInstance = null; rendition = null; currentBook = null; previewPos = null;
     $("previewBanner").hidden = true;
     updateWakeLock();
@@ -7619,20 +7664,24 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     history.replaceState(null, "", location.pathname);
     try {
       const cache = await caches.open("borg-share");
-      for (const req of await cache.keys()) {
+      const reqs = await cache.keys();
+      for (const req of reqs) {
         const res = await cache.match(req);
         await cache.delete(req);
         if (!res) continue;
         const name = decodeURIComponent(res.headers.get("X-File-Name") || "book.epub");
         const blob = await res.blob();
-        await importFile(new File([blob], name, { type: blob.type || "application/epub+zip" }));
+        const shared = new File([blob], name, { type: blob.type || "application/epub+zip" });
+        await (reqs.length === 1 ? importAndOpen(shared) : importFile(shared)); // one shared book opens right away
       }
     } catch (err) { console.warn("Shared file import failed:", err); }
   }
   if ("launchQueue" in window) {
     window.launchQueue.setConsumer(async params => {
-      for (const handle of (params && params.files) || []) {
-        try { await importFile(await handle.getFile()); } catch (err) { console.warn("Open-with import failed:", err); }
+      const handles = (params && params.files) || [];
+      for (const handle of handles) {
+        try { const f = await handle.getFile(); await (handles.length === 1 ? importAndOpen(f) : importFile(f)); }
+        catch (err) { console.warn("Open-with import failed:", err); }
       }
     });
   }

@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.13.33 (2026-10-26). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.13.34 (2026-10-27). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -93,6 +93,11 @@ Migration rules:
 - **Library (v6.2):** "continue reading" shelf (books with a saved CFI and < 100%, newest first), progress bar and
   badge on every card, sort by newest added / last read / title. Duplicate imports are refused by size + SHA-256.
   After the first import the app requests persistent storage; usage is shown under the grid.
+- **One file opens at once (v8.13.34, «اولین تجربه»: personal reading needs no account):** when exactly one file arrives
+  (file picker, drag-and-drop, share target, «باز کردن با»), `importAndOpen` imports it and calls `openReader`; a duplicate
+  opens the existing copy (`importFile` returns its `id`) with the toast «این کتاب قبلاً در کتابخانه‌ات بود؛ همان را باز
+  کردم.». Several files are only added, with the usual summary. Closing the reader while a book is still opening is safe
+  (`retireBook`, see `reader-engine-notes.md`).
 - **Phone library, books first (v8.13.28, `max-width:700px`):** with books present (`body.lib-has-books`) `.library-section`
   is a flex column and the catalog/AI promo cards get `order:10` (below the grid) with their description hidden;
   `#continueShelf` cards are compact rows (54 px cover beside the meta), at most 3 (`renderLibrary` checks `matchMedia`).
