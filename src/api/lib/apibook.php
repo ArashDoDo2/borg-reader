@@ -135,6 +135,8 @@ function handle_api_route(string $route): bool {
             $category = opt_str_param($_POST, 'category', 2000);
             $paths = $category === null ? [] : parse_category_paths($category);
             $desc = opt_str_param($_POST, 'description', 2000);
+            // v8.14: series = the magazine's name (created when missing, like categories); the approval delivers the issue.
+            $seriesName = opt_str_param($_POST, 'series', 190);
             $work = upload_dir() . '/api-' . bin2hex(random_bytes(12)) . '.book';
             if (!move_uploaded_file($up['tmp'], $work)) fail(500, 'storage', 'Could not store the file.');
             try {
@@ -171,6 +173,7 @@ function handle_api_route(string $route): bool {
                     }
                 }
                 $bookId = (int)$book['id'];
+                if ($seriesName !== null && $seriesName !== '') set_book_series($bookId, series_find_or_create($seriesName, $owner));
                 if ((int)$book['has_cover'] !== 1 && $opf['cover'] !== null && store_cover_bytes($bookId, $opf['cover'])) {
                     q('UPDATE books SET has_cover = 1 WHERE id = ?', [$bookId]);
                 }

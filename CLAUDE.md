@@ -2,7 +2,7 @@
 
 Persian-first EPUB/PDF reader: an offline-capable PWA (static files, no build step) plus an optional PHP 8 API
 for invite-only accounts, cloud sync and a moderated public catalog. Live at https://parsun.com/borg/.
-Current version: see `<meta name="app-version">` in `src/index.html` (8.13.34 when this file was last updated).
+Current version: see `<meta name="app-version">` in `src/index.html` (8.14.0 when this file was last updated).
 
 Owner and final decision-maker: Arash Naderpour. Work only inside the agreed scope; no refactors, extra files
 or deletions beyond what was asked. When something is ambiguous, ask instead of guessing.
@@ -25,7 +25,8 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
     (admin panel routes: admin-books, admin-bulk, admin-import-url (server-side download, SSRF-guarded), book assignment
     to users, categories CRUD, users/roles, invites, API keys, error reports),
     `lib/apibook.php` (`POST api-book` for the owner's other program, API keys), `lib/clean.php` (server text cleanup,
-    same results as the browser's). External API guide: `docs/api-books.md`.
+    same results as the browser's), `lib/series.php` (v8.14 magazines: series, subscriptions, delivery of approved
+    issues, ADR 0011). External API guide: `docs/api-books.md`.
 - `tests/api_test.py` — API tests (PHP built-in server + SQLite). `tests/e2e_test.py` — Playwright/Chromium
   end-to-end tests. `tests/webkit_e2e.py` — WebKit (Safari engine) checks that gate the deploy in CI (iPad/iPhone/desktop;
   `--browser chromium` to check its logic locally). E2E gotchas: the server allows 10 logins per e-mail per 15 min, so
@@ -80,6 +81,8 @@ or deletions beyond what was asked. When something is ambiguous, ask instead of 
   mask, see the `v8.13.31 icons` block at the end of `app.css`); add a new icon there as a 24×24, stroke-2 SVG. Emoji are only
   left in stored/exported user data (AI-summary note title, Markdown notes export).
 - Generated covers come from `coverArtHtml(title, author)` only; don't hand-build cover placeholders.
+- Magazine issues (ADR 0011) may be library records without a file (`remoteFile`): read a book's bytes only through
+  `fileOf()` and handle `null`. Delivery to subscribers is state-driven (`deliver_issues()`); don't add per-approval hooks.
 - Headings use the display font via `var(--font-display)` (Mirza 700, bundled, `MIRZA-OFL.txt`); interface text stays Vazirmatn.
   Never set letter-spacing on Persian text in the display font.
 - Three test suites must stay green: `tests/api_test.py`, `tests/e2e_test.py`, and `tests/webkit_e2e.py --browser chromium`

@@ -171,6 +171,22 @@ function migrations(): array {
                SELECT c.book_id, k.id FROM catalog c JOIN categories k ON k.parent_id = 0 AND k.name = TRIM(c.category)
                WHERE TRIM(c.category) <> '' AND NOT EXISTS (SELECT 1 FROM catalog_categories x WHERE x.catalog_id = c.book_id AND x.category_id = k.id)",
         ],
+        10 => [
+            // v8.14 magazines (ADR 0011): a series groups the issues of one magazine; subscribers get each new issue in
+            // their library once it is approved in the catalog. series_deliveries marks issues already handled (delivered,
+            // or attached to a series after approval = a back issue), so an issue is delivered at most once.
+            "CREATE TABLE series (id {AI}, name VARCHAR(190) NOT NULL, description VARCHAR(2000) NOT NULL DEFAULT '',
+               created_by INTEGER NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0)",
+            "CREATE UNIQUE INDEX series_name ON series (name)",
+            "CREATE TABLE series_subscriptions (user_id INTEGER NOT NULL, series_id INTEGER NOT NULL,
+               subscribed_at BIGINT NOT NULL DEFAULT 0, added_by INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (user_id, series_id),
+               FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE, FOREIGN KEY (series_id) REFERENCES series(id) ON DELETE CASCADE)",
+            "CREATE INDEX series_subscriptions_series ON series_subscriptions (series_id)",
+            "ALTER TABLE books ADD COLUMN series_id INTEGER NOT NULL DEFAULT 0",
+            "CREATE INDEX books_series ON books (series_id)",
+            "CREATE TABLE series_deliveries (book_id INTEGER NOT NULL PRIMARY KEY, delivered_at BIGINT NOT NULL DEFAULT 0,
+               FOREIGN KEY (book_id) REFERENCES books(id) ON DELETE CASCADE)",
+        ],
     ];
 }
 function schema_version(): int {

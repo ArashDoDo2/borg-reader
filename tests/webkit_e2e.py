@@ -14,7 +14,7 @@ Exit code 1 when any check fails. Failures are printed as `::error title=webkit:
 import json, argparse, asyncio, os, re, shutil, sys, tempfile, zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from e2e_test import start_server, FIX, poll, VISIBLE_TEXT_JS, GUIDE_SEEN_JS
+from e2e_test import start_server, FIX, poll, VISIBLE_TEXT_JS, GUIDE_SEEN_JS, SETUP_KEY, make_epub
 from playwright.async_api import async_playwright
 
 results = []
@@ -277,6 +277,45 @@ async def pdf_phone(browser, url, tmp):
     check("iPhone PDF: no page errors, no external requests", not errs and not ext, str(errs[:3] + ext[:3]))
     await ctx.close()
 
+async def magazine_phone(browser, url, tmp):
+    """v8.14 (ADR 0011): a subscribed magazine issue arrives without its file; the first open downloads it and shows text."""
+    errs, ext = [], []
+    ctxA = await browser.new_context()
+    r = await ctxA.request.post(url + "api/?r=setup", data={"setup_key": SETUP_KEY, "name": "مدیر", "email": "wk@example.com", "password": "password1"})
+    H = {"X-CSRF-Token": (await r.json())["csrf"]}
+    async def ap(route, body): return await (await ctxA.request.post(url + f"api/?r={route}", data=body, headers=H)).json()
+    mag = (await ap("admin-series", {"name": "هفته‌نامهٔ وب‌کیت"}))["series"]["id"]
+    tok = (await ap("api-token-create", {"name": "wk"}))["token"]
+    code = (await ap("invites", {"note": "wk"}))["code"]
+    p = make_epub(tmp / "issue.epub", "شمارهٔ وب‌کیت", "wk-issue-1", "تحریریه")
+    await ctxA.request.post(url + "api/?r=api-book", headers={"Authorization": f"Bearer {tok}"},
+                            multipart={"series": "هفته‌نامهٔ وب‌کیت", "file": {"name": "issue.epub", "mimeType": "application/epub+zip", "buffer": Path(p).read_bytes()}})
+    ctx, pg = await new_ctx(browser, DEVICES["iPhone"], errs, ext)
+    rr = await ctx.request.post(url + "api/?r=register", data={"invite": code, "email": "wk-u@example.com", "password": "password2", "name": "خواننده"})
+    await ctx.request.post(url + "api/?r=series-subscribe", data={"series_id": mag, "subscribe": True}, headers={"X-CSRF-Token": (await rr.json())["csrf"]})
+    await pg.goto(url); await pg.wait_for_timeout(800)
+    card = pg.locator("#bookGrid .book-card", has_text="شمارهٔ وب‌کیت")
+    try: await poll(lambda: card.count(), 15000)
+    except TimeoutError: pass
+    FILE_JS = """() => new Promise(res => { const r = indexedDB.open('ketabkhane-db'); r.onsuccess = () => {
+      const q = r.result.transaction('books').objectStore('books').getAll();
+      q.onsuccess = () => { const x = q.result[0]; res(x ? { file: !!(x.file || x.fileBuffer), remote: !!x.remoteFile } : null); r.result.close(); }; }; })"""
+    before = await pg.evaluate(FILE_JS)
+    check("iPhone magazine: the subscribed issue is in the library without its file", before == {"file": False, "remote": True}, str(before))
+    if await card.count():
+        await card.first.click()
+    try:
+        await poll(lambda: pg.evaluate("()=>{const l=(" + LAYOUT_JS + ")();return !!(l&&l.hit)}"), 20000)
+    except TimeoutError:
+        pass
+    await pg.wait_for_timeout(1200)
+    lay = await pg.evaluate(LAYOUT_JS)
+    after = await pg.evaluate(FILE_JS)
+    check("iPhone magazine: the first open downloads the issue and its text is laid out inside the viewer",
+          bool(lay) and lay["hit"] and after == {"file": True, "remote": False}, f"{lay} {after}")
+    check("iPhone magazine: no page errors, no external requests", not errs and not ext, str(errs[:3] + ext[:3]))
+    await ctx.close(); await ctxA.close()
+
 async def run(url, engine):
     tmp = Path(tempfile.mkdtemp(prefix="borg-webkit-"))
     try:
@@ -296,6 +335,10 @@ async def run(url, engine):
                 await pdf_phone(browser, url, tmp)
             except Exception as e:
                 check("iPhone PDF: run crashed", False, re.sub(r"\s+", " ", str(e))[:300])
+            try:
+                await magazine_phone(browser, url, tmp)
+            except Exception as e:
+                check("iPhone magazine: run crashed", False, re.sub(r"\s+", " ", str(e))[:300])
             await browser.close()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

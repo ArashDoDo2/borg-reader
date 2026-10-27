@@ -22,6 +22,7 @@ function book_out(array $b): array {
         'publisher' => (string)($b['publisher'] ?? ''), 'published' => (string)($b['published'] ?? ''),
         'has_cover' => (int)$b['has_cover'] === 1,
         'format' => ($b['format'] ?? 'epub') === 'pdf' ? 'pdf' : 'epub',
+        'series_id' => (int)($b['series_id'] ?? 0), // v8.14 (migration 10): 0 = not a magazine issue
     ];
 }
 /** Optional EPUB metadata fields shared by upload, book-meta and catalog-update: key => max length. */
@@ -450,6 +451,7 @@ function handle_books_route(string $route): bool {
         case 'library':
             method('GET');
             $s = require_user();
+            deliver_issues(); // v8.14: new magazine issues reach subscribers on their next sync at the latest
             $rows = all("SELECT b.*, p.cfi, p.percentage, p.updated_at, c.status AS catalog_status,
                                 ub.status AS read_status, ub.shelves AS shelf_ids, ub.meta_updated_at
                          FROM user_books ub JOIN books b ON b.id = ub.book_id
@@ -670,6 +672,12 @@ function handle_books_route(string $route): bool {
                     }
                 }
                 copy_missing_meta($old, $new);
+                // v8.14: a cleaned magazine issue stays an issue of its magazine, and keeps its "delivered" mark so the
+                // new copy is not sent to the subscribers a second time.
+                if ($catalogMoved && (int)($old['series_id'] ?? 0) > 0 && (int)($new['series_id'] ?? 0) === 0) {
+                    q('UPDATE books SET series_id = ? WHERE id = ?', [(int)$old['series_id'], $newId]);
+                    if (one('SELECT 1 AS x FROM series_deliveries WHERE book_id = ?', [$oldId])) mark_issue_handled($newId);
+                }
                 db()->commit();
             } catch (Throwable $e) {
                 if (db()->inTransaction()) db()->rollBack();
@@ -796,6 +804,8 @@ function handle_books_route(string $route): bool {
             $auto = $s['role'] === 'admin' || !catalog_requires_approval();
             $status = $auto ? 'approved' : 'pending';
             $desc = str_param($d, 'description', 2000, false);
+            // v8.14: an admin can submit a book as a magazine issue; set before the catalog row so its approval delivers it.
+            $seriesId = $s['role'] === 'admin' ? series_id_param($d) : null;
             // categories: existing ids. Legacy `category` (name): admins find or create a top-level category; for other
             // users it only matches an existing top-level name (else it is ignored).
             $catIds = category_ids_param($d);
@@ -806,6 +816,7 @@ function handle_books_route(string $route): bool {
                 else $catIds = ($cid = category_find($category, 0)) ? [$cid] : [];
             }
             q('DELETE FROM catalog WHERE book_id = ?', [$bookId]);
+            if ($seriesId !== null) set_book_series($bookId, $seriesId);
             q('INSERT INTO catalog (book_id, status, description, category, submitted_by, submitted_at, reviewed_by, reviewed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
               [$bookId, $status, $desc, '', $s['id'], time(), $auto ? $s['id'] : null, $auto ? time() : null]);
             set_book_categories($bookId, $catIds);

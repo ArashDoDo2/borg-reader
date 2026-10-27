@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173b35">
   <meta name="description" content="بُرگ — کتاب‌خوان فارسی با پشتیبانی از EPUB و مطالعه آفلاین">
-  <meta name="app-version" content="8.13.34">
-  <meta name="app-released" content="2026-10-27T09:32:00Z">
+  <meta name="app-version" content="8.14.0">
+  <meta name="app-released" content="2026-10-27T13:33:00Z">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob:; font-src 'self' data: blob:; connect-src 'self' blob: data: https://generativelanguage.googleapis.com https://api.openai.com; frame-src 'self' blob: data: about:; child-src 'self' blob:; worker-src 'self'; media-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
@@ -163,6 +163,10 @@
         <nav id="catalogQuickBar" class="catalog-quick-bar" aria-label="دسته‌های پیشنهادی" hidden>
           <div id="catalogQuickList" class="catalog-quick-list"></div>
         </nav>
+        <section id="seriesSection" class="series-section" aria-labelledby="seriesTitle" hidden>
+          <h3 id="seriesTitle" class="shelf-title"><span data-ico="magazine" aria-hidden="true"></span>مجله‌ها</h3>
+          <div id="seriesShelf" class="continue-shelf series-shelf"></div>
+        </section>
         <section id="catalogShowcase" class="catalog-showcase" aria-label="ویترین کتابخانهٔ عمومی" hidden>
           <div class="catalog-showcase-head">
             <div class="showcase-title-row">
@@ -220,12 +224,34 @@
           <div id="detailRelated" class="book-grid related-grid"></div>
         </section>
       </div>
+      <div id="viewSeries" class="view book-page series-page" hidden>
+        <div class="book-page-top">
+          <nav class="breadcrumb" aria-label="مسیر"><button type="button" class="link-button" id="seriesCrumb">کتابخانهٔ عمومی</button><span aria-hidden="true"> ‹ </span><span>مجله‌ها</span></nav>
+          <button id="seriesBack" class="secondary-button detail-back" type="button">→ بازگشت</button>
+        </div>
+        <div class="detail-head">
+          <div id="seriesCover" class="book-cover-thumb detail-cover" aria-hidden="true"></div>
+          <div class="detail-info">
+            <p class="eyebrow">مجله</p>
+            <h2 id="seriesName"></h2>
+            <p id="seriesInfo" class="muted"></p>
+            <p id="seriesDesc" class="detail-desc" hidden></p>
+            <div class="detail-actions"><button id="seriesSubscribe" class="primary-button" type="button" aria-pressed="false" hidden>مشترک شو</button></div>
+            <p id="seriesHint" class="muted small series-hint"></p>
+          </div>
+        </div>
+        <section class="series-issues-section" aria-labelledby="seriesIssuesTitle">
+          <h3 id="seriesIssuesTitle" class="shelf-title">شماره‌ها</h3>
+          <div id="seriesIssues" class="book-grid"></div>
+        </section>
+      </div>
       <div id="viewAdmin" class="view" hidden>
         <nav id="adminTabs" class="admin-tabs" role="tablist" aria-label="بخش‌های مدیریت">
           <button type="button" role="tab" id="admTab-overview" data-admin-tab="overview" aria-controls="admPanel-overview" aria-selected="true">نمای کلی</button>
           <button type="button" role="tab" id="admTab-queue" data-admin-tab="queue" aria-controls="admPanel-queue" aria-selected="false">صف تأیید <span id="admBadgeQueue" class="adm-badge" hidden></span></button>
           <button type="button" role="tab" id="admTab-books" data-admin-tab="books" aria-controls="admPanel-books" aria-selected="false">کتاب‌ها</button>
           <button type="button" role="tab" id="admTab-cats" data-admin-tab="cats" aria-controls="admPanel-cats" aria-selected="false">دسته‌ها</button>
+          <button type="button" role="tab" id="admTab-series" data-admin-tab="series" aria-controls="admPanel-series" aria-selected="false">مجله‌ها</button>
           <button type="button" role="tab" id="admTab-users" data-admin-tab="users" aria-controls="admPanel-users" aria-selected="false">کاربران</button>
           <button type="button" role="tab" id="admTab-invites" data-admin-tab="invites" aria-controls="admPanel-invites" aria-selected="false">دعوت‌ها</button>
           <button type="button" role="tab" id="admTab-api" data-admin-tab="api" aria-controls="admPanel-api" aria-selected="false">کلیدهای API</button>
@@ -306,6 +332,13 @@
             <form id="catAddTop" class="admin-row cat-add" novalidate><input id="catAddTopName" class="admin-input" maxlength="80" placeholder="نام دستهٔ اصلی تازه، مثلاً ادبیات" aria-label="نام دستهٔ اصلی تازه" autocomplete="off" dir="auto"><button class="secondary-button" type="submit">افزودن دستهٔ اصلی</button></form>
             <p id="catAdmError" class="form-error" role="alert"></p>
             <ul id="catTree" class="cat-tree" aria-label="درخت دسته‌ها"></ul></div>
+        </section>
+        <section id="admPanel-series" class="adm-panel" role="tabpanel" aria-labelledby="admTab-series" data-admin-panel="series" hidden>
+          <div class="admin-block"><h3>مجله‌ها</h3>
+            <p class="muted small">هر شمارهٔ تازهٔ یک مجله، وقتی در کتابخانهٔ عمومی تأیید شود، خودش به کتابخانهٔ مشترک‌ها اضافه می‌شود. مجلهٔ هر شماره را هنگام ارسال برای کتابخانهٔ عمومی، در «دریافت با لینک» یا در فیلد <code dir="ltr">series</code> کلید API انتخاب کن. کتابی که الان عمومی است و بعداً به مجله اضافه شود، «شمارهٔ قبلی» حساب می‌شود و برای کسی فرستاده نمی‌شود.</p>
+            <form id="seriesAddForm" class="admin-row" novalidate><input id="seriesAddName" class="admin-input" maxlength="190" placeholder="نام مجلهٔ تازه" aria-label="نام مجلهٔ تازه" autocomplete="off"><button class="secondary-button" type="submit" data-ico="plus">ساختن</button></form>
+            <p id="seriesAdmError" class="form-error" role="alert"></p>
+            <div id="seriesAdmList" class="admin-list"></div></div>
         </section>
         <section id="admPanel-users" class="adm-panel" role="tabpanel" aria-labelledby="admTab-users" data-admin-panel="users" hidden>
           <div class="admin-block"><h3>کاربران</h3><div id="userList" class="admin-list"></div></div>
@@ -629,6 +662,7 @@
       <label>نویسنده<input name="author" maxlength="300" dir="auto"></label>
       <label id="admDetailCatLabel">دسته‌بندی<input name="category" maxlength="80" list="admCatList" autocomplete="off" dir="auto"></label>
       <div id="admDetailCatsWrap" class="cp-field" hidden><span class="cp-label">دسته‌ها</span><div id="admDetailCats"></div><p id="admDetailLegacyCat" class="muted small" hidden></p></div>
+      <label id="admDetailSeriesLabel">مجله<select name="series_id" class="admin-input"></select><span id="admDetailSeriesNote" class="muted small" hidden>این کتاب الان عمومی است؛ اگر به مجله اضافه شود «شمارهٔ قبلی» حساب می‌شود و برای مشترک‌ها فرستاده نمی‌شود.</span></label>
       <label>
         <span class="field-head-row">
           <span>توضیحات</span>
@@ -714,6 +748,7 @@
         <textarea name="description" maxlength="2000" rows="3" dir="auto" placeholder="توضیح یا خلاصهٔ کتاب…"></textarea>
       </label>
       <div class="cp-field"><span class="cp-label">دسته‌ها (اختیاری، حداکثر ۱۰)</span><div id="submitCats"></div></div>
+      <label id="submitSeriesLabel" hidden><span>شمارهٔ کدام مجله؟ (اختیاری)</span><select id="submitSeries" class="admin-input"></select></label>
       <button id="submitOk" class="primary-button" type="submit">ارسال برای کتابخانهٔ عمومی</button>
     </form>
   </dialog>
@@ -745,6 +780,10 @@
         <span class="cp-label">دسته‌ها (اختیاری، حداکثر ۱۰)</span>
         <div id="admImportUrlCats"></div>
       </div>
+      <label class="adm-field">
+        <span>شمارهٔ کدام مجله؟ (اختیاری)</span>
+        <select id="admImportUrlSeries" class="admin-input"></select>
+      </label>
       <label class="adm-field">
         <span>وضعیت در کتابخانهٔ عمومی</span>
         <select id="admImportUrlStatus" class="admin-input">
@@ -817,7 +856,7 @@
   <datalist id="categoryList"></datalist>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <div id="updateBanner" class="update-banner" role="status" hidden><span>نسخهٔ جدید بُرگ نصب شد.</span><button id="updateReload" class="primary-button" type="button">تازه‌سازی</button></div>
-  <footer><span id="footerVersion">بُرگ · نسخهٔ ۸.۱۳.۳۴</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
+  <footer><span id="footerVersion">بُرگ · نسخهٔ ۸.۱۴.۰</span><span>فایل‌ها روی همین دستگاه می‌مانند</span></footer>
 
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/epub.min.js"></script>

@@ -7,6 +7,7 @@ require __DIR__ . '/lib/books.php';
 require __DIR__ . '/lib/admin.php';
 require __DIR__ . '/lib/clean.php';
 require __DIR__ . '/lib/apibook.php';
+require __DIR__ . '/lib/series.php';
 
 $route = is_string($_GET['r'] ?? null) ? $_GET['r'] : '';
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -154,7 +155,7 @@ try {
 
         // ---------- Books, library, progress, catalog ----------
         default:
-            if (!handle_books_route($route) && !handle_admin_route($route) && !handle_api_route($route)) fail(404, 'not_found', 'Unknown route.');
+            if (!handle_books_route($route) && !handle_admin_route($route) && !handle_api_route($route) && !handle_series_route($route)) fail(404, 'not_found', 'Unknown route.');
     }
 } catch (ApiError $e) {
     json_out($e->status, ['error' => $e->codeName, 'message' => $e->getMessage()]);

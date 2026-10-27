@@ -599,9 +599,11 @@
     const bar = pct ? `<div class="cover-progress" aria-hidden="true"><span style="width:${pct}%"></span></div>` : "";
     const catalogLabel = b.catalogStatus === "approved" ? " · عمومی" : b.catalogStatus === "pending" ? " · در انتظار تأیید" : "";
     const statusLabel = b.status === "finished" ? "خوانده‌شده" : b.status === "want" ? "می‌خواهم بخوانم" : null;
-    const badge = (statusLabel || (pct ? `${pct.toLocaleString("fa-IR")}٪ خوانده‌شده` : (prog ? "شروع‌شده" : "خوانده‌نشده"))) + catalogLabel;
+    const remote = !!b.remoteFile && !fileOf(b); // v8.14: an issue whose file is still on the server
+    const badge = (statusLabel || (pct ? `${pct.toLocaleString("fa-IR")}٪ خوانده‌شده` : (prog ? "شروع‌شده" : "خوانده‌نشده"))) + catalogLabel
+      + (remote ? " · دریافت هنگام بازکردن" : "");
     return `<article class="book-card${enter != null ? " card-enter" : ""}"${enter != null ? ` style="--d:${enter}ms"` : ""} tabindex="0" role="button" data-open="${esc(b.id)}" aria-label="باز کردن ${esc(b.title)}">
-          <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${bar}${isPdfRecord(b) ? '<span class="format-badge" aria-label="PDF">PDF</span>' : ""}</div>
+          <div class="book-cover-thumb" style="background:${bg};color:${fg}">${cover}${bar}${isPdfRecord(b) ? '<span class="format-badge" aria-label="PDF">PDF</span>' : ""}${remote ? '<span class="remote-badge" data-ico="cloud" title="روی این دستگاه نیست؛ هنگام بازکردن دریافت می‌شود"></span>' : ""}</div>
           <div class="book-meta"><h3 title="${esc(b.title)}">${libMarkHtml(b.title, hl)}</h3><p>${libMarkHtml(b.author || "نویسنده نامشخص", hl)}</p><span class="book-badge">${badge}</span></div>
           <button class="remove-book" type="button" data-remove="${esc(b.id)}" aria-label="حذف ${esc(b.title)}" title="حذف">×</button>
           <button class="book-options" type="button" data-options="${esc(b.id)}" aria-label="تنظیمات ${esc(b.title)}" title="وضعیت و قفسه">⋯</button>
@@ -1128,8 +1130,11 @@
    * a preview is never written to IndexedDB, and its progress, annotations and reading time are not saved or synced.
    */
   async function openReader(id, previewRecord) {
-    const record = previewRecord || await getBook(id);
+    let record = previewRecord || await getBook(id);
     if (!record) { showToast("فایل این کتاب روی دستگاه پیدا نشد."); return; }
+    // v8.14: an issue whose file is not on the device yet needs the network (checked before the reader opens).
+    const remote = !fileOf(record) && !!record.remoteFile && !!record.serverId;
+    if (remote && !navigator.onLine) { showToast("برای بازکردن این شماره اتصال اینترنت لازم است؛ فایلش هنوز روی این دستگاه نیست."); return; }
     // v8.8: a record without `format` (older client, server without the field) is a PDF only if its bytes say so.
     if (!record.format && fileOf(record) && await sniffPdf(fileOf(record))) record.format = "pdf";
     if (!isPdfRecord(record) && !librariesReady()) { showToast("کتاب‌خوان کامل بارگذاری نشده است. صفحه را تازه‌سازی کن."); return; }
@@ -1152,6 +1157,14 @@
     $("prevPage").disabled = true; $("nextPage").disabled = false;
     showProgress(0);
     if (bookInstance) { retireBook(bookInstance, rendition); bookInstance = null; rendition = null; }
+    if (!record.preview) touchOpened(record.id); // v8.14: the 14-day rule for issues counts from here
+    if (remote) {
+      const got = await fetchRemoteFile(record, token);
+      if (token !== openToken) return; // closed (or another book opened) while it downloaded
+      if (!got) { closeReader(); return; }
+      record = got; currentBook = record;
+      if (!isPdfRecord(record) && !librariesReady()) { closeReader(); showToast("کتاب‌خوان کامل بارگذاری نشده است. صفحه را تازه‌سازی کن."); return; }
+    }
     const bookFile = fileOf(record);
     if (!bookFile) { hideOpening(); showToast("فایل این کتاب روی دستگاه پیدا نشد."); return; }
     // The saved position is read while the file is (they are independent).
@@ -1311,7 +1324,12 @@
     return dir;
   }
   // v8.5: «در حال باز کردن کتاب…» over the page from the click until the first page is shown.
-  function showOpening() { $("openingIndicator").hidden = false; renderSyncChip(); }
+  function showOpening() { setOpeningText(); $("openingIndicator").hidden = false; renderSyncChip(); }
+  /** v8.14: the indicator's label («در حال دریافت شماره…» while an issue's file downloads); no argument = the default. */
+  function setOpeningText(text) {
+    const el = $("openingIndicator").lastElementChild;
+    if (el) el.textContent = text || "در حال باز کردن کتاب…";
+  }
   function hideOpening() { $("openingIndicator").hidden = true; }
   function getProgress(id) {
     return new Promise((resolve, reject) => {
@@ -4438,19 +4456,21 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   // ---------- Views ----------
   // "book" is a catalog book's page; it lives under the catalog tab.
   function showView(view) {
-    if (account?.user?.role === "student" && (view === "catalog" || view === "book")) {
+    if (account?.user?.role === "student" && (view === "catalog" || view === "book" || view === "series")) {
       view = "mine";
       if (location.hash.startsWith("#catalog")) setHash("", false);
     }
-    const tab = view === "book" ? "catalog" : view;
+    const tab = view === "book" || view === "series" ? "catalog" : view;
     document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.setAttribute("aria-selected", String(t.dataset.view === tab)));
     $("viewMine").hidden = view !== "mine";
     $("viewCatalog").hidden = view !== "catalog";
     $("viewBook").hidden = view !== "book";
+    $("viewSeries").hidden = view !== "series";
     $("viewAdmin").hidden = view !== "admin";
     closeAddMenu();
     if (view === "catalog") showCatalog();
     if (view === "book") renderBookDetail();
+    if (view === "series") loadSeriesPage();
     if (view === "admin") openAdmin();
   }
   document.querySelectorAll(".view-tabs [role=tab]").forEach(t => t.addEventListener("click", () => {
@@ -4532,6 +4552,8 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     // Never keep two local copies of the same file (a sync may run while a catalog book is being added).
     const same = sb.sha256 && (await getAllBooks()).find(b => b.contentHash === sb.sha256);
     if (same) return same;
+    // v8.14 (ADR 0011): a magazine issue arrives without its file; the first open downloads it (fetchRemoteFile).
+    if (!blob && sb.series_id > 0) return storeRemoteIssue(sb);
     if (!blob) blob = await (await api("book-file", { query: `&id=${sb.id}` })).blob();
     // v8.8: `format` comes from the server; without it (older server) the bytes decide, EPUB otherwise.
     const isPdf = sb.format === "pdf" || (sb.format !== "epub" && await sniffPdf(blob));
@@ -4545,10 +4567,85 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       file: isPdf ? new File([blob], `${sb.title}.pdf`, { type: "application/pdf" }) : new File([blob], `${sb.title}.epub`, { type: "application/epub+zip" }),
       size: blob.size, addedAt: Date.now(), contentHash: sb.sha256, serverId: sb.id, catalogStatus: sb.catalog_status || null,
       publisher: sb.publisher || "", published: sb.published || "", language: sb.language || "", metaExt: true,
+      seriesId: sb.series_id || 0,
       ...(isPdf ? { format: "pdf" } : {}),
     };
     await put("books", record);
     return record;
+  }
+  /** v8.14: the library record of a magazine issue whose file is still on the server (`remoteFile`). */
+  async function storeRemoteIssue(sb) {
+    let cover = null;
+    if (sb.has_cover) {
+      try { cover = await blobToDataUrl(await (await api("book-cover", { query: `&id=${sb.id}` })).blob()); } catch (_) {}
+    }
+    const record = {
+      id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      title: sb.title, author: sb.author || "نویسنده نامشخص", cover, file: null, remoteFile: true,
+      size: sb.size || 0, addedAt: Date.now(), contentHash: sb.sha256, serverId: sb.id, catalogStatus: sb.catalog_status || null,
+      publisher: sb.publisher || "", published: sb.published || "", language: sb.language || "", metaExt: true,
+      seriesId: sb.series_id || 0,
+      ...(sb.format === "pdf" ? { format: "pdf" } : {}),
+    };
+    await put("books", record);
+    return record;
+  }
+  /**
+   * v8.14: download the file of an issue that is not on the device, store it on the record and return the record
+   * (null on failure, with a toast). The file is kept even if the reader was closed meanwhile.
+   */
+  async function fetchRemoteFile(record, token) {
+    if (!account) { showToast("برای دریافت این شماره وارد حسابت شو."); return null; }
+    setOpeningText("در حال دریافت شماره…");
+    try {
+      const blob = await (await api("book-file", { query: `&id=${record.serverId}` })).blob();
+      const isPdf = isPdfRecord(record) || await sniffPdf(blob);
+      const file = isPdf ? new File([blob], `${record.title}.pdf`, { type: "application/pdf" }) : new File([blob], `${record.title}.epub`, { type: "application/epub+zip" });
+      const latest = await getBook(record.id);
+      if (!latest) return null; // removed from the library while it was downloading
+      const upd = { ...latest, file, size: blob.size, remoteFile: false, ...(isPdf ? { format: "pdf" } : {}) };
+      delete upd.fileBuffer; delete upd.fileName;
+      await put("books", upd);
+      renderLibrary();
+      return upd;
+    } catch (err) {
+      if (token === openToken) showToast(navigator.onLine ? "دریافت این شماره ناموفق بود؛ دوباره امتحان کن." : "برای بازکردن این شماره اتصال اینترنت لازم است.");
+      if (navigator.onLine) reportError("sync", err, "issue:download");
+      return null;
+    } finally { setOpeningText(); }
+  }
+  /**
+   * v8.14 (ADR 0011, owner's rule): an issue's file is removed from the device 14 days after it was last opened, unless
+   * it is on one of the user's shelves. The record (card, position, notes, highlights) stays and the next open downloads
+   * the file again. Only issues that are on the server (serverId, no pending cleanup) are touched, and never the one on
+   * screen. Runs after a successful sync, i.e. only while logged in, so the file can always be fetched again.
+   */
+  const ISSUE_KEEP_MS = 14 * 86400000;
+  async function evictStaleIssues(now = Date.now()) {
+    await refreshShelves();
+    const live = new Set(shelvesCache.map(x => x.uid));
+    const onScreen = !$("reader").classList.contains("hidden") && currentBook ? currentBook.id : null;
+    let n = 0;
+    for (const b of await getAllBooks()) {
+      if (!(b.seriesId > 0) || !b.serverId || b.cleanPending || b.preview || b.id === onScreen || !fileOf(b)) continue;
+      if ((b.shelves || []).some(u => live.has(u))) continue;
+      if (now - (b.openedAt || b.addedAt || now) < ISSUE_KEEP_MS) continue;
+      const latest = await getBook(b.id);
+      if (!latest || !fileOf(latest)) continue;
+      const upd = { ...latest, file: null, remoteFile: true };
+      delete upd.fileBuffer; delete upd.fileName;
+      await put("books", upd);
+      n++;
+    }
+    if (n) renderLibrary();
+    return n;
+  }
+  /** v8.14: when a book was last opened (the 14-day rule above), in one read-write transaction so no field is lost. */
+  function touchOpened(id) {
+    try {
+      const os = db.transaction("books", "readwrite").objectStore("books"), g = os.get(id);
+      g.onsuccess = () => { if (g.result) os.put({ ...g.result, openedAt: Date.now() }); };
+    } catch (err) { console.warn("Saving the open time failed:", err); }
   }
   async function sync() {
     if (!account || !navigator.onLine) { refreshSyncChip(); return; }
@@ -4600,10 +4697,11 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
             upd.metaExtPush = false;
           }
           for (const k of Object.keys(META_LIMITS)) if (typeof sb[k] === "string" && sb[k] && sb[k] !== b[k]) upd[k] = sb[k];
+          if (typeof sb.series_id === "number" && sb.series_id !== (b.seriesId || 0)) upd.seriesId = sb.series_id; // v8.14
           if (!b.cover && sb.has_cover) {
             try { upd.cover = await blobToDataUrl(await (await api("book-cover", { query: `&id=${sb.id}` })).blob()); } catch (_) {}
           }
-          if (["serverId", "catalogStatus", "title", "author", "cover", "metaPushed", "metaExtPush", ...Object.keys(META_LIMITS)].some(k => upd[k] !== b[k])) await put("books", upd);
+          if (["serverId", "catalogStatus", "title", "author", "cover", "metaPushed", "metaExtPush", "seriesId", ...Object.keys(META_LIMITS)].some(k => upd[k] !== b[k])) await put("books", upd);
         } else if (b.contentHash) toUpload.push(b);
       }
       for (const b of toUpload) {
@@ -4634,6 +4732,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       await syncStats();
       await syncAnnotations();
       ok = true;
+      try { await evictStaleIssues(); } catch (err) { console.warn("Issue cleanup failed:", err); } // v8.14
       progressSnapshot.forEach(id => unpushedProgress.delete(id)); // pushed (or older than the server's) above
       syncChip.at = Date.now(); syncChip.failed = partialFail;
     } catch (err) {
@@ -5032,6 +5131,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   function showCatalog() {
     const st = catalogState;
     loadCategories();
+    loadSeries();
     const fresh = catalogLoaded && Date.now() - st.at < CATALOG_TTL && (st.mode === "full" || st.key === catalogQueryKey());
     renderCatalog();
     if (!fresh) { loadCatalog(); return; }
@@ -5107,6 +5207,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     const nothingAtAll = catalogLoaded && (catalogState.mode === "paged" ? catalogState.total === 0 && !catalogFiltered() : catalogBooks.length === 0);
     $("catalogEmpty").hidden = !nothingAtAll;
     renderCatalogShowcase(books);
+    renderSeriesShelf();
     if (catalogLoaded || catalogBooks.length) $("catalogGrid").innerHTML = books.map(b => catalogCardHtml(b, true)).join("");
     if (catalogLoaded && !books.length && !nothingAtAll) {
       $("catalogGrid").innerHTML = '<div class="catalog-noresult"><p class="muted">کتابی با این مشخصات پیدا نشد.</p>'
@@ -5141,9 +5242,112 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   function markCatalogInLibrary(id) {
     const lists = [catalogBooks, catalogFull || [], [...catalogSeen.values()], ...relatedCache.values()];
     for (const list of lists) for (const b of list) if (b.id === id) b.in_library = true;
-    const card = $("catalogGrid").querySelector(`[data-catalog-add="${id}"]`);
-    if (card) card.outerHTML = '<span class="book-badge">در کتابخانهٔ تو</span>';
+    for (const grid of [$("catalogGrid"), $("seriesIssues")]) {
+      const card = grid.querySelector(`[data-catalog-add="${id}"]`);
+      if (card) card.outerHTML = '<span class="book-badge">در کتابخانهٔ تو</span>';
+    }
   }
+
+  // ---- v8.14 magazines (ADR 0011): a «مجله‌ها» row in the catalog and a page per magazine (#catalog/series/ID) with the
+  // subscribe button and its issues. Subscribing adds the latest issue; later issues arrive by themselves after approval.
+  let seriesList = [], seriesLoadedAt = 0, seriesId = 0, seriesPage = null;
+  async function loadSeries(force) {
+    if (!account || account.user.role === "student") { seriesList = []; renderSeriesShelf(); return; }
+    if (!force && seriesLoadedAt && Date.now() - seriesLoadedAt < CATALOG_TTL) { renderSeriesShelf(); return; }
+    try { seriesList = (await api("series")).series || []; seriesLoadedAt = Date.now(); }
+    catch (_) { seriesList = []; } // a server without magazines
+    renderSeriesShelf();
+  }
+  function seriesCoverHtml(s) {
+    return s.latest && s.latest.has_cover ? catalogCover(s.latest, true) : coverArtHtml(s.name, "مجله");
+  }
+  function seriesCardHtml(s) {
+    const [bg, fg] = paletteFor(s.name);
+    return `<article class="book-card series-card" data-series="${s.id}" tabindex="0" role="button" aria-label="مجلهٔ ${esc(s.name)}">
+      <div class="book-cover-thumb" style="background:${bg};color:${fg}">${seriesCoverHtml(s)}</div>
+      <div class="book-meta"><h3 title="${esc(s.name)}">${esc(s.name)}</h3><p>${faNum(s.issues)} شماره</p>
+      ${s.subscribed ? '<span class="book-badge" data-ico="check">مشترک هستی</span>' : ""}</div></article>`;
+  }
+  function renderSeriesShelf() {
+    const show = seriesList.length > 0 && !catalogFiltered();
+    $("seriesSection").hidden = !show;
+    $("seriesShelf").innerHTML = show ? seriesList.map(seriesCardHtml).join("") : "";
+  }
+  function openSeries(id, push = true) {
+    if (!$("viewCatalog").hidden) catalogState.scrollY = window.scrollY;
+    seriesId = id; seriesPage = null;
+    setHash(`#catalog/series/${id}`, push, { borg: "series", id, inApp: push });
+    showView("series");
+    window.scrollTo({ top: Math.max(0, $("app").querySelector(".library-section").offsetTop - 10), behavior: "auto" });
+  }
+  async function loadSeriesPage() {
+    const id = seriesId;
+    renderSeriesPage();
+    try {
+      const r = await api("series-issues", { query: `&id=${id}` });
+      if (id !== seriesId) return;
+      rememberCatalog(r.issues || []); // addFromCatalog and the book page find the issues there
+      seriesPage = { series: r.series, issues: r.issues || [] };
+      const i = seriesList.findIndex(x => x.id === id);
+      if (i >= 0) seriesList[i] = r.series;
+    } catch (err) {
+      if (id === seriesId) { $("seriesName").textContent = apiMessage(err); $("seriesIssues").innerHTML = ""; }
+      return;
+    }
+    renderSeriesPage();
+  }
+  function renderSeriesPage() {
+    const p = seriesPage, s = p ? p.series : seriesList.find(x => x.id === seriesId);
+    $("seriesName").textContent = s ? s.name : "در حال بارگذاری…";
+    $("seriesInfo").textContent = s ? `${faNum(s.issues)} شماره` : "";
+    $("seriesDesc").textContent = (s && s.description) || "";
+    $("seriesDesc").hidden = !(s && s.description);
+    const [bg, fg] = paletteFor(s ? s.name : "مجله");
+    const cover = $("seriesCover");
+    cover.style.background = bg; cover.style.color = fg;
+    cover.innerHTML = s ? seriesCoverHtml(s) : "";
+    const btn = $("seriesSubscribe"), on = !!(s && s.subscribed);
+    btn.hidden = !p;
+    btn.textContent = on ? "لغو اشتراک" : "مشترک شو";
+    btn.className = on ? "secondary-button" : "primary-button";
+    btn.setAttribute("aria-pressed", String(on));
+    $("seriesHint").textContent = !s ? "" : on
+      ? "مشترک هستی: هر شمارهٔ تازه، بعد از تأیید، خودش به کتابخانه‌ات اضافه می‌شود. فایل هر شماره با اولین بازکردن دریافت می‌شود."
+      : "با اشتراک، آخرین شماره همین حالا و شماره‌های بعدی خودکار به کتابخانه‌ات اضافه می‌شوند. شماره‌های قبلی را از فهرست زیر اضافه کن.";
+    $("seriesIssues").innerHTML = !p ? '<p class="muted">در حال بارگذاری…</p>'
+      : p.issues.length ? p.issues.map(b => catalogCardHtml(b, true)).join("") : '<p class="muted">هنوز شماره‌ای منتشر نشده.</p>';
+  }
+  $("seriesSubscribe").addEventListener("click", async () => {
+    const s = seriesPage && seriesPage.series;
+    if (!s) return;
+    const btn = $("seriesSubscribe"), on = !s.subscribed;
+    btn.disabled = true;
+    try {
+      while (syncing) await sleep(150);
+      const r = await api("series-subscribe", { method: "POST", body: { series_id: s.id, subscribe: on } });
+      seriesPage.series = r.series;
+      const i = seriesList.findIndex(x => x.id === s.id);
+      if (i >= 0) seriesList[i] = r.series;
+      showToast(!on ? "اشتراک لغو شد؛ شماره‌هایی که داری می‌مانند."
+        : r.series.latest ? "مشترک شدی؛ آخرین شماره به کتابخانه‌ات اضافه شد." : "مشترک شدی؛ شماره‌های بعدی به کتابخانه‌ات اضافه می‌شوند.");
+      renderSeriesPage();
+      if (on && r.series.latest) { await sync(); await loadSeriesPage(); }
+    } catch (err) { showToast(apiMessage(err)); }
+    finally { btn.disabled = false; }
+  });
+  const onSeriesCard = e => {
+    const c = e.target.closest("[data-series]");
+    if (!c || (e.type === "keydown" && e.key !== "Enter" && e.key !== " ")) return;
+    if (e.type === "keydown") e.preventDefault();
+    openSeries(Number(c.dataset.series));
+  };
+  $("seriesShelf").addEventListener("click", onSeriesCard);
+  $("seriesShelf").addEventListener("keydown", onSeriesCard);
+  $("seriesBack").addEventListener("click", () => {
+    if (history.state && history.state.borg === "series" && history.state.inApp) history.back();
+    else goToCatalog(false);
+  });
+  $("seriesCrumb").addEventListener("click", () => goToCatalog(true));
 
   // ---- v8.10 category navigator: a list of top categories with a subcategory panel (≥ 900 px), a drill-down sheet on
   // smaller screens, and a breadcrumb above the grid. The choice lives in the hash (#catalog?cat=ID): back, refresh and
@@ -5339,8 +5543,9 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       showView("mine");
       return;
     }
-    const m = /^#catalog\/book\/(\d+)/.exec(location.hash);
+    const m = /^#catalog\/book\/(\d+)/.exec(location.hash), ms = /^#catalog\/series\/(\d+)/.exec(location.hash);
     if (m) { detailId = Number(m[1]); showView("book"); }
+    else if (ms) { if (Number(ms[1]) !== seriesId) seriesPage = null; seriesId = Number(ms[1]); showView("series"); }
     else if (location.hash.startsWith("#catalog")) {
       const c = catFromHash();
       if (c !== catalogFilter.cat) { catalogFilter.cat = c; if (c) catalogFilter.category = ""; }
@@ -5348,7 +5553,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     }
     else if (location.hash.startsWith("#admin")) { if (isAdmin()) showView("admin"); }
     else if (!$("viewAdmin").hidden) showView("mine");
-    else if (!$("viewBook").hidden || !$("viewCatalog").hidden) showView("mine");
+    else if (!$("viewBook").hidden || !$("viewCatalog").hidden || !$("viewSeries").hidden) showView("mine");
   }
   // The app restores the catalog position itself (showCatalog); the browser's own restore fired after it and moved the list.
   try { history.scrollRestoration = "manual"; } catch (_) {}
@@ -5645,6 +5850,8 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   $("catalogGrid").addEventListener("click", onCatalogCardClick);
   $("catalogGrid").addEventListener("keydown", onCatalogCardKeydown);
   $("catalogShowcaseShelf")?.addEventListener("click", onCatalogCardClick);
+  $("seriesIssues").addEventListener("click", onCatalogCardClick); // v8.14 magazine page
+  $("seriesIssues").addEventListener("keydown", onCatalogCardKeydown);
   $("catalogShowcaseShelf")?.addEventListener("keydown", onCatalogCardKeydown);
   async function shareBook(localId) {
     const b = await getBook(localId);
@@ -5670,6 +5877,8 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     $("submitForm").elements.description.value = b.description || "";
     submitPicker.set([]);
     $("submitOk").disabled = false;
+    $("submitSeriesLabel").hidden = !isAdmin(); // v8.14: an admin can publish the book as a magazine issue
+    if (isAdmin()) fillSeriesSelect($("submitSeries"), 0);
     $("submitDialog").showModal();
     $("submitForm").elements.description.focus();
   }
@@ -5702,7 +5911,8 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     const description = $("submitForm").elements.description.value.replace(/[ \t]+/g, " ").trim().slice(0, 2000);
     $("submitOk").disabled = true;
     try {
-      const r = await api("catalog-submit", { method: "POST", body: { book_id: b.serverId, description, categories: submitPicker.get() } });
+      const series = isAdmin() ? Number($("submitSeries").value) || 0 : 0;
+      const r = await api("catalog-submit", { method: "POST", body: { book_id: b.serverId, description, categories: submitPicker.get(), ...(series ? { series_id: series } : {}) } });
       await put("books", { ...b, catalogStatus: r.status });
       $("submitDialog").close();
       showToast(r.status === "approved" ? "به کتابخانهٔ عمومی اضافه شد." : "برای تأیید مدیر ارسال شد.");
@@ -5717,7 +5927,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
   const fmtDate = s => new Date(s * 1000).toLocaleDateString("fa-IR");
   const mb = n => (n / 1048576).toLocaleString("fa-IR", { maximumFractionDigits: 1 });
   const STATUS_FA = { approved: "عمومی", pending: "در انتظار", rejected: "ردشده", none: "بیرون از کتابخانهٔ عمومی" };
-  const ADMIN_TABS = ["overview", "queue", "books", "cats", "users", "invites", "api", "errors", "settings"];
+  const ADMIN_TABS = ["overview", "queue", "books", "cats", "series", "users", "invites", "api", "errors", "settings"];
   const ADM_PER = 50;
   // category = the old free-text category (exact, __none__); cat = a category id from the v8.10 list, or "none".
   const ADM_DEF = { q: "", status: "any", category: "", cat: "", format: "", uploader: "", no_cover: false, sort: "date", dir: "desc", page: 1 };
@@ -5806,6 +6016,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     if (tab === "queue") return loadQueue();
     if (tab === "books") return loadAdminBooks();
     if (tab === "cats") return loadCatAdmin();
+    if (tab === "series") return loadSeriesAdmin();
     if (tab === "users") return loadUsers();
     if (tab === "invites") return loadInvites();
     if (tab === "api") return loadApiTokens();
@@ -5874,6 +6085,95 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
         <span class="admin-row"><span class="muted">${i.used_by ? `استفاده‌شده توسط ${esc(i.used_by)}` : i.expires_at * 1000 < Date.now() ? "منقضی" : `معتبر تا ${fmtDate(i.expires_at)}`}</span>
         ${!i.used_by && i.expires_at * 1000 > Date.now() ? `<button class="secondary-button" type="button" data-invite-revoke="${esc(i.id)}">باطل کردن</button>` : ""}</span></div>`).join("")
       || '<p class="muted">هنوز دعوت‌نامه‌ای ساخته نشده.</p>';
+  }
+  // ---- v8.14 magazines: list, create, rename, delete, subscribers (any role, students included) ----
+  let admSeriesCache = null;
+  async function admSeriesList(force) {
+    if (!admSeriesCache || force) {
+      try { admSeriesCache = (await api("admin-series")).series || []; } catch (_) { admSeriesCache = []; }
+    }
+    return admSeriesCache;
+  }
+  /** Fill a series <select>: «—» (an ordinary book) and every magazine; `value` is the selected id. */
+  async function fillSeriesSelect(sel, value) {
+    const list = await admSeriesList();
+    sel.innerHTML = '<option value="0">— هیچ (کتاب معمولی)</option>' + list.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join("");
+    sel.value = String(value || 0);
+    if (sel.value !== String(value || 0)) sel.value = "0";
+  }
+  async function loadSeriesAdmin() {
+    const list = await admSeriesList(true);
+    $("seriesAdmError").textContent = "";
+    $("seriesAdmList").innerHTML = list.length ? list.map(x => `<div class="admin-item series-adm-item" data-series-adm="${x.id}">
+        <span class="series-adm-head"><input class="admin-input" data-series-name value="${esc(x.name)}" maxlength="190" aria-label="نام مجله">
+          <span class="muted small">${faNum(x.issues)} شمارهٔ عمومی · ${faNum(x.issues_all)} کتاب در مجله · ${faNum(x.subscribers)} مشترک</span></span>
+        <span class="admin-row">
+          <button class="secondary-button" type="button" data-series-act="save">ذخیرهٔ نام</button>
+          <button class="secondary-button" type="button" data-series-act="subs" data-ico="users" aria-expanded="false">مشترک‌ها</button>
+          <button class="secondary-button" type="button" data-series-act="delete">حذف</button></span>
+        <div class="series-subs" hidden></div></div>`).join("")
+      : '<p class="muted">هنوز مجله‌ای نساخته‌ای.</p>';
+  }
+  $("seriesAddForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const name = $("seriesAddName").value.replace(/\s+/g, " ").trim();
+    if (!name) { $("seriesAddName").focus(); return; }
+    try {
+      await api("admin-series", { method: "POST", body: { name } });
+      $("seriesAddName").value = "";
+      seriesLoadedAt = 0;
+      await loadSeriesAdmin();
+      showToast("مجله ساخته شد.");
+    } catch (err) { $("seriesAdmError").textContent = err instanceof ApiFail && err.status === 409 ? "مجله‌ای با این نام هست." : apiMessage(err); }
+  });
+  $("seriesAdmList").addEventListener("click", async e => {
+    const btn = e.target.closest("[data-series-act]"), row = e.target.closest("[data-series-adm]");
+    if (!btn || !row) {
+      const save = e.target.closest("[data-subs-save]");
+      if (save && row) await saveSeriesSubs(row, save);
+      return;
+    }
+    const id = Number(row.dataset.seriesAdm), act = btn.dataset.seriesAct;
+    $("seriesAdmError").textContent = "";
+    if (act === "save") {
+      const name = row.querySelector("[data-series-name]").value.replace(/\s+/g, " ").trim();
+      if (!name) return;
+      try { await api("admin-series", { method: "POST", body: { id, name } }); seriesLoadedAt = 0; showToast("ذخیره شد."); await loadSeriesAdmin(); }
+      catch (err) { $("seriesAdmError").textContent = err instanceof ApiFail && err.status === 409 ? "مجله‌ای با این نام هست." : apiMessage(err); }
+    } else if (act === "delete") {
+      // Two steps instead of confirm(): the first click asks, the second deletes.
+      if (btn.dataset.armed !== "1") { btn.dataset.armed = "1"; btn.textContent = "مطمئنی؟ حذف کن"; return; }
+      try { await api("admin-series", { method: "POST", body: { action: "delete", id } }); seriesLoadedAt = 0; showToast("مجله حذف شد؛ شماره‌ها کتاب معمولی شدند."); await loadSeriesAdmin(); }
+      catch (err) { $("seriesAdmError").textContent = apiMessage(err); }
+    } else if (act === "subs") {
+      const box = row.querySelector(".series-subs");
+      if (!box.hidden) { box.hidden = true; btn.setAttribute("aria-expanded", "false"); return; }
+      box.hidden = false; btn.setAttribute("aria-expanded", "true");
+      box.innerHTML = '<p class="muted small">در حال بارگذاری…</p>';
+      try {
+        const [users, subs] = await Promise.all([api("users"), api("admin-series-subscribers", { query: `&id=${id}` })]);
+        const on = new Set(subs.user_ids || []);
+        const roleFa = r => r === "admin" ? "مدیر" : r === "student" ? "دانشجو" : "کاربر";
+        box.dataset.before = JSON.stringify([...on]);
+        box.innerHTML = `<div class="shelf-checks series-sub-checks">${users.users.map(u => `<label><input type="checkbox" data-sub-user="${u.id}" ${on.has(u.id) ? "checked" : ""}> ${esc(u.name)} <span class="muted small">· ${roleFa(u.role)}</span></label>`).join("")}</div>
+          <p class="muted small">کسی که این‌جا مشترک می‌شود آخرین شماره را همین حالا می‌گیرد. دانشجو فقط از این‌جا می‌تواند مشترک شود.</p>
+          <button class="primary-button" type="button" data-subs-save>ذخیرهٔ مشترک‌ها</button>`;
+      } catch (err) { box.innerHTML = `<p class="muted">${esc(apiMessage(err))}</p>`; }
+    }
+  });
+  async function saveSeriesSubs(row, btn) {
+    const id = Number(row.dataset.seriesAdm), box = row.querySelector(".series-subs");
+    const before = new Set(JSON.parse(box.dataset.before || "[]"));
+    const now = new Set([...box.querySelectorAll("[data-sub-user]:checked")].map(x => Number(x.dataset.subUser)));
+    const add = [...now].filter(x => !before.has(x)), del = [...before].filter(x => !now.has(x));
+    btn.disabled = true;
+    try {
+      if (add.length) await api("admin-series-subscribe", { method: "POST", body: { series_id: id, user_ids: add, subscribe: true } });
+      if (del.length) await api("admin-series-subscribe", { method: "POST", body: { series_id: id, user_ids: del, subscribe: false } });
+      showToast("مشترک‌ها ذخیره شدند.");
+      seriesLoadedAt = 0;
+      await loadSeriesAdmin();
+    } catch (err) { showToast(apiMessage(err)); btn.disabled = false; }
   }
   async function loadSettings() {
     try { $("settingApproval").checked = !!(await api("settings")).catalog_requires_approval; }
@@ -6259,6 +6559,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     const cp = getAdmImportCatsPicker();
     if (cp) cp.set([]);
     $("admImportUrlStatus").value = "approved";
+    fillSeriesSelect($("admImportUrlSeries"), 0); // v8.14
     $("admImportUrlAddUser").checked = true;
     $("admImportUrlClean").checked = true;
     $("admImportUrlError").hidden = true;
@@ -6301,6 +6602,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     const cp = getAdmImportCatsPicker();
     const categories = cp ? cp.get() : [];
     const status = $("admImportUrlStatus").value;
+    const series_id = Number($("admImportUrlSeries").value) || 0;
     const add_to_library = $("admImportUrlAddUser").checked;
     const clean = $("admImportUrlClean").checked;
 
@@ -6313,6 +6615,7 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
           author: author || undefined,
           description: description || undefined,
           categories: categories.length ? categories : undefined,
+          series_id: series_id || undefined,
           status,
           add_to_library,
           clean,
@@ -6422,6 +6725,12 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
       $("admDetailLegacyCat").textContent = cat ? `دستهٔ قدیمی (متنی): ${cat}` : "";
     }
     $("admDetailCatalogNote").hidden = inCatalog;
+    // v8.14: the magazine (catalog books only; book-meta has no series). An approved book added now is a back issue.
+    const ssel = f.elements.series_id;
+    ssel.disabled = !inCatalog;
+    fillSeriesSelect(ssel, b.series_id || 0);
+    const syncNote = () => { $("admDetailSeriesNote").hidden = !(st === "approved" && !(b.series_id > 0) && Number(ssel.value) > 0); };
+    ssel.onchange = syncNote; syncNote();
     $("admDetailDownload").href = `${API}?r=book-file&id=${b.id}`;
   }
   $("admDetailClose").addEventListener("click", () => $("admDetail").close());
@@ -6529,11 +6838,13 @@ ${directPublisher ? `ناشر کشف‌شده در فایل: «${directPublisher
     const body = { book_id: b.id };
     for (const k of fields) body[k] = v(k);
     if (inCatalog && tree) body.categories = admDetailPicker.get();
+    if (inCatalog && f.elements.series_id.options.length) body.series_id = Number(f.elements.series_id.value) || 0;
     $("admDetailSave").disabled = true;
     try {
       await api(inCatalog ? "catalog-update" : "book-meta", { method: "POST", body });
       for (const k of fields) b[k] = body[k];
       if (body.categories) b.categories = body.categories.map(catObj).filter(Boolean);
+      if (typeof body.series_id === "number") b.series_id = body.series_id;
       showToast("ذخیره شد.");
       $("admDetail").close();
       if (adm.tab === "books") admRenderBooks(); else if (adm.tab === "queue") renderQueue();

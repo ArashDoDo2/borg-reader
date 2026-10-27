@@ -810,12 +810,14 @@ function handle_admin_route(string $route): bool {
             $desc = array_key_exists('description', $d) ? str_param($d, 'description', 2000, false) : null;
             $category = opt_str_param($d, 'category', 80);
             $catIds = category_ids_param($d); // wins over the legacy `category` name when both are sent
+            $seriesId = series_id_param($d); // v8.14; attaching an approved book makes it a back issue (not delivered)
             $cols = book_meta_from($d);
             if (array_key_exists('title', $d)) $cols['title'] = str_param($d, 'title', 500);
             if (array_key_exists('author', $d)) $cols['author'] = str_param($d, 'author', 300, false);
             if ($desc !== null) q('UPDATE catalog SET description = ? WHERE book_id = ?', [$desc, $bookId]);
             if ($catIds !== null) set_book_categories($bookId, $catIds);
             elseif ($category !== null) set_book_categories($bookId, $category === '' ? [] : [category_find_or_create($category, 0)]);
+            if ($seriesId !== null) set_book_series($bookId, $seriesId);
             update_book_cols($bookId, $cols);
             json_out(200, ['ok' => true]);
 
@@ -883,6 +885,7 @@ function handle_admin_route(string $route): bool {
             if (!in_array($status, ['approved', 'pending', 'none'], true)) {
                 fail(400, 'bad_status', 'وضعیت نامعتبر است.');
             }
+            $seriesId = series_id_param($d); // v8.14 magazine issue
             $addToLibrary = !isset($d['add_to_library']) || !empty($d['add_to_library']);
             $autoClean = !isset($d['clean']) || !empty($d['clean']);
 
@@ -949,6 +952,7 @@ function handle_admin_route(string $route): bool {
                 if ($addToLibrary) {
                     insert_ignore('user_books', ['user_id' => $s['id'], 'book_id' => $bookId, 'added_at' => time()]);
                 }
+                if ($seriesId !== null) set_book_series($bookId, $seriesId); // before the catalog row: its approval delivers
 
                 if ($status !== 'none') {
                     $cur = one('SELECT status FROM catalog WHERE book_id = ?', [$bookId]);

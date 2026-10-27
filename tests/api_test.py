@@ -697,7 +697,7 @@ def run_migration7():
         st2, L = a.call("GET", "library")
         bk = next((x for x in L.get("books", []) if x["id"] == bid), {})
         st3, body, hd = raw_get(a, "book-file", f"&id={bid}")
-        check("migrations 7 and 8 applied on an existing database", "format" not in cols and "search_key" not in cols and h.get("schema_version") == 9, f"{cols} {h.get('schema_version')}")
+        check("migrations 7 and 8 applied on an existing database", "format" not in cols and "search_key" not in cols and h.get("schema_version") == 10, f"{cols} {h.get('schema_version')}")
         check("migration 7: existing book reads as format epub and its file is still served", bk.get("format") == "epub" and st3 == 200
               and body == epub and hd.get("Content-Type") == "application/epub+zip", f"{bk} {st3}")
         db = sqlite3.connect(tmp2 / "old.sqlite")
@@ -1037,12 +1037,12 @@ def run_large_catalog():
         st, r = user.call("GET", "catalog")
         check("catalog without page: unchanged full response", st == 200 and set(r) == {"books"} and sorted(b["id"] for b in r["books"]) == sorted(appr)
               and set(r["books"][0]) == {"id", "sha256", "size", "title", "author", "language", "publisher", "published", "has_cover", "format",
-                                         "description", "category", "categories", "submitter", "in_library"}, str(sorted(r.get("books", [{}])[0]))[:300])
+                                         "description", "category", "categories", "submitter", "in_library", "series_id"}, str(sorted(r.get("books", [{}])[0]))[:300])
         full_new = [b["id"] for b in r["books"]]
         st, r = user.call("GET", "catalog", query="&page=1&per=5")
         check("catalog page: total, page, per, same book fields", st == 200 and r["total"] == len(appr) and r["page"] == 1 and r["per"] == 5
               and len(r["books"]) == 5 and set(r["books"][0]) == {"id", "sha256", "size", "title", "author", "language", "publisher", "published",
-              "has_cover", "format", "description", "category", "categories", "submitter", "in_library"}, str({k: r.get(k) for k in ("total", "page", "per")}))
+              "has_cover", "format", "description", "category", "categories", "submitter", "in_library", "series_id"}, str({k: r.get(k) for k in ("total", "page", "per")}))
         st, r = user.call("GET", "catalog", query="&page=1")
         check("catalog page: per defaults to 24", r["per"] == 24 and len(r["books"]) == min(24, len(appr)))
         st, r = user.call("GET", "catalog", query="&page=1&per=1000")
@@ -1136,7 +1136,7 @@ def run_migration9():
         st, h = a.call("GET", "health")
         st2, r = a.call("GET", "categories")
         C = r.get("categories", [])
-        check("migration 9 applied on an existing database", h.get("schema_version") == 9, str(h.get("schema_version")))
+        check("migration 9 applied on an existing database", h.get("schema_version") == 10, str(h.get("schema_version")))
         check("migration 9: distinct non-empty strings become top-level categories (trimmed) with counts",
               sorted((c["name"], c["parent_id"], c["count"]) for c in C) == [("رمان", 0, 2), ("شعر", 0, 1)], str(C))
         byname = {c["name"]: c["id"] for c in C}
@@ -1732,11 +1732,161 @@ def run(base, tmp):
     run_large_catalog()
     run_categories()
     run_student_role(base, tmp, admin, user)
+    run_series()
 
     st, r = anon.call("GET", "nope")
     check("unknown route 404", st == 404)
     st, r = anon.call("GET", "login")
     check("wrong method 405", st == 405)
+
+def run_series():
+    """v8.14 (ADR 0011, migration 10): magazine series, subscriptions, delivery of approved issues to subscribers."""
+    tmp5 = Path(tempfile.mkdtemp(prefix="borg-series-"))
+    proc, base = start_php(tmp5, dsn=f"sqlite:{tmp5 / 'series.sqlite'}")
+    try:
+        admin, sub, other, anon = Client(base), Client(base), Client(base), Client(base)
+        admin.call("POST", "setup", {"setup_key": SETUP_KEY, "email": "sa@x.io", "password": "password1", "name": "مدیر"})
+        def register(c, email, role=None):
+            body = {"note": email} | ({"role": role} if role else {})
+            code = admin.call("POST", "invites", body)[1]["code"]
+            return c.call("POST", "register", {"invite": code, "email": email, "password": "password2", "name": email})[1]["user"]["id"]
+        sub_id, other_id = register(sub, "sub@x.io"), register(other, "other@x.io")
+        student = Client(base); student_id = register(student, "stu@x.io", "student")
+        st, h = anon.call("GET", "health")
+        check("series: migration 10 applied", h.get("schema_version", 0) >= 10, str(h.get("schema_version")))
+        n = [0]
+        def book(c=None, title=None):
+            n[0] += 1
+            st, r = upload(c or admin, tiny_epub(tmp5 / f"s{n[0]}.epub", 3000 + n[0]), title or f"شماره {n[0]}")
+            return r["book"]["id"]
+        def lib(c): return {b["id"]: b for b in c.call("GET", "library")[1]["books"]}
+        def submit(bid, **kw): return admin.call("POST", "catalog-submit", {"book_id": bid, **kw})
+
+        # ---- permissions ----
+        codes = [sub.call("GET", "admin-series")[0], sub.call("POST", "admin-series", {"name": "x"})[0],
+                 sub.call("POST", "admin-series-subscribe", {"series_id": 1, "user_ids": [sub_id], "subscribe": True})[0],
+                 sub.call("GET", "admin-series-subscribers", query="&id=1")[0],
+                 anon.call("GET", "series")[0], anon.call("POST", "series-subscribe", {"series_id": 1})[0],
+                 admin.call("POST", "admin-series", {"name": "x"}, csrf=False)[0], sub.call("POST", "series-subscribe", {"series_id": 1, "subscribe": True}, csrf=False)[0]]
+        check("series: admin routes 403 for users, 401 anonymous, CSRF required", codes == [403, 403, 403, 403, 401, 401, 403, 403], str(codes))
+
+        # ---- admin CRUD ----
+        st, r = admin.call("POST", "admin-series", {"name": "  هفته‌نامهٔ   آزمایشی ", "description": "هر شنبه"})
+        mag = r["series"]["id"] if st == 200 else 0
+        check("admin-series: create (spaces collapsed)", st == 200 and r["series"]["name"] == "هفته‌نامهٔ آزمایشی" and r["series"]["issues"] == 0 and r["series"]["latest"] is None, str(r))
+        st2, r2 = admin.call("POST", "admin-series", {"name": "هفته‌نامهٔ آزمایشی"})
+        st3, _ = admin.call("POST", "admin-series", {"name": ""})
+        st4, r4 = admin.call("POST", "admin-series", {"name": "ماهنامه"})
+        mag2 = r4["series"]["id"]
+        st5, _ = admin.call("POST", "admin-series", {"id": mag2, "name": "هفته‌نامهٔ آزمایشی"})
+        st6, r6 = admin.call("POST", "admin-series", {"id": mag2, "name": "ماهنامهٔ تازه"})
+        check("admin-series: duplicate name 409, empty name 400, rename", st2 == 409 and st3 == 400 and st5 == 409 and st6 == 200 and r6["series"]["name"] == "ماهنامهٔ تازه", f"{st2} {st3} {st5} {st6}")
+
+        # ---- an issue before anyone subscribes; subscribing adds only the latest approved one ----
+        i1 = book(); submit(i1, series_id=mag)
+        i2 = book(); submit(i2, series_id=mag)
+        admin.call("POST", "settings", {"catalog_requires_approval": True})
+        st, r = sub.call("GET", "series")
+        S = {x["id"]: x for x in r["series"]}
+        check("GET series: issue count and latest approved issue, not subscribed yet",
+              st == 200 and S[mag]["issues"] == 2 and S[mag]["latest"]["id"] == i2 and S[mag]["subscribed"] is False and S[mag]["latest"]["series_id"] == mag, str(S.get(mag)))
+        check("issues sent before a subscription reach nobody", i1 not in lib(sub) and i2 not in lib(sub))
+        st, r = sub.call("POST", "series-subscribe", {"series_id": mag, "subscribe": True})
+        L = lib(sub)
+        check("subscribe: only the latest issue is added, marked series_id", st == 200 and r["series"]["subscribed"] is True and i2 in L and i1 not in L and L[i2]["series_id"] == mag, str(sorted(L)))
+        st, r = sub.call("GET", "series-issues", query=f"&id={mag}")
+        iss = r.get("issues", [])
+        check("series-issues: approved issues newest first with in_library", st == 200 and [x["id"] for x in iss] == [i2, i1] and [x["in_library"] for x in iss] == [True, False], str([(x["id"], x["in_library"]) for x in iss]))
+        st, _ = sub.call("POST", "catalog-add", {"book_id": i1})
+        check("a back issue is added with catalog-add", st == 200 and i1 in lib(sub))
+
+        # ---- delivery on each approval path ----
+        i3 = book(); submit(i3, series_id=mag)  # admin submit (auto-approved)
+        check("delivery: admin catalog-submit with series_id reaches the subscriber, not others", i3 in lib(sub) and i3 not in lib(other))
+        # user submit -> pending; admin puts it in the series while pending; review approve delivers it
+        ub = book(other, "شمارهٔ کاربر")
+        other.call("POST", "catalog-submit", {"book_id": ub, "series_id": mag})  # ignored for non-admins
+        st, cu = admin.call("POST", "catalog-update", {"book_id": ub, "series_id": mag})
+        check("delivery: a pending issue is not delivered", st == 200 and ub not in lib(sub))
+        admin.call("POST", "catalog-review", {"book_id": ub, "approve": True})
+        check("delivery: catalog-review approval delivers it", ub in lib(sub))
+        # rejected issue reaches no one
+        rb = book(other, "ردشده"); other.call("POST", "catalog-submit", {"book_id": rb})
+        admin.call("POST", "catalog-update", {"book_id": rb, "series_id": mag})
+        admin.call("POST", "catalog-review", {"book_id": rb, "approve": False})
+        check("delivery: a rejected issue reaches no one", rb not in lib(sub))
+        # api-book with a key that skips review, series by name (created when missing)
+        st, r = admin.call("POST", "api-token-create", {"name": "مجله"}); tok = r["token"]
+        st, r = admin.call("POST", "api-token-create", {"name": "مجله با بازبینی", "require_review": True}); tok_rev = r["token"]
+        st, r = api_book(base, tok, {"series": "هفته‌نامهٔ آزمایشی"}, ("w4.epub", tiny_epub(tmp5 / "w4.epub", 3900).read_bytes()))
+        a1 = r.get("book", {}).get("id")
+        check("delivery: api-book with series (no review) is delivered", st == 201 and r["book"]["series_id"] == mag and a1 in lib(sub), str(r)[:200])
+        st, r = api_book(base, tok, {"series": "فصلنامهٔ نو"}, ("w5.epub", tiny_epub(tmp5 / "w5.epub", 3901).read_bytes()))
+        names = {x["name"]: x["id"] for x in admin.call("GET", "admin-series")[1]["series"]}
+        check("api-book: an unknown series name creates the series", st == 201 and "فصلنامهٔ نو" in names and r["book"]["series_id"] == names["فصلنامهٔ نو"], str(names))
+        st, r = api_book(base, tok_rev, {"series": "هفته‌نامهٔ آزمایشی"}, ("w6.epub", tiny_epub(tmp5 / "w6.epub", 3902).read_bytes()))
+        a2 = r.get("book", {}).get("id")
+        check("delivery: api-book with a reviewing key stays pending, not delivered", st == 201 and r["catalog_status"] == "pending" and a2 not in lib(sub), str(r)[:200])
+        st, r = admin.call("POST", "admin-bulk", {"action": "approve", "ids": [a2]})
+        check("delivery: admin-bulk approve delivers it", st == 200 and a2 in lib(sub), str(r))
+        # admin-bulk add_catalog approves a book directly
+        nb_s = book()
+        st, r = admin.call("POST", "admin-bulk", {"action": "add_catalog", "ids": [nb_s]})
+        check("a book approved without a series reaches no one", nb_s not in lib(sub))
+        # ---- back issues: attaching an already approved book does not deliver it ----
+        st, _ = admin.call("POST", "catalog-update", {"book_id": nb_s, "series_id": mag})
+        check("back issue: attaching an approved book to the series does not deliver it", st == 200 and nb_s not in lib(sub))
+        st, r = sub.call("GET", "series-issues", query=f"&id={mag}")
+        check("back issue: it is listed among the issues to add", nb_s in [x["id"] for x in r["issues"]])
+        # idempotent: removed from the catalog and approved again -> not delivered twice (user removed it meanwhile)
+        sub.call("POST", "library-remove", {"book_id": i3})
+        admin.call("POST", "admin-bulk", {"action": "remove_catalog", "ids": [i3]})
+        admin.call("POST", "admin-bulk", {"action": "add_catalog", "ids": [i3]})
+        check("an issue is delivered at most once (re-approval does not send it again)", i3 not in lib(sub))
+
+        # ---- unsubscribe keeps received issues, stops new ones ----
+        before = set(lib(sub))
+        st, r = sub.call("POST", "series-subscribe", {"series_id": mag, "subscribe": False})
+        i9 = book(); submit(i9, series_id=mag)
+        after = set(lib(sub))
+        check("unsubscribe: received issues stay, new ones stop", st == 200 and r["series"]["subscribed"] is False and before <= after and i9 not in after, f"{sorted(before - after)} {i9 in after}")
+
+        # ---- students: no catalog side; an admin can subscribe them ----
+        st1, r1 = student.call("GET", "series")
+        st2, _ = student.call("POST", "series-subscribe", {"series_id": mag, "subscribe": True})
+        st3, _ = student.call("GET", "series-issues", query=f"&id={mag}")
+        check("student: series list empty, cannot subscribe or list issues", st1 == 200 and r1 == {"series": []} and st2 == 403 and st3 == 403, f"{st1} {r1} {st2} {st3}")
+        st, r = admin.call("POST", "admin-series-subscribe", {"series_id": mag, "user_ids": [student_id, other_id], "subscribe": True})
+        st_l, lst = admin.call("GET", "admin-series-subscribers", query=f"&id={mag}")
+        check("admin subscribes a student and a user (latest issue added)", st == 200 and r["subscribers"] == 2 and sorted(lst["user_ids"]) == sorted([student_id, other_id]) and i9 in lib(student), str(r))
+        i10 = book(); submit(i10, series_id=mag)
+        got = i10 in lib(student)  # the sync (library) delivers first, as in the app
+        st, _, _ = raw_get(student, "book-file", f"&id={i10}")
+        check("student gets the next issue and may download it", got and st == 200, str(st))
+        # An admin cleans an issue (book-replace): the new copy stays in the magazine and is not delivered again.
+        other.call("POST", "library-remove", {"book_id": i10})
+        st, r = upload(admin, make_variant(tmp5, "i10-clean"), "شمارهٔ پاک‌شده")
+        nv = r["book"]["id"]
+        st, r = admin.call("POST", "book-replace", {"old_book_id": i10, "new_book_id": nv})
+        Ls, Lo = lib(student), lib(other)
+        check("book-replace of an issue: the new copy keeps series_id, moves to subscribers, is not sent again",
+              st == 200 and r["catalog_moved"] and r["book"]["series_id"] == mag and nv in Ls and i10 not in Ls and nv not in Lo, f"{st} {r} {sorted(Lo)}")
+        i10 = nv
+        st, _ = admin.call("POST", "admin-series-subscribe", {"series_id": mag, "user_ids": [999999], "subscribe": True})
+        st2, _ = admin.call("POST", "admin-series-subscribe", {"series_id": mag, "user_ids": [], "subscribe": True})
+        check("admin-series-subscribe: unknown user 404, empty list 400", st == 404 and st2 == 400, f"{st} {st2}")
+        st, _ = admin.call("POST", "catalog-update", {"book_id": i10, "series_id": 987654})
+        check("unknown series_id is refused (404)", st == 404)
+
+        # ---- delete a series: issues stay as ordinary books, subscriptions go ----
+        st, _ = admin.call("POST", "admin-series", {"action": "delete", "id": mag})
+        L = lib(student)
+        st2, r2 = admin.call("GET", "admin-series")
+        check("delete series: books stay with series_id 0, series gone", st == 200 and i10 in L and L[i10]["series_id"] == 0 and mag not in [x["id"] for x in r2["series"]], str(L.get(i10)))
+        st, _ = admin.call("POST", "admin-series", {"action": "delete", "id": mag})
+        check("delete series twice -> 404", st == 404)
+    finally:
+        proc.terminate(); proc.wait(5); shutil.rmtree(tmp5, ignore_errors=True)
 
 def run_admin_import_url(base, admin, user):
     anon = Client(base)

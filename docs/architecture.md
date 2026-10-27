@@ -1,6 +1,6 @@
 # Architecture — Borg (بُرگ)
 
-Status: describes the code in `src/` as of v8.13.34 (2026-10-27). Project status and open items: `docs/context/status.md`;
+Status: describes the code in `src/` as of v8.14.0 (2026-10-28). Project status and open items: `docs/context/status.md`;
 reader pitfalls: `docs/context/reader-engine-notes.md`. Product goals, roadmap and ideas live in the
 private product spec (not in this repo); this file is the technical source of truth.
 
@@ -47,7 +47,9 @@ v8.8 PDFs are records in the same store with optional `format: "pdf"` (absent = 
 and author come from the PDF info dictionary (`Title`/`Author`, else file name / «نویسنده نامشخص»), `cover` is page 1
 as a JPEG data URL. Their progress `cfi` is `pdf:<page>` (first visible page) with `percentage` = last visible page /
 pages × 100; page bookmarks are `annotations` with `cfi: "pdf:<page>"`. No `DB_VERSION` change.
-Books also carry `serverId`, `catalogStatus`, reading `status` and `shelves` when synced. When a browser refuses to
+Books also carry `serverId`, `catalogStatus`, reading `status` and `shelves` when synced.
+v8.14 magazines (§4i): `seriesId` (0 = an ordinary book), `remoteFile: true` with `file: null` for an issue whose file
+is still on the server, and `openedAt` (ms, set by `openReader`, used by the 14-day removal). No `DB_VERSION` change. When a browser refuses to
 store Blobs, `file` is null and `fileBuffer` (ArrayBuffer) + `fileName` are stored instead (`fileOf()`).
 v8.3 text cleanup adds `sourceHash` (SHA-256 of the file as first imported, so re-importing the original is still a
 duplicate), `cleanedAt`, and for synced books `cleanPending` (new file not yet swapped in on the server) +
@@ -325,6 +327,33 @@ Books reach a student through the admin's assign action (§4e) or the student's 
 tab and redirects `#catalog…` hashes for students, labels the account «🎓 دانشجو», and hides the «ثبت در کتابخانهٔ عمومی»
 book option. Admins keep full access; `user` is unchanged.
 
+## 4i. Magazines and subscriptions (v8.14, ADR 0011)
+- **Server:** `series` (a magazine), `series_subscriptions` (user ↔ series), `books.series_id` (0 = not an issue) and
+  `series_deliveries` (issues already handled), migration 10. `lib/series.php` holds the routes and helpers.
+  `deliver_issues()` runs at the start of `library` (every sync) and of the series routes: every approved issue
+  without a `series_deliveries` row is marked and added to each subscriber's `user_books`, in one transaction. Because
+  it works from state, every approval path delivers the same way, and each issue is delivered at most once. Attaching
+  an already approved book to a series (`set_book_series`) marks it handled: it is a back issue and reaches no one.
+  An admin `book-replace` that moves the catalog entry copies `series_id` and the delivered mark to the new row.
+- **Routes:** `series` (list with issue count, latest approved issue and `subscribed`; empty for a student),
+  `series-issues&id=` (approved issues, newest first, with `in_library`), `series-subscribe {series_id, subscribe}`
+  (subscribing also adds the latest approved issue; not for a student), admin `admin-series` (GET list with
+  `subscribers`/`issues_all`; POST save `{id?, name, description}` or `{action: "delete", id}` — the issues stay as
+  ordinary books), `admin-series-subscribers&id=`, `admin-series-subscribe {series_id, user_ids, subscribe}` (any
+  role, a student included). Series are chosen with `series_id` in `catalog-submit` (admins), `catalog-update` and
+  `admin-import-url`, and by name with `series` in `api-book` (created when missing). `book_out` gains `series_id`.
+- **Client:** `sync()` stores a server book with `series_id > 0` that is not on the device through `storeRemoteIssue`:
+  title, cover, hash and `remoteFile: true`, no file. `openReader` refuses such a record offline with a toast; online,
+  `fetchRemoteFile` downloads `book-file` («در حال دریافت شماره…» on the opening indicator), stores it on the record and
+  opens it. `evictStaleIssues()` runs after every successful sync. It removes the file of each issue last opened more
+  than 14 days ago (`openedAt`, else `addedAt`) and turns the record back into `remoteFile`. It skips issues on a live
+  shelf, the issue on screen, issues without `serverId`, and issues with a pending cleanup. Cards of issues without
+  a file show a `cloud` badge (bottom corner of the cover) and «دریافت هنگام بازکردن». Catalog: a «مجله‌ها» row above
+  the showcase (`#seriesSection`, hidden while searching/filtering) and the magazine page `#viewSeries`
+  (`#catalog/series/ID`), with subscribe/unsubscribe and the issues (back issues via «افزودن» = `catalog-add`). Admin: a
+  «مجله‌ها» tab (create, rename, delete after a second click, subscribers checklist with roles), and series pickers in
+  the catalog submit dialog (admins), «دریافت با لینک» and the book editor (catalog books only).
+
 ## 4b. Reader engine (v8)
 Details and history of each workaround: `docs/context/reader-engine-notes.md`.
 - **Open sequence:** read file → `ePub(bytes)` → `detectBookDirection()` sets `bookDir` (ADR 0008) →
@@ -427,9 +456,10 @@ Versioning: bump `app-version` and `app-released` metas, footer text in `index.h
 Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is untouched; migrations are additive).
 
 ## 7. Testing
-- `tests/api_test.py` (430 checks): PHP built-in server + SQLite via `BORG_CONFIG`; auth, CSRF, rate limits,
-  upload/dedupe, permissions, progress, annotations, shelves, stats, catalog moderation, admin, migrations.
-- `tests/e2e_test.py` (~540 checks, 32 sections): serves `src/` under `/borg/` with `php -S` and a SQLite config, blocks every
+- `tests/api_test.py` (~460 checks): PHP built-in server + SQLite via `BORG_CONFIG`; auth, CSRF, rate limits,
+  upload/dedupe, permissions, progress, annotations, shelves, stats, catalog moderation, admin, migrations; v8.14
+  `run_series` (own server): magazines, subscriptions, delivery on every approval path.
+- `tests/e2e_test.py` (~600 checks, 36 sections; section 36, v8.14 magazines, starts its own server): serves `src/` under `/borg/` with `php -S` and a SQLite config, blocks every
   non-local request. Covers import, render, TOC, fonts in the iframe, paging, progress, annotations, settings,
   persistence, offline, corrupt files, mobile layout, keyboard, edge taps, swipe (CDP touch), immersive mode,
   accounts/sync between two browsers, catalog/admin, v8 reading features, v8.1 catalog page and preview, and
@@ -493,7 +523,8 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   `admin-stats users user-update user-reset-password user-delete invite-revoke catalog-all catalog-update
   books-all admin-books admin-bulk book-delete settings client-error errors errors-clear`, v8.13: `admin-import-url
   admin-assign-book admin-book-users` (admin.php); `categories category-save category-delete category-order` (v8.10); `api-tokens api-token-create
-  api-token-revoke clean-rules api-book` (apibook.php, v8.7; cleanup engine in clean.php).
+  api-token-revoke clean-rules api-book` (apibook.php, v8.7; cleanup engine in clean.php); v8.14: `series series-issues
+  series-subscribe admin-series admin-series-subscribers admin-series-subscribe` (series.php, §4i).
 - **Import by URL (`admin-import-url`, v8.13.0, admin + CSRF):** `validate_safe_download_url` resolves the host and refuses
   private/reserved ranges, loopback and link-local addresses (SSRF guard); the download (curl, `CURLOPT_FOLLOWLOCATION`
   off, redirects re-validated and capped at 5, 45 s timeout, `max_book_bytes` cap) goes to `upload_dir()`; the format is
@@ -526,6 +557,10 @@ Rollback: revert the commit on `main` and push (data in IndexedDB and MySQL is u
   `book-replace`'s `UPDATE catalog SET book_id`). Data step (idempotent, `NOT EXISTS`-guarded): `catalog.category` is
   trimmed, every distinct non-empty value becomes a top-level category and its rows are linked. `catalog.category` is
   kept as a mirror: always the top-level name of the book's first category (display order), `''` when none.
+  Migration 10 (v8.14 magazines, ADR 0011) adds `series` (id, name ≤190 unique, description ≤2000, created_by,
+  created_at), `series_subscriptions` (user_id, series_id, subscribed_at, added_by; PK both, index on series_id,
+  cascading on user/series delete), `books.series_id` INTEGER `NOT NULL DEFAULT 0` (index `books_series`) and
+  `series_deliveries` (book_id PK cascading, delivered_at).
 - **Auth:** invite-only. First admin via `setup` (needs `setup_key`, only while no users exist). Session token in an
   HttpOnly/Secure/SameSite=Lax cookie scoped to the app path; DB stores only its SHA-256. Mutating routes need the
   per-session CSRF token in `X-CSRF-Token`; JSON routes reject non-JSON bodies. Login/register/setup are rate limited.

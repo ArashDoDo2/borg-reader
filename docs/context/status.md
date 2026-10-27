@@ -1,6 +1,6 @@
 # Project status — Borg (بُرگ)
 
-Last updated: 2026-10-27, version **8.13.34** (8.13.33 live at https://parsun.com/borg/).
+Last updated: 2026-10-28, version **8.14.0** (8.13.34 live at https://parsun.com/borg/).
 Read this first when picking the project up. Technical detail is in `docs/architecture.md`; reader pitfalls in
 `docs/context/reader-engine-notes.md`.
 
@@ -11,7 +11,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 - Server: shared cPanel host `parsun.com`, user `parsunco`, PHP 8.4, MySQL. Config in
   `/home/parsunco/borg-config/config.php`; book files in `~/borg-storage`; repo clone in
   `/home/parsunco/repositories/borg-reader`.
-- Tests: API 401 checks, e2e 537 checks (Chromium), WebKit e2e (Safari engine, gates the deploy) — all green.
+- Tests (8.14.0): API 460 checks, e2e 605 checks (Chromium), WebKit e2e 30 checks (Safari engine, gates the deploy) — all green.
 
 ## Version history (what each release added)
 | Version | Highlights |
@@ -97,6 +97,7 @@ Read this first when picking the project up. Technical detail is in `docs/archit
 | 8.13.32 | Reader input, measured on Chromium (desktop 1280 px two-page spread, phone 390 px): **(a) quick page turns** — 5 quick taps turned 2 pages (a 650 ms "duplicate" window in `onTouchEnd` dropped real taps; synthetic clicks are already handled by state since 8.13.25), 5 quick mouse clicks turned 2 spreads (the 2nd click of a double click selected a word and `handleTap` only cleared it). Now every tap counts, and `onReaderMouseDown` blocks double-click word selection in the edge zones only (book frame and PDF stage). **(b) margin «زیاد»:** swipes starting in the margin around the book frame did nothing (the `#viewer` fallback handled taps only); it now uses the same `onTouchStart`/`onTouchEnd` as the text. **(c)** tap slop 48 → 24 px (`TAP_SLOP_PX`). **(d)** e2e §33: AI companion against a mocked Gemini (key setup, streamed summary with the chapter text, cache, save as note, invalid-key error, no external requests). e2e §6/§7 regression checks fail on 8.13.31 | |
 | 8.13.33 | Visual pass items 4–6 (owner left the font choice to the agent). **Display font:** Mirza 700 (OFL, bundled Arabic + Latin, 41+13 KB; Arabic precached) for the brand, welcome headline, «کتابخانه», the now-reading title, book page title, empty state and generated-cover titles — chosen over Markazi Text (too close to the current look), Lalezar/Kufam (heavy), Aref Ruqaa/Gulzar (calligraphic, hard on long titles) and Reem Kufi (its package lacks Persian letters) after rendering all of them with the app's own headings. **Book feel (EPUB, paginated):** soft page-edge shading, spine shadow on the two-page spread (`is-paged`/`is-spread` on `#reader`, from epub.js `layout.divisor`), faint warm paper grain in sepia on the page and its margin (`PAPER_GRAIN`, one definition), earlier chapters muted and ticked in the TOC (`toc-read`, EPUB and PDF). **Details:** library skeleton while loading (only if it takes > 0.2 s), 7-day bars in the stats (today on the left, highlighted; on phones in the goal row). e2e §34, webkit font check | — owner's look |
 | 8.13.34 | «اولین تجربه» item A (owner: registration stays invite-only for now). Choosing **one** EPUB/PDF opens it at once, logged in or not (file picker, drag-and-drop, share target, «باز کردن با»); the same file again opens the existing copy with «این کتاب قبلاً در کتابخانه‌ات بود؛ همان را باز کردم.»; several files are only added. Root-cause fix found by the new path: closing the reader while epub.js was still opening a book threw inside epub.js (`'package'`/`'navigation'`/`'length'`/`'content'` of undefined, also seen in the server error log) — `retireBook()` stops the rendition and locations queues and destroys the book only after `book.ready` and once no `book.load()` is in flight (`trackBookLoads`). Tests: e2e section 35 (first visit, duplicate, multi-file, close at 0–320 ms then reopen); single-file imports in older sections close the reader that now opens. |
+| 8.14.0 | **Magazine subscriptions** (owner's idea and decisions, ADR 0011). Migration 10: `series`, `series_subscriptions`, `books.series_id`, `series_deliveries`; `lib/series.php`. A new issue reaches every subscriber's library once it is **approved** in the catalog (from `api-book` with `series`, or admin upload/«دریافت با لینک» with a series picked); delivery is state-driven (`deliver_issues()` on every sync), so every approval path works and an issue is delivered once; a book attached to a series after approval is a back issue. Subscribing (catalog magazine page, `#catalog/series/ID`) adds the latest issue, earlier ones can be added from the page; unsubscribing keeps received issues; admins subscribe users (students only this way) in a new «مجله‌ها» tab. Issues arrive **without their file** (cloud badge, «دریافت هنگام بازکردن»); the first open downloads it (refused offline with a message); the file is removed from the device **14 days after the last open** (card, position and notes stay; shelved issues and the one on screen are kept). Tests: `api_test.py` `run_series`, e2e section 36 (own server), WebKit `magazine_phone`. |
 
 ## Open items (not started unless the owner says so)
 1. **Server setting (owner, said 2026-10-26 he will do it later):** production health (2026-10-20): PHP 8.4.26, zip/dom on,
@@ -130,3 +131,9 @@ quick taps/clicks dropping page turns, 48 px tap slop, no tests for the AI compa
 - PDFs open directly in their layout, no conversion (ADR 0009). Reading direction is per book, auto + manual (ADR 0008).
 - Scale target: ~2,000–3,000 books a year (8.9 server paging everywhere).
 - Categories: two levels, several per book, admin-managed list, API creates missing ones (ADR 0010).
+- Magazines (ADR 0011, 2026-10-27): issues from `api-book` and admin upload, delivered only after catalog approval; users
+  subscribe from the magazine page, admins can subscribe anyone (students only this way); subscribing adds the latest
+  issue, earlier ones are chosen by the user; unsubscribing keeps received issues; issues arrive without their file, the
+  first open downloads it; the file is removed 14 days after the last open unless the issue is on a shelf (half-read
+  issues are removed too — the owner's call). No push notifications.
+- Registration stays invite-only for now (2026-10-27); personal reading needs no account (8.13.34).

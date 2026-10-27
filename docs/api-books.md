@@ -45,6 +45,7 @@ If the host strips the `Authorization` header, send `-H "X-Borg-Token: borg_…"
 | `language`, `publisher`, `published` | ≤ 20 / 300 / 40 | اگر نباشد از OPF (`dc:date` → `YYYY-MM-DD`)؛ برای PDF فقط از درخواست / PDF: request only |
 | `category` | ≤ 2000 | دسته‌های کاتالوگ (پایین را ببینید) / catalog categories (see below) |
 | `description` | ≤ 2000 | توضیح در کاتالوگ / catalog description |
+| `series` | ≤ 190 | v8.14: نام مجله؛ کتاب یک شمارهٔ آن مجله می‌شود (پایین را ببینید) / magazine name; the book becomes one of its issues (see below) |
 
 **دسته‌ها / Categories.** دسته‌ها دو سطح دارند (دسته ← زیردسته) و هر کتاب می‌تواند چند دسته (حداکثر ۱۰) داشته باشد.
 در `category` چند مسیر را با `;` یا خط تازه جدا کنید؛ هر مسیر `دسته/زیردسته` یا فقط `دسته` است (`›` و `>` هم جداکننده‌اند،
@@ -58,6 +59,19 @@ catalog, a non-empty `category` replaces its categories.
 ```sh
 curl -H "Authorization: Bearer borg_…" -F file=@book.epub \
      -F "category=ادبیات/رمان; تاریخ › ایران" \
+     "https://parsun.com/borg/api/index.php?r=api-book"
+```
+
+**مجله‌ها / Magazines (v8.14, ADR 0011).** با `series` کتاب شمارهٔ آن مجله می‌شود؛ مجله‌ای که هنوز نیست ساخته می‌شود. وقتی شماره
+در کاتالوگ تأیید شود (با کلیدی که بازبینی نمی‌خواهد همان لحظه، وگرنه وقتی مدیر تأییدش کند) به کتابخانهٔ همهٔ مشترک‌های مجله اضافه
+می‌شود، هر شماره فقط یک بار. کتابی که پیش‌تر در کاتالوگ تأیید شده و حالا `series` می‌گیرد «شمارهٔ قبلی» است و برای کسی فرستاده
+نمی‌شود. پاسخ `book.series_id` را دارد (۰ = کتاب معمولی).
+With `series` the book becomes an issue of that magazine; a missing magazine is created. Once the issue is approved in
+the catalog (at once with a key that skips review, otherwise when an admin approves it) it is added to the library of
+every subscriber, once per issue. A book that was already approved before it gets a `series` is a back issue and is not
+sent to anyone. The response has `book.series_id` (0 = an ordinary book).
+```sh
+curl -H "Authorization: Bearer borg_…" -F file=@issue-12.pdf -F "series=هفته‌نامهٔ نمونه" \
      "https://parsun.com/borg/api/index.php?r=api-book"
 ```
 

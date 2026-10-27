@@ -69,6 +69,8 @@ class PhpServer:
     def shutdown(self):
         self.proc.terminate(); self.proc.wait(5); self._shutil.rmtree(self.tmp, ignore_errors=True)
 
+SRC = ROOT / "src"  # set by main() (--src); section 36 starts a second server on the same files
+
 def start_server(src, base):
     srv = PhpServer(src, base)
     return srv, f"http://localhost:{srv.port}{base}"
@@ -2539,11 +2541,12 @@ async def run(url):
             elif r == "settings": data = {"catalog_requires_approval": True}
             elif r == "clean-rules": data = {"rules": []}
             elif r == "users": data = {"users": []}
+            elif r == "admin-series": data = {"series": []}  # v8.14 series pickers (the patched admin is a user on the server)
             elif r == "catalog-review":
                 pend30[:] = [x for x in pend30 if x["id"] != body["book_id"]]
                 data = {"status": "approved" if body.get("approve") else "rejected"}
             await route.fulfill(status=200, content_type="application/json", body=_json30.dumps(data))
-        MOCK30 = ("admin-books", "admin-bulk", "catalog-pending", "catalog-review", "catalog-update", "book-meta", "admin-stats", "settings", "clean-rules", "users")
+        MOCK30 = ("admin-books", "admin-bulk", "catalog-pending", "catalog-review", "catalog-update", "book-meta", "admin-stats", "settings", "clean-rules", "users", "admin-series")
         await ctx30.route(lambda u: any(f"/api/?r={x}" in u for x in MOCK30) or ("/api/?r=book-cover" in u and "id=9" in u), api30)
         async def as_admin30(route):
             resp = await route.fetch()
@@ -2572,8 +2575,8 @@ async def run(url):
         try: await poll(lambda: _count_gt(Q, "#adminStats .stat", 6), 8000)
         except TimeoutError: pass
         tabs = await Q.locator("#adminTabs [role=tab]").all_inner_texts()
-        check("v8.9 admin: nine sub-tabs (v8.10 «دسته‌ها»), overview first with the stats cards, hash #admin/overview",
-              len(tabs) == 9 and tabs[0].strip() == "نمای کلی" and "صف تأیید" in tabs[1] and tabs[3].strip() == "دسته‌ها" and "خطاها" in tabs[7]
+        check("v8.9 admin: ten sub-tabs (v8.10 «دسته‌ها», v8.14 «مجله‌ها»), overview first with the stats cards, hash #admin/overview",
+              len(tabs) == 10 and tabs[0].strip() == "نمای کلی" and "صف تأیید" in tabs[1] and tabs[3].strip() == "دسته‌ها" and tabs[4].strip() == "مجله‌ها" and "خطاها" in tabs[8]
               and await Q.locator("#adminStats .stat").count() == 7 and await Q.is_visible("#adminShortcuts")
               and await Q.evaluate("location.hash") == "#admin/overview", str(tabs))
         check("v8.9 admin: only the active tab's data is loaded (no books/queue/keys requests on the overview)",
@@ -3080,9 +3083,10 @@ async def run(url):
             elif r == "admin-stats": data = {"users": 2, "active_users": 2, "books": 60, "storage_bytes": 1048576, "catalog_approved": 60, "catalog_pending": 1, "open_invites": 0, "client_errors": 0}
             elif r == "settings": data = {"catalog_requires_approval": True}
             elif r == "clean-rules": data = {"rules": []}
+            elif r == "admin-series": data = {"series": []}  # v8.14 series pickers (the patched admin is a user on the server)
             await route.fulfill(status=status, content_type="application/json; charset=utf-8", body=_j32.dumps(data, ensure_ascii=False))
         MOCK32 = {"categories", "catalog", "admin-books", "category-save", "category-delete", "category-order", "admin-bulk", "catalog-pending",
-                  "catalog-update", "catalog-submit", "admin-stats", "settings", "clean-rules"}
+                  "catalog-update", "catalog-submit", "admin-stats", "settings", "clean-rules", "admin-series"}
         def _is32(u):
             m = _re32.search(r"/api/\?r=([a-z-]+)", u)
             return bool(m) and m.group(1) in MOCK32
@@ -3594,6 +3598,197 @@ async def run(url):
               not race and await F.evaluate(OPEN35) and bool(await visible_text(F)), str(race[:2])[:300])
         await F.evaluate("document.getElementById('closeReader').click()"); await F.wait_for_timeout(500)
         await ctx35.close()
+
+        # 36. v8.14 magazines (ADR 0011) on a fresh server (its own database, so no login limits from earlier sections):
+        # the «مجله‌ها» row and the magazine page, subscribing (latest issue added), a new issue arriving on the next sync
+        # WITHOUT its file, the first open refused offline and downloading online, the 14-day removal (clock faked through
+        # openedAt) that keeps the card and the reading position, skips the issue on screen and shelved issues,
+        # unsubscribing, and the admin «مجله‌ها» tab subscribing a student.
+        from urllib.parse import urlparse as _up36
+        srv36, url36 = start_server(SRC, _up36(url).path)
+        try:
+            ext36, errs36 = [], []
+            ctxA36 = await b.new_context()
+            A36 = ctxA36.request
+            r = await A36.post(url36 + "api/?r=setup", data={"setup_key": SETUP_KEY, "name": "مدیر مجله", "email": "m36@example.com", "password": "password1"})
+            H36 = {"X-CSRF-Token": (await r.json())["csrf"]}
+            async def apost(route, body):
+                rr = await A36.post(url36 + f"api/?r={route}", data=body, headers=H36)
+                return rr.status, await rr.json()
+            st, r = await apost("admin-series", {"name": "هفته‌نامهٔ آزمون"}); mag36 = r["series"]["id"]
+            st, r = await apost("api-token-create", {"name": "مجله"}); tok36 = r["token"]
+            st, r = await apost("invites", {"note": "مشترک"}); code36 = r["code"]
+            tmp36 = Path(tempfile.mkdtemp(prefix="borg-e2e-mag-"))
+            async def publish(n):
+                pth = make_epub(tmp36 / f"i{n}.epub", f"شمارهٔ {n} هفته‌نامه", f"mag-36-{n}", "تحریریه")
+                rr = await A36.post(url36 + "api/?r=api-book", headers={"Authorization": f"Bearer {tok36}"},
+                                    multipart={"series": "هفته‌نامهٔ آزمون", "file": {"name": f"i{n}.epub", "mimeType": "application/epub+zip", "buffer": Path(pth).read_bytes()}})
+                return (await rr.json())["book"]["id"]
+            await publish(1)
+            ctxU, U = await new_ctx(b, url36, ext36, errs36)
+            await ctxU.request.post(url36 + "api/?r=register", data={"invite": code36, "email": "u36@example.com", "password": "password2", "name": "خوانندهٔ مجله"})
+            FILES36 = """() => new Promise(res => { const r = indexedDB.open('ketabkhane-db'); r.onsuccess = () => {
+              const q = r.result.transaction('books').objectStore('books').getAll();
+              q.onsuccess = () => { res(q.result.map(x => ({ id: x.id, title: x.title, file: !!(x.file || x.fileBuffer), remote: !!x.remoteFile, series: x.seriesId || 0 }))); r.result.close(); }; }; })"""
+            SET_OPENED36 = """([title, t]) => new Promise(res => { const r = indexedDB.open('ketabkhane-db'); r.onsuccess = () => {
+              const tx = r.result.transaction('books', 'readwrite'), os = tx.objectStore('books'), q = os.getAll();
+              q.onsuccess = () => { for (const x of q.result) if (x.title === title) os.put({ ...x, openedAt: t }); };
+              tx.oncomplete = () => { r.result.close(); res(true); }; }; })"""
+            # Click the sync chip and wait until that sync has finished (syncing -> anything else).
+            SYNC36 = """() => new Promise(res => { const el = document.getElementById('syncStatus'); let seen = false, t = 0;
+              const done = () => { obs.disconnect(); clearTimeout(t); res(el.dataset.state); };
+              const obs = new MutationObserver(() => { if (el.dataset.state === 'syncing') seen = true; else if (seen) done(); });
+              obs.observe(el, { attributes: true, attributeFilter: ['data-state'] }); el.click(); t = setTimeout(done, 20000); })"""
+            async def files36(): return {x["title"]: x for x in await U.evaluate(FILES36)}
+            OLD36 = int(time.time() * 1000) - 15 * 86400000
+            await U.goto(url36 + "#catalog"); await U.wait_for_timeout(800)
+            try: await poll(lambda: U.is_visible("#seriesShelf .series-card"), 10000)
+            except TimeoutError: pass
+            cb = await U.locator("#seriesShelf .series-card").first.bounding_box()
+            check("v8.14 catalog: the «مجله‌ها» row shows the magazine with its issue count",
+                  await U.is_visible("#seriesSection") and cb and cb["width"] > 80 and cb["height"] > 80
+                  and "هفته‌نامهٔ آزمون" in await U.inner_text("#seriesShelf") and "۱ شماره" in await U.inner_text("#seriesShelf"), str(cb))
+            await U.click("#seriesShelf .series-card")
+            try: await poll(lambda: U.is_visible("#seriesSubscribe"), 8000)
+            except TimeoutError: pass
+            sb = await U.locator("#seriesSubscribe").bounding_box()
+            check("v8.14 magazine page: name, the issue, and a visible «مشترک شو» button; #catalog/series/ID",
+                  await U.inner_text("#seriesName") == "هفته‌نامهٔ آزمون" and await U.locator("#seriesIssues .book-card").count() == 1
+                  and sb and sb["width"] > 40 and (await U.inner_text("#seriesSubscribe")).strip() == "مشترک شو"
+                  and await U.evaluate("location.hash") == f"#catalog/series/{mag36}", str(sb))
+            await U.click("#seriesSubscribe")
+            try: await poll(lambda: U.evaluate("document.getElementById('seriesSubscribe').getAttribute('aria-pressed') === 'true'"), 8000)
+            except TimeoutError: pass
+            check("v8.14 subscribe: the button turns into «لغو اشتراک»", (await U.inner_text("#seriesSubscribe")).strip() == "لغو اشتراک")
+            await U.click('.view-tabs [data-view="mine"]')
+            try: await poll(lambda: _count_gt(U, "#bookGrid .book-card", 0), 10000)
+            except TimeoutError: pass
+            f = await files36()
+            rb = await U.locator("#bookGrid .remote-badge").first.bounding_box()
+            # Nothing covers it (the «⋯» button sits in a top corner of the cover on phones).
+            HIT36 = """() => { const e = document.querySelector('#bookGrid .remote-badge'); if (!e) return false; const r = e.getBoundingClientRect();
+              const t = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return !!t && (t === e || e.contains(t)); }"""
+            hit_desk = await U.evaluate(HIT36)
+            await U.set_viewport_size({"width": 390, "height": 844}); await U.wait_for_timeout(500)
+            hit_phone = await U.evaluate(HIT36)
+            await U.set_viewport_size({"width": 1280, "height": 800}); await U.wait_for_timeout(500)
+            check("v8.14 the cloud badge is not covered by another control (desktop and phone)", hit_desk and hit_phone, f"{hit_desk} {hit_phone}")
+            cv = await U.locator("#bookGrid .book-card .book-cover-thumb").first.bounding_box()
+            check("v8.14 subscribe: the latest issue is in the library WITHOUT its file, with the cloud badge and «دریافت هنگام بازکردن»",
+                  list(f) == ["شمارهٔ 1 هفته‌نامه"] and f["شمارهٔ 1 هفته‌نامه"]["remote"] and not f["شمارهٔ 1 هفته‌نامه"]["file"]
+                  and f["شمارهٔ 1 هفته‌نامه"]["series"] == mag36 and rb and cv and rb["width"] > 10
+                  and cv["x"] - 1 <= rb["x"] and rb["x"] + rb["width"] <= cv["x"] + cv["width"] + 1
+                  and "دریافت هنگام بازکردن" in await U.inner_text("#bookGrid"), f"{f} {rb} {cv}")
+            await publish(2)
+            await U.evaluate(SYNC36)
+            f = await files36()
+            check("v8.14 a new issue arrives on the next sync, also without its file",
+                  "شمارهٔ 2 هفته‌نامه" in f and f["شمارهٔ 2 هفته‌نامه"]["remote"] and not f["شمارهٔ 2 هفته‌نامه"]["file"]
+                  and await U.locator("#bookGrid .book-card").count() == 2, str(f))
+            OPEN36 = "!document.getElementById('reader').classList.contains('hidden')"
+            await ctxU.set_offline(True); await U.wait_for_timeout(300)
+            await U.locator("#bookGrid .book-card", has_text="شمارهٔ 2").click(); await U.wait_for_timeout(800)
+            check("v8.14 offline: opening an issue whose file is not here is refused with a clear message",
+                  not await U.evaluate(OPEN36) and "اتصال اینترنت لازم است" in await U.inner_text("#toast"), await U.inner_text("#toast"))
+            await ctxU.set_offline(False); await U.wait_for_timeout(600)
+            await U.locator("#bookGrid .book-card", has_text="شمارهٔ 2").click()
+            try: await poll(lambda: visible_text(U), 15000)
+            except TimeoutError: pass
+            f = await files36()
+            check("v8.14 online: the first open downloads the issue and shows its text; the file is kept on the device",
+                  await U.evaluate(OPEN36) and bool(await visible_text(U)) and f["شمارهٔ 2 هفته‌نامه"]["file"] and not f["شمارهٔ 2 هفته‌نامه"]["remote"], str(f))
+            await U.click("#nextPage"); await U.wait_for_timeout(800)
+            # On screen and "opened" 15 days ago: a sync now must not take its file away.
+            await U.evaluate(SET_OPENED36, ["شمارهٔ 2 هفته‌نامه", OLD36])
+            await U.evaluate(SYNC36)
+            f = await files36()
+            check("v8.14 removal: the issue on screen keeps its file even when it was opened more than 14 days ago",
+                  f["شمارهٔ 2 هفته‌نامه"]["file"] and await U.evaluate(OPEN36), str(f))
+            await U.click("#closeReader"); await U.wait_for_timeout(800)
+            pos_before = [p for p in await U.evaluate(IDB_JS, ["progress"]) if p.get("cfi")]
+            await U.evaluate(SET_OPENED36, ["شمارهٔ 2 هفته‌نامه", OLD36])
+            await U.evaluate(SYNC36)
+            f = await files36()
+            pos_after = [p for p in await U.evaluate(IDB_JS, ["progress"]) if p.get("cfi")]
+            card2 = U.locator("#bookGrid .book-card", has_text="شمارهٔ 2")
+            check("v8.14 removal: 14 days after the last open the file is removed; the card and the reading position stay",
+                  not f["شمارهٔ 2 هفته‌نامه"]["file"] and f["شمارهٔ 2 هفته‌نامه"]["remote"] and await card2.count() == 1
+                  and await card2.locator(".remote-badge").count() == 1 and pos_before and len(pos_after) == len(pos_before), f"{f} {pos_before} {pos_after}")
+            await card2.click()
+            try: await poll(lambda: visible_text(U), 15000)
+            except TimeoutError: pass
+            f = await files36()
+            check("v8.14 removal: opening it again downloads the file again", await U.evaluate(OPEN36) and f["شمارهٔ 2 هفته‌نامه"]["file"], str(f))
+            await U.click("#closeReader"); await U.wait_for_timeout(800)
+            # Issue 1: downloaded, put on a shelf, opened 15 days ago -> kept.
+            await U.locator("#bookGrid .book-card", has_text="شمارهٔ 1").click()
+            try: await poll(lambda: visible_text(U), 15000)
+            except TimeoutError: pass
+            await U.click("#closeReader"); await U.wait_for_timeout(800)
+            await U.locator("#bookGrid .book-card", has_text="شمارهٔ 1").locator("[data-options]").click(); await U.wait_for_timeout(500)
+            await U.fill("#newShelfName", "مجله‌های نگه‌داشتنی"); await U.click("#addShelf"); await U.wait_for_timeout(600)
+            await U.click("#bookOptionsClose"); await U.wait_for_timeout(400)
+            await U.evaluate(SET_OPENED36, ["شمارهٔ 1 هفته‌نامه", OLD36])
+            await U.evaluate(SYNC36)
+            f = await files36()
+            check("v8.14 removal: an issue on one of the user's shelves keeps its file", f["شمارهٔ 1 هفته‌نامه"]["file"], str(f))
+            # Unsubscribe: received issues stay, the next one does not come.
+            await U.goto(url36 + f"#catalog/series/{mag36}")
+            try: await poll(lambda: U.evaluate("document.getElementById('seriesSubscribe').getAttribute('aria-pressed') === 'true' && !document.getElementById('seriesSubscribe').hidden"), 8000)
+            except TimeoutError: pass
+            await U.click("#seriesSubscribe")
+            try: await poll(lambda: U.evaluate("document.getElementById('seriesSubscribe').getAttribute('aria-pressed') === 'false'"), 8000)
+            except TimeoutError: pass
+            await publish(3)
+            await U.click('.view-tabs [data-view="mine"]'); await U.wait_for_timeout(500)
+            await U.evaluate(SYNC36)
+            f = await files36()
+            check("v8.14 unsubscribe: received issues stay, the next issue does not arrive", sorted(f) == ["شمارهٔ 1 هفته‌نامه", "شمارهٔ 2 هفته‌نامه"], str(sorted(f)))
+            # Back issue from the magazine page: «افزودن» adds it (without its file).
+            await U.goto(url36 + f"#catalog/series/{mag36}")
+            try: await poll(lambda: U.locator("#seriesIssues [data-catalog-add]").count(), 8000)
+            except TimeoutError: pass
+            await U.locator("#seriesIssues [data-catalog-add]").first.click()
+            async def _has3(): return "شمارهٔ 3 هفته‌نامه" in await files36()
+            try: await poll(_has3, 15000)
+            except TimeoutError: pass
+            f = await files36()
+            check("v8.14 magazine page: «افزودن» adds a back issue to the library, without its file",
+                  "شمارهٔ 3 هفته‌نامه" in f and not f["شمارهٔ 3 هفته‌نامه"]["file"] and f["شمارهٔ 3 هفته‌نامه"]["remote"], str(f))
+            # Admin tab: create a magazine, subscribe a student (a student cannot subscribe on their own).
+            st, r = await apost("invites", {"note": "دانشجو", "role": "student"})
+            ctxS36 = await b.new_context()
+            rs = await ctxS36.request.post(url36 + "api/?r=register", data={"invite": r["code"], "email": "s36@example.com", "password": "password3", "name": "دانشجوی مجله"})
+            stu36 = (await rs.json())["user"]["id"]
+            ctxM, M = await new_ctx(b, url36, ext36, errs36)
+            await ctxM.request.post(url36 + "api/?r=login", data={"email": "m36@example.com", "password": "password1"})
+            await M.goto(url36 + "#admin/series")
+            try: await poll(lambda: M.locator("#seriesAdmList [data-series-adm]").count(), 10000)
+            except TimeoutError: pass
+            row = M.locator("#seriesAdmList [data-series-adm]").first
+            rbox = await row.bounding_box()
+            check("v8.14 admin «مجله‌ها» tab: the magazine is listed with its counts",
+                  await M.is_visible("#admPanel-series") and rbox and rbox["height"] > 20
+                  and "شمارهٔ عمومی" in await row.inner_text() and await row.locator("[data-series-name]").input_value() == "هفته‌نامهٔ آزمون", str(rbox))
+            await M.fill("#seriesAddName", "ماهنامهٔ تازه"); await M.click("#seriesAddForm [type=submit]")
+            try: await poll(lambda: _count_gt(M, "#seriesAdmList [data-series-adm]", 1), 8000)
+            except TimeoutError: pass
+            check("v8.14 admin: a new magazine is created from the form", "ماهنامهٔ تازه" in [await x.input_value() for x in await M.locator("[data-series-name]").all()])
+            row = M.locator("#seriesAdmList [data-series-adm]", has=M.locator(f'[data-series-name][value="هفته‌نامهٔ آزمون"]'))
+            await row.locator('[data-series-act="subs"]').click()
+            try: await poll(lambda: row.locator(f'[data-sub-user="{stu36}"]').count(), 8000)
+            except TimeoutError: pass
+            await row.locator(f'[data-sub-user="{stu36}"]').check()
+            await row.locator("[data-subs-save]").click(); await M.wait_for_timeout(1500)
+            rr = await A36.get(url36 + f"api/?r=admin-series-subscribers&id={mag36}")
+            subs36 = (await rr.json()).get("user_ids", [])
+            rl = await ctxS36.request.get(url36 + "api/?r=library")
+            lib36 = [x["title"] for x in (await rl.json()).get("books", [])]
+            check("v8.14 admin: subscribing a student from the tab gives them the latest issue", stu36 in subs36 and "شمارهٔ 3 هفته‌نامه" in lib36, f"{subs36} {lib36}")
+            check("v8.14 magazines: no JS errors, no external requests", not errs36 and not ext36, str((errs36 + ext36)[:3]))
+            await ctxM.close(); await ctxS36.close(); await ctxU.close(); await ctxA36.close()
+        finally:
+            srv36.shutdown()
         await b.close()
 
 def main():
@@ -3601,7 +3796,9 @@ def main():
     ap.add_argument("--src", default=str(ROOT / "src"))
     ap.add_argument("--base", default="/borg/")
     a = ap.parse_args()
-    httpd, url = start_server(Path(a.src).resolve(), a.base)
+    global SRC
+    SRC = Path(a.src).resolve()
+    httpd, url = start_server(SRC, a.base)
     print(f"Serving {a.src} at {url}")
     try:
         asyncio.run(run(url))
